@@ -1,0 +1,11 @@
+{
+  "headers": ["学号", "姓名", "邮箱", "角色", "状态"],
+  "rows": [
+    ["23020001", "赵云", "zhaoyun@example.com", "组员", "活跃"],
+    ["23020002", "关羽", "guanyu@example.com", "组员", "活跃"],
+    ["23020003", "张飞", "zhangfei@example.com", "组员", "禁用"],
+    ["23020004", "黄忠", "huangzhong@example.com", "组员", "活跃"],
+    ["23020005", "马超", "machao@example.com", "组员", "活跃"],
+    ["23020006", "刘备", "liubei@example.com", "组员", "活跃"]
+  ]
+}

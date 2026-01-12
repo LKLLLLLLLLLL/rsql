@@ -1,0 +1,962 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Database Administration System</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+        }
+        
+        body {
+            display: flex;
+            height: 100vh;
+            background-color: #f5f7fa;
+            color: #333;
+        }
+        
+        /* Left sidebar styles */
+        .sidebar {
+            width: 20%;
+            background-color: #2c3e50;
+            color: white;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 3px 0 15px rgba(0, 0, 0, 0.1);
+            z-index: 10;
+        }
+        
+        .sidebar-header {
+            padding: 25px 20px;
+            background-color: #1a252f;
+            border-bottom: 1px solid #34495e;
+        }
+        
+        .sidebar-header h2 {
+            font-size: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .sidebar-header h2 i {
+            color: #3498db;
+        }
+
+        .tables-buttons {
+            border-bottom: 1px solid #34495e;
+            user-select: none;
+        }
+
+        .tables-btn {
+            padding: 15px 20px;
+            cursor: pointer;
+            border-bottom: 1px solid #34495e;
+            font-weight: 600;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .tables-btn:hover {
+            border-left: 4px solid #2c3e50;
+        }
+
+        .tables-btn.create {
+            background-color: #3c8dc3;
+            color: white;
+            
+        }
+        .tables-btn.delete {
+            background-color: #3c8dc3;
+            color: white;
+        }
+        .tables-btn.rename {
+            background-color: #3c8dc3;
+            color: white;
+        }
+        
+        .tables-list {
+            padding: 20px 0;
+            overflow-y: auto;
+            flex-grow: 1;
+        }
+        
+        .tables-list h3 {
+            padding: 0 20px 15px;
+            font-size: 1rem;
+            font-weight: 500;
+            color: #bdc3c7;
+            border-bottom: 1px solid #34495e;
+            margin-bottom: 15px;
+            
+        }
+        
+        .table-item {
+            padding: 15px 20px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            border-left: 4px solid transparent;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            user-select: none;
+        }
+        
+        .table-item:hover {
+            background-color: #34495e;
+            border-left: 4px solid #3498db;
+        }
+        
+        .table-item.active {
+            background-color: #34495e;
+            border-left: 4px solid #3498db;
+            color: #3498db;
+        }
+        
+        .table-item i {
+            font-size: 1.1rem;
+        }
+        
+        /* Right main content area styles */
+        .main-content {
+            width: 80%;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        
+        /* Top bar styles */
+        .top-bar {
+            background-color: white;
+            padding: 20px 30px;
+            box-shadow: 0 3px 10px rgba(0, 0, 0, 0.08);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            z-index: 5;
+        }
+        
+        .top-bar h1 {
+            font-size: 1.8rem;
+            color: #2c3e50;
+        }
+        
+        .top-bar h1 i {
+            color: #3498db;
+            margin-right: 10px;
+        }
+        
+        .action-buttons {
+            display: flex;
+            gap: 12px;
+            user-select: none;
+        }
+        
+        .action-btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.95rem;
+        }
+        
+        .action-btn i {
+            font-size: 1rem;
+        }
+
+        .action-btn.insert {
+            background-color: #2ecc71;
+            color: white;
+        }
+        
+        .action-btn.delete {
+            background-color: #e74c3c;
+            color: white;
+        }
+        
+        .action-btn.update {
+            background-color: #3498db;
+            color: white;
+        }
+        
+        .action-btn.query {
+            background-color: #9b59b6;
+            color: white;
+        }
+        
+        .action-btn.export {
+            background-color: #f39c12;
+            color: white;
+        }
+        
+        .action-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+        }
+        
+        .action-btn:active {
+            transform: translateY(0);
+        }
+        
+        /* Data display area styles */
+        .data-display {
+            flex-grow: 1;
+            padding: 30px;
+            overflow-y: auto;
+            background-color: #f9fafc;
+        }
+        
+        .table-container {
+            background-color: white;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
+            height: 100%;
+            flex-direction: column;
+            display: flex;
+        }
+        
+        .table-header {
+            padding: 20px 25px;
+            background-color: #f8f9fa;
+            border-bottom: 1px solid #eee;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .table-header h3 {
+            color: #2c3e50;
+            font-size: 1.3rem;
+        }
+        
+        .table-info {
+            display: flex;
+            gap: 20px;
+            color: #7f8c8d;
+            font-size: 0.9rem;
+        }
+
+        .create-operation {
+            display: none;
+        }
+        .insert-operation {
+            display: none;
+        }
+        .delete-operation {
+            display: none;
+        }
+        .query-operation {
+            display: none;
+        }
+        .export-operation {
+            display: none;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            /* Keep natural height so rows stay compact at top */
+            flex-grow: 0;
+        }
+        
+        thead {
+            background-color: #f1f5f9;
+        }
+        
+        th {
+            padding: 18px 15px;
+            text-align: left;
+            font-weight: 600;
+            color: #2c3e50;
+            border-bottom: 2px solid #e1e8f0;
+            font-size: 0.95rem;
+            vertical-align: top;
+        }
+        
+        td {
+            padding: 16px 15px;
+            border-bottom: 1px solid #eef2f7;
+            color: #4a5568;
+            vertical-align: top;
+        }
+        
+        tbody tr:hover {
+            background-color: #f8fafc;
+        }
+        
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: #95a5a6;
+            padding: 40px;
+            text-align: center;
+        }
+        
+        .empty-state i {
+            font-size: 4rem;
+            margin-bottom: 20px;
+            opacity: 0.5;
+        }
+        
+        .empty-state h3 {
+            font-size: 1.5rem;
+            margin-bottom: 10px;
+            color: #7f8c8d;
+        }
+        
+        /* Responsive design */
+        @media (max-width: 1200px) {
+            .action-btn span {
+                display: none;
+            }
+            
+            .action-btn {
+                padding: 12px 15px;
+            }
+            
+            .action-btn i {
+                font-size: 1.2rem;
+                margin-right: 0;
+            }
+        }
+        
+        @media (max-width: 768px) {
+            body {
+                flex-direction: column;
+            }
+            
+            .sidebar {
+                width: 100%;
+                height: auto;
+                max-height: 40vh;
+            }
+            
+            .main-content {
+                width: 100%;
+            }
+            
+            .top-bar {
+                flex-direction: column;
+                gap: 20px;
+            }
+            
+            .action-buttons {
+                flex-wrap: wrap;
+                justify-content: center;
+            }
+        }
+
+        /* Operation form styles */
+        .operation-panel {
+            margin-top: 24px;
+            background-color: white;
+            border-radius: 10px;
+            padding: 24px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+        }
+
+        .operation-panel h4 {
+            font-size: 1.2rem;
+            color: #2c3e50;
+        }
+
+        .form-row {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .form-row label {
+            font-weight: 600;
+            color: #2c3e50;
+            min-width: 70px;
+        }
+
+        .form-row input,
+        .form-row select {
+            padding: 10px 12px;
+            border-radius: 6px;
+            border: 1px solid #dfe4ea;
+            font-size: 0.95rem;
+            min-width: 160px;
+        }
+
+        .columns-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .columns-header h4{
+            margin-bottom: 10px;
+        }
+
+        .default-value,
+        .column-type,
+        .column-name {
+            height: 30px;
+            font-size: 16px;
+        }
+
+
+        .columns-list {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .column-row {
+            display: grid;
+            grid-template-columns: 1.2fr 1fr auto auto 1fr auto;
+            gap: 10px;
+            align-items: center;
+            background-color: #f8f9fa;
+            padding: 12px;
+            border-radius: 8px;
+        }
+
+        .column-row input,
+        .column-row select {
+            width: 100%;
+        }
+
+        .column-row .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.9rem;
+            color: #2c3e50;
+            white-space: nowrap;
+        }
+
+        .column-row .remove-column {
+            padding: 8px 12px;
+            background-color: #e74c3c;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+
+        .column-row .remove-column:hover {
+            background-color: #c0392b;
+        }
+
+        .add-column-btn {
+            padding: 10px 14px;
+            background-color: #3498db;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+
+        .add-column-btn:hover {
+            background-color: #217dbb;
+        }
+
+        .submit-create-btn {
+            align-self: flex-start;
+            padding: 12px 20px;
+            background-color: #2ecc71;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 700;
+            font-size: 1rem;
+        }
+
+        .submit-create-btn:hover {
+            background-color: #27ae60;
+        }
+    </style>
+</head>
+<body>
+    <!-- Left sidebar -->
+    <div class="sidebar">
+        <div class="sidebar-header">
+            <h2>Database Management</h2>
+        </div>
+        <div class="tables-buttons">
+            <div class="tables-btn create">
+                <span>Create New Table</span>
+            </div>
+            <div class="tables-btn rename">
+                <span>Rename Table</span>
+            </div>
+            <div class="tables-btn delete">
+                <span>Delete Table</span>
+            </div>
+        </div>
+        
+        
+        <div class="tables-list">
+            <h3>Table List</h3>
+        </div>
+        
+        <div style="padding: 20px; border-top: 1px solid #34495e; font-size: 0.8rem; color: #7f8c8d;">
+            <p>Total <span id="tables-counts">8</span> tables</p>
+            <p style="margin-top: 5px;">Click table name to view data</p>
+        </div>
+    </div>
+    
+    <!-- Right main content area -->
+    <div class="main-content">
+        <!-- Top bar -->
+        <div class="top-bar">
+            <h1>Current Table:  <span id="current-table">Users</span></h1>
+            
+            <div class="action-buttons">
+                <button class="action-btn insert">
+                    <span>Insert</span>
+                </button>
+                <button class="action-btn delete">
+                    <span>Delete</span>
+                </button>
+                <button class="action-btn update">
+                    <span>Update</span>
+                </button>
+                <button class="action-btn query">
+                    <span>Query</span>
+                </button>
+                <button class="action-btn export">
+                    <span>Export</span>
+                </button>
+            </div>
+        </div>
+        
+        <!-- Data Display Area -->
+        <div class="data-display">
+            <div class="table-container">
+                <div class="table-header">
+                    <h3>Users Table Data</h3>
+                    <div class="table-info">
+                        <span>Total <span id="records-count">125</span> records</span>
+                        <span>Updated on <span id="update-time">1970-01-01 00:00</span></span>
+                    </div>
+                </div>
+                
+                <table>
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>用户名</th>
+                            <th>邮箱</th>
+                            <th>角色</th>
+                            <th>注册时间</th>
+                            <th>状态</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>1001</td>
+                            <td>张三</td>
+                            <td>zhangsan@example.com</td>
+                            <td>管理员</td>
+                            <td>2023-05-12</td>
+                            <td><span style="color:#2ecc71; font-weight:600;">活跃</span></td>
+                        </tr>
+                        <tr>
+                            <td>1002</td>
+                            <td>李四</td>
+                            <td>lisi@example.com</td>
+                            <td>编辑</td>
+                            <td>2023-06-08</td>
+                            <td><span style="color:#2ecc71; font-weight:600;">活跃</span></td>
+                        </tr>
+                        <tr>
+                            <td>1003</td>
+                            <td>王五</td>
+                            <td>wangwu@example.com</td>
+                            <td>用户</td>
+                            <td>2023-07-22</td>
+                            <td><span style="color:#e74c3c; font-weight:600;">禁用</span></td>
+                        </tr>
+                        <tr>
+                            <td>1004</td>
+                            <td>赵六</td>
+                            <td>zhaoliu@example.com</td>
+                            <td>用户</td>
+                            <td>2023-08-15</td>
+                            <td><span style="color:#2ecc71; font-weight:600;">活跃</span></td>
+                        </tr>
+                        <tr>
+                            <td>1005</td>
+                            <td>钱七</td>
+                            <td>qianqi@example.com</td>
+                            <td>编辑</td>
+                            <td>2023-09-01</td>
+                            <td><span style="color:#f39c12; font-weight:600;">待审核</span></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="create-operation">
+                <div class="operation-panel">
+                    <h4>创建新表</h4>
+
+                    <div class="form-row">
+                        <label for="create-table-name">表名</label>
+                        <input type="text" id="create-table-name" placeholder="例如：users" aria-label="表名">
+                    </div>
+
+                    <div class="columns-section">
+                        <div class="columns-header">
+                            <h4>列定义</h4>
+                            <button type="button" class="add-column-btn" id="add-column-btn">添加列</button>
+                        </div>
+                        <div class="columns-list" id="columns-container"></div>
+                    </div>
+
+                    <button type="button" class="submit-create-btn" id="submit-create-btn">提交创建表</button>
+                </div>
+
+            </div>
+
+            <div class="insert-operation">
+                
+            </div>
+
+            <div class="delete-operation">
+                
+            </div>
+
+            <div class="query-operation">
+                
+            </div>
+
+            <div class="export-operation">
+                
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Section visibility helpers
+        const tableContainer = document.querySelector('.table-container');
+        const createSection = document.querySelector('.create-operation');
+        const topBar = document.querySelector('.top-bar');
+        const sections = { table: tableContainer, create: createSection };
+
+        // Table elements and fallback data
+        const tableElement = tableContainer ? tableContainer.querySelector('table') : null;
+        const tableHead = tableElement ? tableElement.querySelector('thead') : null;
+        const tableBody = tableElement ? tableElement.querySelector('tbody') : null;
+        const tablesListEl = document.querySelector('.tables-list');
+
+        const fallbackTableData = {
+            default: {
+                headers: ['学号', '用户名', '邮箱', '角色', '状态'],
+                rows: [
+                    ['23013098', '刘昆灵', '23013098@ecust.com', '组长', '活跃'],
+                    ['23013099', '王恩浩', '23013099@ecust.com', '组员', '活跃'],
+                    ['23013101', '谢子瑞', '23013101@ecust.com', '组员', '活跃'],
+                    ['23013108', '张一鸣', '23013108@ecust.com', '组员', '活跃'],
+                    ['23013114', '陈翱齐', '23013114@ecust.com', '组员', '活跃'],
+                ]
+            }
+        };
+
+        function renderTable(headers, rows) {
+            if (!tableHead || !tableBody) return;
+
+            tableHead.innerHTML = '';
+            tableBody.innerHTML = '';
+
+            const headRow = document.createElement('tr');
+            headers.forEach(text => {
+                const th = document.createElement('th');
+                th.textContent = text;
+                headRow.appendChild(th);
+            });
+            tableHead.appendChild(headRow);
+
+            rows.forEach(row => {
+                const tr = document.createElement('tr');
+                row.forEach(cell => {
+                    const td = document.createElement('td');
+                    td.textContent = cell;
+                    tr.appendChild(td);
+                });
+                tableBody.appendChild(tr);
+            });
+
+            const countEl = document.getElementById('records-count');
+            if (countEl) countEl.textContent = Array.isArray(rows) ? rows.length : 0;
+        }
+
+        async function loadTableData(tableName) {
+            // Try table-specific JSON first, then test.json, else fallback
+            const candidates = [];
+            if (tableName) {
+                candidates.push(`./${tableName}.json`);
+            }
+
+            for (const url of candidates) {
+                try {
+                    const res = await fetch(url, { cache: 'no-store' });
+                    if (!res.ok) throw new Error(`Fetch failed: ${url}`);
+                    const json = await res.json();
+                    const headers = Array.isArray(json.headers) ? json.headers : fallbackTableData.default.headers;
+                    const rows = Array.isArray(json.rows) ? json.rows : fallbackTableData.default.rows;
+                    renderTable(headers, rows);
+                    return;
+                } catch (e) {
+                    // try next candidate
+                }
+            }
+
+            console.warn('All JSON candidates failed, using fallback');
+            const fallback = fallbackTableData[tableName] || fallbackTableData.default;
+            renderTable(fallback.headers, fallback.rows);
+        }
+
+        // Load tables list from TABLES.json and render left sidebar
+        async function loadTablesList() {
+            const url = './TABLES.json';
+            let names = ['Users', 'Products'];
+            try {
+                const res = await fetch(url, { cache: 'no-store' });
+                if (!res.ok) throw new Error('Failed to fetch TABLES.json');
+                const json = await res.json();
+                if (Array.isArray(json)) {
+                    names = json;
+                } else if (Array.isArray(json.tables)) {
+                    names = json.tables;
+                }
+            } catch (e) {
+                console.warn('Load TABLES.json failed, using default list', e);
+            }
+            renderTablesList(names);
+        }
+
+        function renderTablesList(names) {
+            if (!tablesListEl) return;
+            const header = '<h3>Table List</h3>';
+            const items = names
+                .map(n => `<div class="table-item"><span>${n}</span></div>`)
+                .join('');
+            tablesListEl.innerHTML = header + items;
+            const countEl = document.getElementById('tables-counts');
+            if (countEl) countEl.textContent = String(names.length);
+            attachTableItemClickHandlers();
+        }
+
+        function showSection(key) {
+            Object.values(sections).forEach(el => {
+                if (!el) return;
+                el.style.display = 'none';
+            });
+            if (key && sections[key]) {
+                // table view uses flex to keep header/body layout
+                sections[key].style.display = key === 'table' ? 'flex' : 'block';
+            }
+
+            if (topBar) {
+                topBar.style.display = key === 'table' ? 'flex' : 'none';
+            }
+        }
+        showSection();
+        // load tables list into sidebar
+        loadTablesList();
+
+        // Create table - column row factory
+        const columnsContainer = document.getElementById('columns-container');
+        const addColumnBtn = document.getElementById('add-column-btn');
+        const submitCreateBtn = document.getElementById('submit-create-btn');
+
+        function createColumnRow() {
+            const row = document.createElement('div');
+            row.className = 'column-row';
+            row.innerHTML = `
+                <input type="text" class="column-name" placeholder="  列名" aria-label="列名">
+                <select class="column-type" aria-label="数据类型">
+                    <option value="INT">INT</option>
+                    <option value="VARCHAR(255)">VARCHAR(255)</option>
+                    <option value="TEXT">TEXT</option>
+                    <option value="DATE">DATE</option>
+                    <option value="DATETIME">DATETIME</option>
+                    <option value="BOOLEAN">BOOLEAN</option>
+                    <option value="DECIMAL(10,2)">DECIMAL(10,2)</option>
+                </select>
+                <label class="checkbox-group">
+                    <input type="checkbox" class="allow-null" checked>
+                    <span style="font-size: 16px;">允许 NULL</span>
+                </label>
+                <label class="checkbox-group">
+                    <input type="radio" name="primary-column" class="primary-key">
+                    <span style="font-size: 16px;">主键</span>
+                </label>
+                <input type="text" class="default-value" placeholder="  默认值（可选）" aria-label="默认值">
+                <button type="button" class="remove-column">删除</button>
+            `;
+
+            row.querySelector('.remove-column').addEventListener('click', () => {
+                if (!columnsContainer) return;
+                const total = columnsContainer.querySelectorAll('.column-row').length;
+                if (total <= 1) {
+                    alert('至少需要保留一列，无法删除最后一列');
+                    return;
+                }
+                row.remove();
+            });
+
+            return row;
+        }
+        if (columnsContainer && addColumnBtn) {
+            // seed with one column row
+            columnsContainer.appendChild(createColumnRow());
+
+            addColumnBtn.addEventListener('click', () => {
+                columnsContainer.appendChild(createColumnRow());
+            });
+        }
+        if (submitCreateBtn) {
+            submitCreateBtn.addEventListener('click', () => {
+                const tableName = document.getElementById('create-table-name').value.trim();
+
+                const rows = Array.from(columnsContainer.querySelectorAll('.column-row'));
+                if (!tableName) {
+                    alert('表名不能为空，请填写后再提交');
+                    document.getElementById('create-table-name').focus();
+                    return; // 阻止提交
+                }
+                for (const row of rows) {
+                    const nameInput = row.querySelector('.column-name');
+                    const name = nameInput.value.trim();
+                    if (!name) {
+                        alert('列名不能为空，请填写后再提交');
+                        nameInput.focus();
+                        return; // 阻止提交
+                    }
+                }
+
+                const columns = rows.map(row => ({
+                    name: row.querySelector('.column-name').value.trim(),
+                    type: row.querySelector('.column-type').value,
+                    allowNull: row.querySelector('.allow-null').checked,
+                    primaryKey: row.querySelector('.primary-key').checked,
+                    defaultValue: row.querySelector('.default-value').value.trim()
+                }));
+
+                console.log('Create table payload', { tableName, columns });
+                alert('提交创建表数据：\n' + JSON.stringify({ tableName, columns }, null, 2));
+
+                // 生成对应的 SQL 语句（示例）
+                let sql = `CREATE TABLE ${tableName} (\n`;
+                columns.forEach((col, index) => {
+                    sql += `  ${col.name} ${col.type}`;
+                    if (!col.allowNull) sql += ' NOT NULL';
+                    if (col.primaryKey) sql += ' PRIMARY KEY';
+                    if (col.defaultValue) sql += ` DEFAULT '${col.defaultValue}'`;
+                    if (index < columns.length - 1) sql += ',\n';
+                });
+                sql += `\n);`;
+                console.log('Generated SQL:\n', sql);
+                alert('生成的 SQL 语句：\n' + sql);
+            });
+        }
+
+        // Left table selection functionality (rebinding after dynamic render)
+        function attachTableItemClickHandlers() {
+            document.querySelectorAll('.table-item').forEach(item => {
+                // Avoid duplicate bindings by removing existing listener via cloning
+                const newItem = item.cloneNode(true);
+                item.parentNode.replaceChild(newItem, item);
+                newItem.addEventListener('click', async function() {
+                    document.querySelectorAll('.table-item').forEach(el => {
+                        el.classList.remove('active');
+                    });
+                    this.classList.add('active');
+                    const tableName = this.querySelector('span').textContent.split(' ')[0];
+                    document.getElementById('current-table').textContent = tableName;
+                    document.querySelector('.table-header h3').textContent = `${tableName} Table Data`;
+                    console.log(`Switched to table: ${tableName}`);
+                    await loadTableData(tableName);
+                    showSection('table');
+                });
+            });
+        }
+        
+        // Top button click effects
+        document.querySelectorAll('.action-btn').forEach(button => {
+            button.addEventListener('click', function() {
+                const action = this.classList.contains('insert') ? 'Insert' : 
+                              this.classList.contains('delete') ? 'Delete' : 
+                              this.classList.contains('update') ? 'Update' : 
+                              this.classList.contains('query') ? 'Query' : 'Export';
+                
+                const tableName = document.getElementById('current-table').textContent;
+                console.log(`Performing ${action} operation on table "${tableName}"`);
+                
+                // Here you can add specific operation logic, such as displaying a modal or sending a request
+                alert(`Performing ${action} operation\n(In a real application, this would trigger the corresponding operation interface)`);
+
+                if (action=='Insert') {
+                    
+                } else if (action=='Delete') {
+                    
+                } else if (action=='Update') {
+                    
+                } else if (action=='Query') {
+                    
+                } else if (action=='Export') {
+                    
+                }
+            });
+        });
+
+        // Left button click effects
+        document.querySelectorAll('.tables-btn').forEach(button => {
+            button.addEventListener('click', function() {
+                const action = this.classList.contains('create') ? 'Create' : 
+                              this.classList.contains('delete') ? 'Delete' : 
+                              this.classList.contains('rename') ? 'Rename' : 'Unknown';
+                              
+                
+                const tableName = document.getElementById('current-table').textContent;
+                console.log(`Attempting to perform ${action} operation`);
+                
+                // Here you can add specific operation logic, such as displaying a modal or sending a request
+                // alert(`Performing ${action} operation\n(In a real application, this would trigger the corresponding operation interface)`);
+                
+                if (action=='Create') {
+                    // Remove active class from all table items
+                    document.querySelectorAll('.table-item').forEach(el => {
+                        el.classList.remove('active');
+                    });
+                    showSection('create');
+                } else if (action=='Delete') {
+                    
+                } else if (action=='Rename') {
+                    
+                }
+            });
+        });
+    </script>
+</body>
+</html>
