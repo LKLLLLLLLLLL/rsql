@@ -164,6 +164,7 @@ The `SELECT` statement retrieves data from one or more tables and implements rel
 - **Example:**  
   ```sql
   SELECT * FROM users WHERE age > 18;
+  ```
 
 ---
 
@@ -178,7 +179,7 @@ Comparison operators are used in **WHERE clauses**, **JOIN conditions**, and **c
 | Operator | Description                     | Applicable Types        | Notes |
 |----------|---------------------------------|------------------------|-------|
 | `=`      | Equality                        | INT, FLOAT, CHAR, VARCHAR, BOOLEAN | Null comparison returns false (unless `IS NULL`) |
-| `<>` / `!=` | Not equal                     | INT, FLOAT, CHAR, VARCHAR, BOOLEAN | Null comparison returns false |
+| `!=` | Not equal                     | INT, FLOAT, CHAR, VARCHAR, BOOLEAN | Null comparison returns false |
 | `>`      | Greater than                    | INT, FLOAT |
 | `<`      | Less than                       | INT, FLOAT |
 | `>=`     | Greater than or equal           | INT, FLOAT |
