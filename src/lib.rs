@@ -2,15 +2,15 @@ use tracing_subscriber::prelude::*;
 use std::fs;
 use std::path;
 use tracing::info;
+
 mod config;
+mod web_server;
 mod db;
 
 pub fn init_log() {
     let log_dir = path::Path::new(config::LOG_PATH).parent().unwrap();
     let log_filename = path::Path::new(config::LOG_PATH).file_name().unwrap().to_str().unwrap();
-    if !log_dir.exists() {
-        fs::create_dir_all(log_dir).unwrap();
-    }
+    fs::create_dir_all(log_dir).unwrap();
 
     let stdout_log = tracing_subscriber::fmt::layer()
         .with_writer(std::io::stdout)
