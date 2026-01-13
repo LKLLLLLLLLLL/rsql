@@ -156,6 +156,7 @@ name = "rsql"
 version = "0.1.0"
 dependencies = [
  "crc32fast",
+ "sqlparser",
  "thiserror",
  "tracing",
  "tracing-appender",
@@ -205,6 +206,15 @@ name = "smallvec"
 version = "1.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
+
+[[package]]
+name = "sqlparser"
+version = "0.45.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f7bbffee862a796d67959a89859d6b1046bb5016d63e23835ad0da182777bbe0"
+dependencies = [
+ "log",
+]
 
 [[package]]
 name = "syn"
