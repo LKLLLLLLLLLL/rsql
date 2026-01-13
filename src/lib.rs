@@ -2,7 +2,10 @@ use tracing_subscriber::prelude::*;
 use std::fs;
 use std::path;
 use tracing::info;
+use crate::db::server::server::start_server;
+mod db;
 mod config;
+
 
 pub fn init_log() {
     let log_dir = path::Path::new(config::LOG_PATH).parent().unwrap();
@@ -39,5 +42,10 @@ pub fn run() {
     init_log();
     info!("rsql server is starting...");
     info!("log file path: {}", config::LOG_PATH);
+
+    //start server (actix_web)
+    if let Err(e) = actix_web::rt::System::new().block_on(start_server()) {
+        tracing::error!("server failed: {:?}", e);
+    }
     info!("rsql server stopped.");
 }
