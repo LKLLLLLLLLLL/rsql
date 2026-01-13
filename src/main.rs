@@ -1,3 +1,3 @@
 fn main() {
-    rsql::hello();
+    rsql::run();
 }
