@@ -3,6 +3,7 @@ use std::fs;
 use std::path;
 use tracing::info;
 mod config;
+mod db;
 
 pub fn init_log() {
     let log_dir = path::Path::new(config::LOG_PATH).parent().unwrap();
