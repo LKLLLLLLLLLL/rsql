@@ -995,7 +995,9 @@ name = "rsql"
 version = "0.1.0"
 dependencies = [
  "actix-web",
+ "crc32fast",
  "serde",
+ "thiserror",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
