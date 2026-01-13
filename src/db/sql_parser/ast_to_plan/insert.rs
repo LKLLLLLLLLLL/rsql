@@ -1,10 +1,10 @@
-use sqlparser::ast::{Statement, SetExpr};
+use sqlparser::ast::{Statement, Insert, SetExpr};
 use crate::db::sql_parser::logical_plan::LogicalPlan;
 
 pub fn build_logical_plan(stmt: &Statement) -> Result<LogicalPlan, String> {
     match stmt {
-        Statement::Insert { table, columns, source, .. } => {
-            let values = if let Some(source) = source {
+        Statement::Insert(insert) => {
+            let values = if let Some(source) = &insert.source {
                 match &*source.body {
                     SetExpr::Values(values) => values.rows.clone(),
                     _ => return Err("Only VALUES supported in INSERT".to_string()),
@@ -13,14 +13,14 @@ pub fn build_logical_plan(stmt: &Statement) -> Result<LogicalPlan, String> {
                 vec![]
             };
 
-            let cols_opt = if columns.is_empty() {
+            let cols_opt = if insert.columns.is_empty() {
                 None
             } else {
-                Some(columns.iter().map(|c| c.to_string()).collect())
+                Some(insert.columns.iter().map(|c| c.to_string()).collect())
             };
 
             Ok(LogicalPlan::Insert {
-                table_name: table.to_string(),
+                table_name: insert.table.to_string(),
                 columns: cols_opt,
                 values,
             })

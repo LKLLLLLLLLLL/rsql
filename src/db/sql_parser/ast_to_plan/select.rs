@@ -51,7 +51,7 @@ fn build_select(select: &Select) -> Result<LogicalPlan, String> {
     // 3. GROUP BY / AGGREGATE
     if has_grouping_or_aggregate(select) {
         let group_by = match &select.group_by {
-            GroupByExpr::Expressions(exprs) => exprs.clone(),
+            GroupByExpr::Expressions(exprs, _) => exprs.clone(),
             _ => vec![],
         };
         let aggr_exprs = extract_aggr_exprs(&select.projection);
@@ -114,7 +114,8 @@ fn build_from(from: &[TableWithJoins]) -> Result<LogicalPlan, String> {
             sqlparser::ast::JoinOperator::LeftOuter(_) => JoinType::Left,
             sqlparser::ast::JoinOperator::RightOuter(_) => JoinType::Right,
             sqlparser::ast::JoinOperator::FullOuter(_) => JoinType::Full,
-            sqlparser::ast::JoinOperator::CrossJoin => JoinType::Cross,
+            sqlparser::ast::JoinOperator::CrossJoin(_) => JoinType::Cross,
+            sqlparser::ast::JoinOperator::Join(_) => JoinType::Inner, // implicit JOIN is INNER
             _ => return Err("Unsupported join type".to_string()),
         };
 
@@ -122,7 +123,9 @@ fn build_from(from: &[TableWithJoins]) -> Result<LogicalPlan, String> {
             sqlparser::ast::JoinOperator::Inner(constraint)
             | sqlparser::ast::JoinOperator::LeftOuter(constraint)
             | sqlparser::ast::JoinOperator::RightOuter(constraint)
-            | sqlparser::ast::JoinOperator::FullOuter(constraint) => {
+            | sqlparser::ast::JoinOperator::FullOuter(constraint)
+            | sqlparser::ast::JoinOperator::Join(constraint)
+            | sqlparser::ast::JoinOperator::CrossJoin(constraint) => {
                 match constraint {
                     sqlparser::ast::JoinConstraint::On(expr) => Some(expr.clone()),
                     _ => None,
@@ -176,7 +179,7 @@ fn extract_aggr_exprs(items: &[SelectItem]) -> Vec<Expr> {
 /// Checks if the SELECT statement has GROUP BY or aggregate functions.
 /// This determines whether an Aggregate node should be added to the logical plan.
 fn has_grouping_or_aggregate(select: &Select) -> bool {
-    matches!(&select.group_by, GroupByExpr::Expressions(exprs) if !exprs.is_empty())
+    matches!(&select.group_by, GroupByExpr::Expressions(exprs, _) if !exprs.is_empty())
         || extract_aggr_exprs(&select.projection).len() > 0
 }
 

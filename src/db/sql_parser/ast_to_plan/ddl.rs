@@ -5,19 +5,19 @@ use sqlparser::ast::AlterTableOperation as AstAlterOp;
 
 pub fn build_logical_plan(stmt: &Statement) -> Result<LogicalPlan, String> {
     match stmt {
-        Statement::CreateTable { name, columns, .. } => {
+        Statement::CreateTable(create) => {
             Ok(LogicalPlan::CreateTable {
-                table_name: name.to_string(),
-                columns: columns.clone(),
+                table_name: create.name.to_string(),
+                columns: create.columns.clone(),
             })
         }
-        Statement::AlterTable { name, operations, .. } => {
-            if operations.len() == 1 {
-                let op = operations[0].clone();
+        Statement::AlterTable(alter) => {
+            if alter.operations.len() == 1 {
+                let op = alter.operations[0].clone();
                 // store the raw AST AlterTableOperation in the logical plan
                 let operation: AstAlterOp = op;
                 Ok(LogicalPlan::AlterTable {
-                    table_name: name.to_string(),
+                    table_name: alter.name.to_string(),
                     operation,
                 })
             } else {
