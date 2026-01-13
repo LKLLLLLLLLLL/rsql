@@ -164,3 +164,74 @@ The `SELECT` statement retrieves data from one or more tables and implements rel
 - **Example:**  
   ```sql
   SELECT * FROM users WHERE age > 18;
+
+---
+
+## 3. Operations and Expressions
+
+This section describes the supported operations on `DataItem` values, including comparison and arithmetic operators.
+
+### a) Comparison Operators
+
+Comparison operators are used in **WHERE clauses**, **JOIN conditions**, and **constraint enforcement**. The system evaluates expressions by comparing `DataItem` values according to their types.
+
+| Operator | Description                     | Applicable Types        | Notes |
+|----------|---------------------------------|------------------------|-------|
+| `=`      | Equality                        | INT, FLOAT, CHAR, VARCHAR, BOOLEAN | Null comparison returns false (unless `IS NULL`) |
+| `<>` / `!=` | Not equal                     | INT, FLOAT, CHAR, VARCHAR, BOOLEAN | Null comparison returns false |
+| `>`      | Greater than                    | INT, FLOAT |
+| `<`      | Less than                       | INT, FLOAT |
+| `>=`     | Greater than or equal           | INT, FLOAT |
+| `<=`     | Less than or equal              | INT, FLOAT |
+
+**Implementation Notes:**
+
+1. **Numeric types (`Integer`, `Float`)**  
+   - Use standard Rust operators (`>`, `<`, `>=`, `<=`, `==`, `!=`) on `i64` or `f64`.  
+   - Mixed comparisons (INT vs FLOAT) require type promotion to `f64`.
+
+2. **String types (`Char`, `VarChar`)**  
+   - Comparison is lexicographical.  
+   - For `Char(n)`, only the meaningful part of the string (excluding padding) is considered.  
+   - Null values are handled separately: any comparison with `NULL` returns false.
+
+3. **Boolean type (`Bool`)**  
+   - Only `=` and `!=` are supported.  
+   - `true > false` is not meaningful in SQL context and should be prohibited.
+
+4. **NULL handling**  
+   - Comparisons with `NULL` always return false.  
+   - Use `IS NULL` or `IS NOT NULL` for null checks.
+
+---
+
+### b) Arithmetic Operators
+
+Arithmetic operators are supported for numeric types:
+
+| Operator | Description        | Applicable Types |
+|----------|------------------|----------------|
+| `+`      | Addition          | INT, FLOAT     |
+| `-`      | Subtraction       | INT, FLOAT     |
+| `*`      | Multiplication    | INT, FLOAT     |
+| `/`      | Division          | INT, FLOAT     |
+
+**Implementation Notes:**
+
+- Division by zero must be checked and raise an error.  
+- Mixed INT/FLOAT operations promote INT to FLOAT.  
+- Result type follows standard SQL type promotion rules.
+
+---
+
+### c) Logical Operators
+
+Logical operators are used in boolean expressions:
+
+| Operator | Description        | Notes |
+|----------|------------------|-------|
+| `AND`    | Logical AND        | Short-circuit evaluation |
+| `OR`     | Logical OR         | Short-circuit evaluation |
+| `NOT`    | Logical NOT        | Unary operator |
+
+- Boolean expressions can combine comparisons, e.g., `age > 18 AND salary < 10000`.
