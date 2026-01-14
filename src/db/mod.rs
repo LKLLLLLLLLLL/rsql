@@ -1,4 +1,5 @@
 pub mod server;
+pub mod executor;
 mod wal;
 mod btree_index;
 mod data_item;
