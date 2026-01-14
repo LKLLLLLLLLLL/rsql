@@ -748,6 +748,87 @@ onMounted(() => {
                 return
             }
 
+            // Type validation: check if each value matches its column type
+            const typeErrors = []
+            insertData.forEach((row, rowIdx) => {
+                const errors = []
+                currentTableHeaders.forEach(h => {
+                    const colName = h.name
+                    const colType = h.type
+                    const value = row[colName]
+                    
+                    // Skip empty values for nullable columns
+                    if (!value || value === '') {
+                        return
+                    }
+                    
+                    // Perform type checking
+                    const result = checkTypeMatches(colType, value)
+                    if (!result.valid) {
+                        errors.push({ column: colName, type: colType, value: value, message: result.message })
+                    }
+                })
+                if (errors.length > 0) {
+                    typeErrors.push({ row: rowIdx + 1, errors: errors })
+                }
+            })
+
+            if (typeErrors.length > 0) {
+                const msg = typeErrors.map(e => {
+                    const errDetails = e.errors.map(err => 
+                        `  列 "${err.column}" (类型: ${err.type})：值 "${err.value}" 不匹配 - ${err.message}`
+                    ).join('\n')
+                    return `行 ${e.row} 类型错误：\n${errDetails}`
+                }).join('\n\n')
+                alert('数据类型验证失败：\n\n' + msg)
+                return
+            }
+
+            // Unique constraint validation: check for duplicate values in unique columns
+            const uniqueErrors = []
+            const uniqueColumns = currentTableHeaders.filter(h => h.unique)
+            
+            uniqueColumns.forEach(h => {
+                const colName = h.name
+                const valuesMap = new Map() // value -> array of row indices
+                
+                insertData.forEach((row, rowIdx) => {
+                    const value = row[colName]
+                    // Skip empty values
+                    if (!value || value === '') {
+                        return
+                    }
+                    
+                    if (!valuesMap.has(value)) {
+                        valuesMap.set(value, [])
+                    }
+                    valuesMap.get(value).push(rowIdx + 1)
+                })
+                
+                // Find duplicate values
+                const duplicates = []
+                valuesMap.forEach((rowIndices, value) => {
+                    if (rowIndices.length > 1) {
+                        duplicates.push({ value, rows: rowIndices })
+                    }
+                })
+                
+                if (duplicates.length > 0) {
+                    uniqueErrors.push({ column: colName, duplicates })
+                }
+            })
+
+            if (uniqueErrors.length > 0) {
+                const msg = uniqueErrors.map(e => {
+                    const dupDetails = e.duplicates.map(dup => 
+                        `  值 "${dup.value}" 在行 ${dup.rows.join(', ')} 中重复`
+                    ).join('\n')
+                    return `列 "${e.column}" (唯一约束) 存在重复值：\n${dupDetails}`
+                }).join('\n\n')
+                alert('唯一性约束验证失败：\n\n' + msg)
+                return
+            }
+
             // Generate JSON
             const jsonOutput = {
                 table: tableName,
@@ -759,7 +840,27 @@ onMounted(() => {
             let sqlStatements = []
             insertData.forEach(row => {
                 const columns = Object.keys(row).filter(col => row[col] !== '')
-                const values = columns.map(col => `'${row[col].replace(/'/g, "''")}'`)
+                const values = columns.map(col => {
+                    const value = row[col]
+                    // Find column metadata to get type
+                    const colMeta = currentTableHeaders.find(h => h.name === col)
+                    const colType = colMeta ? colMeta.type.toUpperCase() : ''
+                    
+                    // Handle INT and FLOAT without quotes
+                    if (colType === 'INT' || colType === 'INTEGER') {
+                        return value
+                    } else if (colType === 'FLOAT') {
+                        const numValue = parseFloat(value)
+                        // If no decimal point in original value, format with .00
+                        if (!value.includes('.')) {
+                            return numValue.toFixed(2)
+                        }
+                        return value
+                    } else {
+                        // For other types, wrap in quotes and escape single quotes
+                        return `'${value.replace(/'/g, "''")}'`
+                    }
+                })
                 
                 if (columns.length > 0) {
                     const sql = `INSERT INTO ${tableName} (${columns.join(', ')}) VALUES (${values.join(', ')});`

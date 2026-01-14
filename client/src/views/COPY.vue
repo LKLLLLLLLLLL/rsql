@@ -298,14 +298,15 @@ onMounted(() => {
                 const pks = Array.isArray(json.primaryKey) ? json.primaryKey : null
                 const uniques = Array.isArray(json.unique) ? json.unique : null
 
-                if (Array.isArray(rawHeaders) && rawHeaders.length > 0 && types && nullables && pks && uniques &&
-                    rawHeaders.length === types.length && rawHeaders.length === nullables.length && rawHeaders.length === pks.length && rawHeaders.length === uniques.length) {
+                // Merge parallel arrays when the required ones exist and match in length; unique is optional
+                if (Array.isArray(rawHeaders) && rawHeaders.length > 0 && types && nullables && pks &&
+                    rawHeaders.length === types.length && rawHeaders.length === nullables.length && rawHeaders.length === pks.length) {
                     normalized = rawHeaders.map((name, i) => ({
                         name: name,
                         type: String(types[i] ?? ''),
                         ableToBeNULL: !!nullables[i],
                         primaryKey: !!pks[i],
-                        unique: !!uniques[i]
+                        unique: (Array.isArray(uniques) && uniques.length === rawHeaders.length) ? !!uniques[i] : false
                     }))
                 } else {
                     normalized = normalizeHeaders(rawHeaders)
@@ -502,7 +503,7 @@ onMounted(() => {
             sql += `  ${col.name} ${col.type}`
             if (!col.allowNull) sql += ' NOT NULL'
             if (col.primaryKey) sql += ' PRIMARY KEY'
-            else if (col.unique) sql += ' UNIQUE'
+            if (col.unique) sql += ' UNIQUE'
             if (index < columns.length - 1) sql += ',\n'
         })
         sql += `\n);`
@@ -584,10 +585,11 @@ onMounted(() => {
             const name = (typeof h === 'string') ? h : (h && h.name ? h.name : '')
             const isPK = (typeof h === 'object') ? !!h.primaryKey : false
             const canNull = (typeof h === 'object') ? !!h.ableToBeNULL : false
+            const isUnique = (typeof h === 'object') ? !!h.unique : false
 
             let labelText = name
             if (isPK) labelText += '*'
-            if (canNull) labelText += '(ableToBeNULL)'
+            if (isUnique) labelText += ' (Unique)'
             const placeholderText = canNull ? '可为空' : '必填'
 
             return `
@@ -743,6 +745,87 @@ onMounted(() => {
 
             if (insertData.length === 0) {
                 alert('请至少填写一行数据')
+                return
+            }
+
+            // Type validation: check if each value matches its column type
+            const typeErrors = []
+            insertData.forEach((row, rowIdx) => {
+                const errors = []
+                currentTableHeaders.forEach(h => {
+                    const colName = h.name
+                    const colType = h.type
+                    const value = row[colName]
+                    
+                    // Skip empty values for nullable columns
+                    if (!value || value === '') {
+                        return
+                    }
+                    
+                    // Perform type checking
+                    const result = checkTypeMatches(colType, value)
+                    if (!result.valid) {
+                        errors.push({ column: colName, type: colType, value: value, message: result.message })
+                    }
+                })
+                if (errors.length > 0) {
+                    typeErrors.push({ row: rowIdx + 1, errors: errors })
+                }
+            })
+
+            if (typeErrors.length > 0) {
+                const msg = typeErrors.map(e => {
+                    const errDetails = e.errors.map(err => 
+                        `  列 "${err.column}" (类型: ${err.type})：值 "${err.value}" 不匹配 - ${err.message}`
+                    ).join('\n')
+                    return `行 ${e.row} 类型错误：\n${errDetails}`
+                }).join('\n\n')
+                alert('数据类型验证失败：\n\n' + msg)
+                return
+            }
+
+            // Unique constraint validation: check for duplicate values in unique columns
+            const uniqueErrors = []
+            const uniqueColumns = currentTableHeaders.filter(h => h.unique)
+            
+            uniqueColumns.forEach(h => {
+                const colName = h.name
+                const valuesMap = new Map() // value -> array of row indices
+                
+                insertData.forEach((row, rowIdx) => {
+                    const value = row[colName]
+                    // Skip empty values
+                    if (!value || value === '') {
+                        return
+                    }
+                    
+                    if (!valuesMap.has(value)) {
+                        valuesMap.set(value, [])
+                    }
+                    valuesMap.get(value).push(rowIdx + 1)
+                })
+                
+                // Find duplicate values
+                const duplicates = []
+                valuesMap.forEach((rowIndices, value) => {
+                    if (rowIndices.length > 1) {
+                        duplicates.push({ value, rows: rowIndices })
+                    }
+                })
+                
+                if (duplicates.length > 0) {
+                    uniqueErrors.push({ column: colName, duplicates })
+                }
+            })
+
+            if (uniqueErrors.length > 0) {
+                const msg = uniqueErrors.map(e => {
+                    const dupDetails = e.duplicates.map(dup => 
+                        `  值 "${dup.value}" 在行 ${dup.rows.join(', ')} 中重复`
+                    ).join('\n')
+                    return `列 "${e.column}" (唯一约束) 存在重复值：\n${dupDetails}`
+                }).join('\n\n')
+                alert('唯一性约束验证失败：\n\n' + msg)
                 return
             }
 
@@ -1221,7 +1304,8 @@ tbody tr:hover {
 
 .column-row {
     display: grid;
-    grid-template-columns: 1.2fr 1fr auto auto 1fr auto;
+    /* Adjusted to prevent the primary key column from stretching */
+    grid-template-columns: 1.5fr 1fr auto auto auto auto;
     gap: 10px;
     align-items: center;
     background-color: #f8f9fa;
