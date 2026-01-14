@@ -30,6 +30,7 @@ pub enum TnxState {
     Rollback,
 }
 
+#[derive(Debug)]
 pub struct Tnx {
     pub stmts: Vec<PlanNode>,
     pub commit_stat: TnxState,
@@ -119,7 +120,7 @@ pub enum PlanNode {
         table_name: String,
         columns: Option<Vec<String>>,
         values: Vec<Vec<Expr>>,
-        input: Option<Box<PlanNode>>, // for INSERT ... SELECT subquery
+        input: Option<Box<PlanNode>>, // 用于 INSERT ... SELECT 子查询
     },
     /// Deletes rows produced by the input plan.
     Delete {
@@ -133,6 +134,7 @@ pub enum PlanNode {
 }
 
 /// SQL -> LogicalPlan(IR)
+#[derive(Debug)]
 pub struct Plan {
     pub tnxs: Vec<Tnx>,
 }
@@ -322,26 +324,53 @@ impl Plan {
             }
         }
 
-        let (clean_exprs, sub_info) = Self::extract_subqueries_from_exprs(&Self::extract_projection(&select.projection))?;
-        plan = PlanNode::Projection {
-            exprs: clean_exprs,
-            input: Box::new(plan),
-        };
-        if let Some((sub_plan, apply_type)) = sub_info {
-            plan = PlanNode::Apply {
-                input: Box::new(plan),
-                subquery: Box::new(sub_plan),
-                apply_type,
-            };
+        // === Projection handling ===
+        // Distinguish three cases:
+        // 1) SELECT *        -> identity projection (no Projection node)
+        // 2) SELECT a, b     -> Projection [a, b]
+        // 3) SELECT <empty>  -> illegal (π[]), reject here
+
+        let has_wildcard = select.projection.iter().any(|item| matches!(item, SelectItem::Wildcard(_)));
+        let proj_exprs = Self::extract_projection(&select.projection);
+
+        // Case 3: empty projection without wildcard is illegal
+        if !has_wildcard && proj_exprs.is_empty() {
+            return Err(RsqlError::ParserError(
+                "SELECT list cannot be empty".to_string(),
+            ));
         }
+
+        // Case 2: explicit projection
+        if !proj_exprs.is_empty() {
+            let (clean_exprs, sub_info) =
+                Self::extract_subqueries_from_exprs(&proj_exprs)?;
+            plan = PlanNode::Projection {
+                exprs: clean_exprs,
+                input: Box::new(plan),
+            };
+            if let Some((sub_plan, apply_type)) = sub_info {
+                plan = PlanNode::Apply {
+                    input: Box::new(plan),
+                    subquery: Box::new(sub_plan),
+                    apply_type,
+                };
+            }
+        }
+        // Case 1 (SELECT *): do nothing, identity projection
 
         Ok(plan)
     }
 
     // ==================== FROM / TableFactor ====================
     fn build_from(from: &[TableWithJoins]) -> RsqlResult<PlanNode> {
-        if from.is_empty() { return Err(RsqlError::ParserError("FROM clause is empty".to_string())); }
+        if from.is_empty() {
+            return Err(RsqlError::ParserError("FROM clause is empty".to_string()));
+        }
+
+        // Start with the first table
         let mut plan = Self::build_table_factor(&from[0].relation)?;
+
+        // Handle joins inside the first TableWithJoins
         for table_with_join in &from[0].joins {
             let right_plan = Self::build_table_factor(&table_with_join.relation)?;
             let join_type = match table_with_join.join_operator {
@@ -374,6 +403,18 @@ impl Plan {
                 on: on_expr,
             };
         }
+
+        // Handle additional FROM items as implicit CROSS JOINs
+        for table in from.iter().skip(1) {
+            let right_plan = Self::build_table_factor(&table.relation)?;
+            plan = PlanNode::Join {
+                left: Box::new(plan),
+                right: Box::new(right_plan),
+                join_type: JoinType::Cross,
+                on: None,
+            };
+        }
+
         Ok(plan)
     }
 
