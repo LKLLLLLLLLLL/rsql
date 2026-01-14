@@ -157,4 +157,4 @@ impl StorageManager {
         self.file_page_num = file_page_num; // update pages number in the file
         Ok(())
     }
-}
+} // page operation
