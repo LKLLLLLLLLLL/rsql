@@ -23,6 +23,18 @@ use sqlparser::parser::Parser;
 use crate::db::sql_parser::utils::is_aggregate_expr;
 use crate::db::errors::{RsqlResult, RsqlError};
 
+// Represents the state of a transaction.
+#[derive(Debug)]
+pub enum TnxState {
+    Commit,
+    Rollback,
+}
+
+pub struct Tnx {
+    pub stmts: Vec<PlanNode>,
+    pub commit_stat: TnxState,
+}
+
 /// Represents the type of join operation.
 #[derive(Debug, Clone, Copy)]
 pub enum JoinType {
@@ -48,42 +60,42 @@ pub type AlterTableOperation = AstAlterTableOperation;
 /// Represents a logical query plan.
 /// Each variant corresponds to a relational algebra operation or DDL/DML operation.
 #[derive(Debug)]
-pub enum LogicalPlan {
+pub enum PlanNode {
     /// Scans a table for all rows.
     TableScan {
         table: String,
     },
     /// Represents a subquery.
     Subquery {
-        subquery: Box<LogicalPlan>,
+        subquery: Box<PlanNode>,
         alias: Option<String>,
     },
     /// Applies a subquery to each row from the input.
     Apply {
-        input: Box<LogicalPlan>,
-        subquery: Box<LogicalPlan>,
+        input: Box<PlanNode>,
+        subquery: Box<PlanNode>,
         apply_type: ApplyType,
     },
     /// Filters rows based on a predicate.
     Filter {
         predicate: Expr,
-        input: Box<LogicalPlan>,
+        input: Box<PlanNode>,
     },
     /// Groups rows and applies aggregate functions.
     Aggregate {
         group_by: Vec<Expr>,
         aggr_exprs: Vec<Expr>,
-        input: Box<LogicalPlan>,
+        input: Box<PlanNode>,
     },
     /// Projects specific columns from the input.
     Projection {
         exprs: Vec<Expr>,
-        input: Box<LogicalPlan>,
+        input: Box<PlanNode>,
     },
     /// Joins two plans based on a condition.
     Join {
-        left: Box<LogicalPlan>,
-        right: Box<LogicalPlan>,
+        left: Box<PlanNode>,
+        right: Box<PlanNode>,
         join_type: JoinType,
         on: Option<Expr>,
     },
@@ -122,22 +134,116 @@ pub enum LogicalPlan {
 }
 
 /// SQL -> LogicalPlan(IR)
-pub struct LogicalPlanner;
+pub struct Plan {
+    pub tnxs: Vec<Tnx>,
+}
 
-impl LogicalPlanner {
+impl Plan {
     /// Builds a logical plan from a SQL string.
-    pub fn build_logical_plan(sql: &str) -> RsqlResult<LogicalPlan> {
+    /// Handles multi-statement SQL and transaction boundaries.
+    pub fn build_plan(sql: &str) -> RsqlResult<Plan> {
+        use sqlparser::ast::Statement::*;
         let dialect = GenericDialect {};
         let ast = Parser::parse_sql(&dialect, sql)
             .map_err(|e| RsqlError::ParserError(format!("{e}")))?;
         if ast.is_empty() {
             return Err(RsqlError::ParserError("Empty SQL".to_string()));
         }
-        Self::from_ast(&ast[0])
+
+        let mut tnxs: Vec<Tnx> = Vec::new();
+        let mut curr_stmts: Vec<PlanNode> = Vec::new();
+        let mut in_explicit_tnx = false;
+        let mut curr_commit_stat = TnxState::Commit;
+        let mut has_explicit_tnx = false;
+
+        for stmt in ast.iter() {
+            match stmt {
+                StartTransaction { .. } => {
+                    // Start a new transaction
+                    if in_explicit_tnx {
+                        return Err(RsqlError::ParserError(
+                            "Nested BEGIN detected, a transaction is already open".to_string()
+                        ));
+                    }
+                    in_explicit_tnx = true;
+                    has_explicit_tnx = true;
+                    curr_stmts.clear();
+                    curr_commit_stat = TnxState::Commit;
+                }
+                Commit { .. } => {
+                    if in_explicit_tnx {
+                        tnxs.push(Tnx {
+                            stmts: std::mem::take(&mut curr_stmts),
+                            commit_stat: TnxState::Commit,
+                        });
+                        in_explicit_tnx = false;
+                        curr_commit_stat = TnxState::Commit;
+                    } else {
+                        // COMMIT without BEGIN: treat as single transaction
+                        tnxs.push(Tnx {
+                            stmts: std::mem::take(&mut curr_stmts),
+                            commit_stat: TnxState::Commit,
+                        });
+                        curr_commit_stat = TnxState::Commit;
+                    }
+                }
+                Rollback { .. } => {
+                    if in_explicit_tnx {
+                        tnxs.push(Tnx {
+                            stmts: std::mem::take(&mut curr_stmts),
+                            commit_stat: TnxState::Rollback,
+                        });
+                        in_explicit_tnx = false;
+                        curr_commit_stat = TnxState::Commit;
+                    } else {
+                        // ROLLBACK without BEGIN: treat as single transaction
+                        tnxs.push(Tnx {
+                            stmts: std::mem::take(&mut curr_stmts),
+                            commit_stat: TnxState::Rollback,
+                        });
+                        curr_commit_stat = TnxState::Commit;
+                    }
+                }
+                _ => {
+                    // Normal SQL statement
+                    let plan_node = Self::from_ast(stmt)?;
+                    curr_stmts.push(plan_node);
+                }
+            }
+        }
+
+        // If any statements remain, wrap them as a transaction.
+        if in_explicit_tnx {
+            return Err(RsqlError::ParserError(
+                "Explicit transaction not closed, missing COMMIT or ROLLBACK".to_string()
+            ));
+        }
+
+        if !curr_stmts.is_empty() {
+            tnxs.push(Tnx {
+                stmts: std::mem::take(&mut curr_stmts),
+                commit_stat: curr_commit_stat,
+            });
+        }
+
+        // If there were no explicit transactions, but statements exist and no tnxs added, wrap all as one tnx.
+        if tnxs.is_empty() && !curr_stmts.is_empty() {
+            tnxs.push(Tnx {
+                stmts: std::mem::take(&mut curr_stmts),
+                commit_stat: TnxState::Commit,
+            });
+        }
+
+        // If there were no explicit transactions (no BEGIN/COMMIT/ROLLBACK), but statements exist, wrap all as a default transaction.
+        if !has_explicit_tnx && !tnxs.is_empty() {
+            // Already handled by above, do nothing.
+        }
+
+        Ok(Plan { tnxs })
     }
 
     /// AST -> LogicalPlan
-    fn from_ast(stmt: &Statement) -> RsqlResult<LogicalPlan> {
+    fn from_ast(stmt: &Statement) -> RsqlResult<PlanNode> {
         match stmt {
             Statement::Query(_) => Self::from_select_ast(stmt),
             Statement::Insert { .. }
@@ -146,36 +252,42 @@ impl LogicalPlanner {
             | Statement::CreateTable { .. }
             | Statement::Drop { .. }
             | Statement::AlterTable { .. } => Self::from_ddl_ast(stmt),
+            // Transaction statements are handled in build_plan, so treat as error here.
+            Statement::StartTransaction { .. }
+            | Statement::Commit { .. }
+            | Statement::Rollback { .. } => {
+                Err(RsqlError::ParserError("Transaction statements are not valid as standalone logical plan nodes".to_string()))
+            }
             _ => Err(RsqlError::ParserError("Unsupported statement type".to_string())),
         }
     }
 
     // ==================== SELECT ====================
-    fn from_select_ast(stmt: &Statement) -> RsqlResult<LogicalPlan> {
+    fn from_select_ast(stmt: &Statement) -> RsqlResult<PlanNode> {
         match stmt {
             Statement::Query(query) => Self::build_query(query),
             _ => Err(RsqlError::ParserError("Only SELECT supported".to_string())),
         }
     }
 
-    fn build_query(query: &Query) -> RsqlResult<LogicalPlan> {
+    fn build_query(query: &Query) -> RsqlResult<PlanNode> {
         match &*query.body {
             SetExpr::Select(select) => Self::build_select_plan(select),
             _ => Err(RsqlError::ParserError("Only simple SELECT is supported".to_string())),
         }
     }
 
-    fn build_select_plan(select: &Select) -> RsqlResult<LogicalPlan> {
+    fn build_select_plan(select: &Select) -> RsqlResult<PlanNode> {
         let mut plan = Self::build_from(&select.from)?;
 
         if let Some(selection) = &select.selection {
             let (clean_predicate, sub_info) = Self::extract_subqueries_from_expr(selection);
-            plan = LogicalPlan::Filter {
+            plan = PlanNode::Filter {
                 predicate: clean_predicate,
                 input: Box::new(plan),
             };
             if let Some((sub_plan, apply_type)) = sub_info {
-                plan = LogicalPlan::Apply {
+                plan = PlanNode::Apply {
                     input: Box::new(plan),
                     subquery: Box::new(sub_plan),
                     apply_type,
@@ -189,7 +301,7 @@ impl LogicalPlanner {
                 _ => vec![],
             };
             let aggr_exprs = Self::extract_aggr_exprs(&select.projection);
-            plan = LogicalPlan::Aggregate {
+            plan = PlanNode::Aggregate {
                 group_by,
                 aggr_exprs,
                 input: Box::new(plan),
@@ -198,12 +310,12 @@ impl LogicalPlanner {
 
         if let Some(having) = &select.having {
             let (clean_having, sub_info) = Self::extract_subqueries_from_expr(having);
-            plan = LogicalPlan::Filter {
+            plan = PlanNode::Filter {
                 predicate: clean_having,
                 input: Box::new(plan),
             };
             if let Some((sub_plan, apply_type)) = sub_info {
-                plan = LogicalPlan::Apply {
+                plan = PlanNode::Apply {
                     input: Box::new(plan),
                     subquery: Box::new(sub_plan),
                     apply_type,
@@ -212,12 +324,12 @@ impl LogicalPlanner {
         }
 
         let (clean_exprs, sub_info) = Self::extract_subqueries_from_exprs(&Self::extract_projection(&select.projection));
-        plan = LogicalPlan::Projection {
+        plan = PlanNode::Projection {
             exprs: clean_exprs,
             input: Box::new(plan),
         };
         if let Some((sub_plan, apply_type)) = sub_info {
-            plan = LogicalPlan::Apply {
+            plan = PlanNode::Apply {
                 input: Box::new(plan),
                 subquery: Box::new(sub_plan),
                 apply_type,
@@ -228,7 +340,7 @@ impl LogicalPlanner {
     }
 
     // ==================== FROM / TableFactor ====================
-    fn build_from(from: &[TableWithJoins]) -> RsqlResult<LogicalPlan> {
+    fn build_from(from: &[TableWithJoins]) -> RsqlResult<PlanNode> {
         if from.is_empty() { return Err(RsqlError::ParserError("FROM clause is empty".to_string())); }
         let mut plan = Self::build_table_factor(&from[0].relation)?;
         for table_with_join in &from[0].joins {
@@ -256,7 +368,7 @@ impl LogicalPlanner {
                 }
                 _ => None,
             };
-            plan = LogicalPlan::Join {
+            plan = PlanNode::Join {
                 left: Box::new(plan),
                 right: Box::new(right_plan),
                 join_type,
@@ -266,13 +378,13 @@ impl LogicalPlanner {
         Ok(plan)
     }
 
-    fn build_table_factor(table_factor: &TableFactor) -> RsqlResult<LogicalPlan> {
+    fn build_table_factor(table_factor: &TableFactor) -> RsqlResult<PlanNode> {
         match table_factor {
-            TableFactor::Table { name, .. } => Ok(LogicalPlan::TableScan { table: name.to_string() }),
+            TableFactor::Table { name, .. } => Ok(PlanNode::TableScan { table: name.to_string() }),
             TableFactor::Derived { subquery, alias, .. } => {
                 let sub_plan = Self::build_query(subquery)?;
                 let alias_name = alias.as_ref().map(|a| a.name.to_string());
-                Ok(LogicalPlan::Subquery { subquery: Box::new(sub_plan), alias: alias_name })
+                Ok(PlanNode::Subquery { subquery: Box::new(sub_plan), alias: alias_name })
             }
             _ => Err(RsqlError::ParserError("Unsupported table factor".to_string())),
         }
@@ -300,7 +412,7 @@ impl LogicalPlanner {
             || Self::extract_aggr_exprs(&select.projection).len() > 0
     }
 
-    fn extract_subqueries_from_expr(expr: &Expr) -> (Expr, Option<(LogicalPlan, ApplyType)>) {
+    fn extract_subqueries_from_expr(expr: &Expr) -> (Expr, Option<(PlanNode, ApplyType)>) {
         match expr {
             Expr::Subquery(query) => {
                 match Self::build_query(query) {
@@ -330,7 +442,7 @@ impl LogicalPlanner {
         }
     }
 
-    fn extract_subqueries_from_exprs(exprs: &[Expr]) -> (Vec<Expr>, Option<(LogicalPlan, ApplyType)>) {
+    fn extract_subqueries_from_exprs(exprs: &[Expr]) -> (Vec<Expr>, Option<(PlanNode, ApplyType)>) {
         let mut clean_exprs = vec![];
         let mut sub = None;
         for expr in exprs {
@@ -342,20 +454,20 @@ impl LogicalPlanner {
     }
 
     // ==================== DDL / INSERT / UPDATE / DELETE ====================
-    fn from_ddl_ast(stmt: &Statement) -> RsqlResult<LogicalPlan> {
+    fn from_ddl_ast(stmt: &Statement) -> RsqlResult<PlanNode> {
         match stmt {
-            Statement::CreateTable(create) => Ok(LogicalPlan::CreateTable {
+            Statement::CreateTable(create) => Ok(PlanNode::CreateTable {
                 table_name: create.name.to_string(),
                 columns: create.columns.clone(),
             }),
             Statement::AlterTable(alter) => {
                 if alter.operations.len() == 1 {
-                    Ok(LogicalPlan::AlterTable { table_name: alter.name.to_string(), operation: alter.operations[0].clone() })
+                    Ok(PlanNode::AlterTable { table_name: alter.name.to_string(), operation: alter.operations[0].clone() })
                 } else { Err(RsqlError::ParserError("Multiple ALTER TABLE operations not supported".to_string())) }
             }
             Statement::Drop { object_type, names, if_exists, .. } => {
                 if *object_type == ObjectType::Table && names.len() == 1 {
-                    Ok(LogicalPlan::DropTable { table_name: names[0].to_string(), if_exists: *if_exists })
+                    Ok(PlanNode::DropTable { table_name: names[0].to_string(), if_exists: *if_exists })
                 } else { Err(RsqlError::ParserError("Only DROP TABLE supported".to_string())) }
             }
             Statement::Insert(insert) => {
@@ -363,11 +475,11 @@ impl LogicalPlanner {
                     match &*source.body { SetExpr::Values(values) => values.rows.clone(), _ => return Err(RsqlError::ParserError("Only VALUES supported in INSERT".to_string())) }
                 } else { vec![] };
                 let cols_opt = if insert.columns.is_empty() { None } else { Some(insert.columns.iter().map(|c| c.to_string()).collect()) };
-                Ok(LogicalPlan::Insert { table_name: insert.table.to_string(), columns: cols_opt, values })
+                Ok(PlanNode::Insert { table_name: insert.table.to_string(), columns: cols_opt, values })
             }
             Statement::Update(update) => {
                 let assignments = update.assignments.iter().map(|a| (format!("{}", a.target), a.value.clone())).collect();
-                Ok(LogicalPlan::Update { table_name: update.table.to_string(), assignments, predicate: update.selection.clone() })
+                Ok(PlanNode::Update { table_name: update.table.to_string(), assignments, predicate: update.selection.clone() })
             }
             Statement::Delete(delete) => {
                 let table_name = match &delete.from {
@@ -377,14 +489,14 @@ impl LogicalPlanner {
                         match &tables[0].relation { TableFactor::Table { name, .. } => name.to_string(), _ => return Err(RsqlError::ParserError("Unsupported table factor in DELETE".to_string())) }
                     }
                 };
-                Ok(LogicalPlan::Delete { table_name, predicate: delete.selection.clone() })
+                Ok(PlanNode::Delete { table_name, predicate: delete.selection.clone() })
             }
             _ => Err(RsqlError::ParserError("DDL not implemented yet".to_string())),
         }
     }
 
     /// print LogicalPlan in a pretty tree format
-    pub fn pretty_print(plan: &LogicalPlan) {
+    pub fn pretty_print(plan: &PlanNode) {
         fn fmt_exprs(exprs: &[Expr]) -> String {
             exprs.iter().map(|e| format!("{}", e)).collect::<Vec<_>>().join(", ")
         }
@@ -398,7 +510,7 @@ impl LogicalPlanner {
             }
         }
 
-        fn inner(plan: &LogicalPlan, prefix: &str, is_last: bool) {
+        fn inner(plan: &PlanNode, prefix: &str, is_last: bool) {
             let branch = if is_last { "└── " } else { "├── " };
             println!("{}{}{}", prefix, branch, label(plan));
 
@@ -408,37 +520,37 @@ impl LogicalPlanner {
             }
         }
 
-        fn label(plan: &LogicalPlan) -> String {
+        fn label(plan: &PlanNode) -> String {
             match plan {
-                LogicalPlan::TableScan { table } => format!("TableScan [{}]", table),
-                LogicalPlan::Subquery { alias, .. } => format!("Subquery{}", alias.as_ref().map(|a| format!(" AS {}", a)).unwrap_or_default()),
-                LogicalPlan::Apply { apply_type, .. } => format!("Apply [{:?}]", apply_type),
-                LogicalPlan::Filter { predicate, .. } => format!("Filter [{}]", predicate),
-                LogicalPlan::Aggregate { group_by, aggr_exprs, .. } => {
+                PlanNode::TableScan { table } => format!("TableScan [{}]", table),
+                PlanNode::Subquery { alias, .. } => format!("Subquery{}", alias.as_ref().map(|a| format!(" AS {}", a)).unwrap_or_default()),
+                PlanNode::Apply { apply_type, .. } => format!("Apply [{:?}]", apply_type),
+                PlanNode::Filter { predicate, .. } => format!("Filter [{}]", predicate),
+                PlanNode::Aggregate { group_by, aggr_exprs, .. } => {
                     format!("Aggregate [group_by: {}, aggr: {}]", fmt_exprs(group_by), fmt_exprs(aggr_exprs))
                 }
-                LogicalPlan::Projection { exprs, .. } => format!("Projection [{}]", fmt_exprs(exprs)),
-                LogicalPlan::Join { join_type, on, .. } => format!("Join [{:?}, on: {}]", join_type, on.as_ref().map_or("None".to_string(), |e| format!("{}", e))),
-                LogicalPlan::CreateTable { table_name, columns } => format!("CreateTable [{}] cols={}", table_name, columns.iter().map(|c| c.name.to_string()).collect::<Vec<_>>().join(", ")),
-                LogicalPlan::AlterTable { table_name, operation } => format!("AlterTable [{}] {}", table_name, fmt_alter_op(operation)),
-                LogicalPlan::DropTable { table_name, if_exists } => {
+                PlanNode::Projection { exprs, .. } => format!("Projection [{}]", fmt_exprs(exprs)),
+                PlanNode::Join { join_type, on, .. } => format!("Join [{:?}, on: {}]", join_type, on.as_ref().map_or("None".to_string(), |e| format!("{}", e))),
+                PlanNode::CreateTable { table_name, columns } => format!("CreateTable [{}] cols={}", table_name, columns.iter().map(|c| c.name.to_string()).collect::<Vec<_>>().join(", ")),
+                PlanNode::AlterTable { table_name, operation } => format!("AlterTable [{}] {}", table_name, fmt_alter_op(operation)),
+                PlanNode::DropTable { table_name, if_exists } => {
                     if *if_exists { format!("DropTable [{}] IF EXISTS", table_name) } else { format!("DropTable [{}]", table_name) }
                 }
-                LogicalPlan::Insert { table_name, columns, values } => format!("Insert [{}] cols={:?} rows={}", table_name, columns, values.len()),
-                LogicalPlan::Delete { table_name, predicate } => format!("Delete [{}] where={}", table_name, predicate.as_ref().map_or("None".to_string(), |p| format!("{}", p))),
-                LogicalPlan::Update { table_name, assignments, predicate } => format!("Update [{}] assigns={} where={}", table_name, assignments.len(), predicate.as_ref().map_or("None".to_string(), |p| format!("{}", p))),
+                PlanNode::Insert { table_name, columns, values } => format!("Insert [{}] cols={:?} rows={}", table_name, columns, values.len()),
+                PlanNode::Delete { table_name, predicate } => format!("Delete [{}] where={}", table_name, predicate.as_ref().map_or("None".to_string(), |p| format!("{}", p))),
+                PlanNode::Update { table_name, assignments, predicate } => format!("Update [{}] assigns={} where={}", table_name, assignments.len(), predicate.as_ref().map_or("None".to_string(), |p| format!("{}", p))),
             }
         }
 
-        fn children(plan: &LogicalPlan) -> Vec<&LogicalPlan> {
+        fn children(plan: &PlanNode) -> Vec<&PlanNode> {
             match plan {
-                LogicalPlan::TableScan { .. } => vec![],
-                LogicalPlan::Subquery { subquery, .. } => vec![subquery],
-                LogicalPlan::Apply { input, subquery, .. } => vec![input, subquery],
-                LogicalPlan::Filter { input, .. } => vec![input],
-                LogicalPlan::Aggregate { input, .. } => vec![input],
-                LogicalPlan::Projection { input, .. } => vec![input],
-                LogicalPlan::Join { left, right, .. } => vec![left, right],
+                PlanNode::TableScan { .. } => vec![],
+                PlanNode::Subquery { subquery, .. } => vec![subquery],
+                PlanNode::Apply { input, subquery, .. } => vec![input, subquery],
+                PlanNode::Filter { input, .. } => vec![input],
+                PlanNode::Aggregate { input, .. } => vec![input],
+                PlanNode::Projection { input, .. } => vec![input],
+                PlanNode::Join { left, right, .. } => vec![left, right],
                 _ => vec![],
             }
         }
