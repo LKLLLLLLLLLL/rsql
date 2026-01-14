@@ -13,11 +13,7 @@ use crate::db::sql_parser::logical_plan::LogicalPlan;
 /// # Returns
 /// * `Result<LogicalPlan, String>` - The logical plan on success, or an error message on failure.
 ///
-/// # Examples
-/// ```
-/// let sql = "SELECT * FROM users WHERE id = 1";
-/// let plan = parse_sql_to_ir(sql).unwrap();
-/// ```
+
 pub fn parse_sql_to_ir(sql: &str) -> Result<LogicalPlan, String> {
     let dialect = GenericDialect {};
     let ast = Parser::parse_sql(&dialect, sql).map_err(|e| e.to_string())?;

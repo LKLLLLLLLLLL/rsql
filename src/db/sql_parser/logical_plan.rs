@@ -81,6 +81,7 @@ pub enum LogicalPlan {
     /// Drops a table.
     DropTable {
         table_name: String,
+        if_exists: bool,
     },
     /// Inserts data into a table.
     Insert {

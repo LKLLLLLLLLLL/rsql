@@ -2,7 +2,7 @@
 /// This module provides methods to display logical query plans in a tree-like format. For easy obervation and testing.
 
 use crate::db::sql_parser::logical_plan::LogicalPlan;
-use sqlparser::ast::Expr;
+use sqlparser::ast::{Expr, AlterTableOperation};
 
 fn fmt_exprs(exprs: &[Expr]) -> String {
     exprs
@@ -10,6 +10,16 @@ fn fmt_exprs(exprs: &[Expr]) -> String {
         .map(|e| format!("{}", e))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+fn fmt_alter_op(op: &AlterTableOperation) -> String {
+    match op {
+        AlterTableOperation::AddColumn { column_def, .. } => {
+            format!("ADD COLUMN {} {}", column_def.name, column_def.data_type)
+        }
+        // Add more cases as needed
+        _ => format!("{:?}", op), // Fallback to debug for unsupported ops
+    }
 }
 
 impl LogicalPlan {
@@ -70,19 +80,23 @@ impl LogicalPlan {
                 format!("CreateTable [{}] cols={}", table_name, columns.iter().map(|c| c.name.to_string()).collect::<Vec<_>>().join(", "))
             }
             LogicalPlan::AlterTable { table_name, operation } => {
-                format!("AlterTable [{}] op={:?}", table_name, operation)
+                format!("AlterTable [{}] {}", table_name, fmt_alter_op(operation))
             }
-            LogicalPlan::DropTable { table_name } => {
-                format!("DropTable [{}]", table_name)
+            LogicalPlan::DropTable { table_name, if_exists } => {
+                if *if_exists {
+                    format!("DropTable [{}] IF EXISTS", table_name)
+                } else {
+                    format!("DropTable [{}]", table_name)
+                }
             }
             LogicalPlan::Insert { table_name, columns, values } => {
                 format!("Insert [{}] cols={:?} rows={}", table_name, columns, values.len())
             }
             LogicalPlan::Delete { table_name, predicate } => {
-                format!("Delete [{}] where={:?}", table_name, predicate)
+                format!("Delete [{}] where={}", table_name, predicate.as_ref().map_or("None".to_string(), |p| format!("{}", p)))
             }
             LogicalPlan::Update { table_name, assignments, predicate } => {
-                format!("Update [{}] assigns={} where={:?}", table_name, assignments.len(), predicate)
+                format!("Update [{}] assigns={} where={}", table_name, assignments.len(), predicate.as_ref().map_or("None".to_string(), |p| format!("{}", p)))
             }
         }
     }
