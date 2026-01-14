@@ -38,6 +38,12 @@ impl LRUCache {
         evicted
     }
 
+    /// remove a page from cache
+    /// WARN: if the page is dirty, it will be lost!
+    pub fn remove(&mut self, key: &u64) -> Option<Arc<RwLock<Page>>> {
+        self.map.remove(key)
+    }
+
     pub fn len(&self) -> usize {
         self.map.len()
     }

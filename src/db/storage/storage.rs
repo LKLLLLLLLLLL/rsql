@@ -1,4 +1,4 @@
-use crate::config::{PAGE_SIZE_BYTES, MAX_PAGE_CACHE_SIZE};
+use crate::config::{PAGE_SIZE_BYTES, MAX_PAGE_CACHE_BYTES};
 use super::super::errors::{RsqlError, RsqlResult};
 use super::cache::LRUCache;
 use std::sync::{RwLock, Arc, OnceLock};
@@ -75,7 +75,7 @@ impl StorageManager {
         }   // create file if not exist
     }
 
-    fn max_page_index(&self) -> Option<u64> {
+    pub fn max_page_index(&self) -> Option<u64> {
         let max_file_page_index = if self.file_page_num >= 1 {Some(self.file_page_num - 1)} else {None};
         let max_cached_page_index = self.pages.max_key();
 
@@ -143,8 +143,25 @@ impl StorageManager {
             file,
             file_path: file_path.to_string(),
             file_page_num,
-            pages: LRUCache::new(MAX_PAGE_CACHE_SIZE), // cache of pages which has the latest data
+            pages: LRUCache::new(MAX_PAGE_CACHE_BYTES / PAGE_SIZE_BYTES), // cache of pages which has the latest data
         })
+    }
+
+    /// deallocate last page
+    pub fn free(&mut self) -> RsqlResult<()> {
+        let page_idx = match self.max_page_index() {
+            Some(num) => num + 1,
+            None => return Err(RsqlError::StorageError("No pages to free".to_string())),
+        };
+        // 1. delete from cache
+        if let Some(_) = self.pages.get(&page_idx) {
+            self.pages.remove(& (page_idx - 1));
+        }
+        // 2. truncate file
+        let new_file_size = (page_idx + 1) * PAGE_SIZE_BYTES as u64;
+        self.file.set_len(new_file_size)?;
+        self.file_page_num = page_idx;
+        Ok(())
     }
 
     pub fn read_page(&mut self, page_index: u64) -> RsqlResult<Arc<RwLock<Page>>> {
@@ -219,6 +236,7 @@ impl StorageManager {
             self.file.seek(SeekFrom::Start(offset))?;
             self.file.write_all(page_data)?; // write page data to the file
         }
+        self.file.flush()?;
         self.file.sync_data()?; // ensure data is written to the disk
         self.file_page_num = file_page_num; // update pages number in the file
         Ok(())
@@ -228,6 +246,7 @@ impl StorageManager {
 // implement Drop trait so that StorageManager will be unregistered when it is dropped
 impl Drop for StorageManager {
     fn drop(&mut self) {
+        self.flush();
         Self::unregister_file_path(&self.file_path);
     }
 }
@@ -237,23 +256,23 @@ impl Drop for StorageManager {
 mod tests {
     use super::super::cache::LRUCache;
     use super::super::storage::{Page, StorageManager};
-    use crate::config::{PAGE_SIZE_BYTES, MAX_PAGE_CACHE_SIZE};
+    use crate::config::{PAGE_SIZE_BYTES, MAX_PAGE_CACHE_BYTES};
     use std::sync::{Arc, RwLock};
     use std::fs;
     use tempfile::NamedTempFile;
 
     #[test]
     fn test_lru_cache_creation() {
-        let cache = LRUCache::new(MAX_PAGE_CACHE_SIZE);
+        let cache = LRUCache::new(MAX_PAGE_CACHE_BYTES / PAGE_SIZE_BYTES);
         assert_eq!(cache.len(), 0);
         assert!(cache.is_empty());
     }
 
     #[test]
     fn test_lru_cache_insert_within_capacity() {
-        let mut cache = LRUCache::new(MAX_PAGE_CACHE_SIZE);
+        let mut cache = LRUCache::new(MAX_PAGE_CACHE_BYTES / PAGE_SIZE_BYTES);
 
-        for i in 0..MAX_PAGE_CACHE_SIZE {
+        for i in 0..MAX_PAGE_CACHE_BYTES / PAGE_SIZE_BYTES {
             let page = Arc::new(RwLock::new(Page {
                 data: vec![0u8; PAGE_SIZE_BYTES],
                 need_flush: false,
@@ -262,15 +281,15 @@ mod tests {
             assert!(evicted.is_none(), "插入第 {} 个页面不应该触发逐出", i);
         }
 
-        assert_eq!(cache.len(), MAX_PAGE_CACHE_SIZE);
+        assert_eq!(cache.len(), MAX_PAGE_CACHE_BYTES / PAGE_SIZE_BYTES);
     }
 
     #[test]
     fn test_lru_cache_eviction() {
-        let mut cache = LRUCache::new(MAX_PAGE_CACHE_SIZE);
+        let mut cache = LRUCache::new(MAX_PAGE_CACHE_BYTES / PAGE_SIZE_BYTES);
 
         // 先填满缓存
-        for i in 0..MAX_PAGE_CACHE_SIZE {
+        for i in 0..MAX_PAGE_CACHE_BYTES / PAGE_SIZE_BYTES {
             let page = Arc::new(RwLock::new(Page {
                 data: vec![0u8; PAGE_SIZE_BYTES],
                 need_flush: false,
@@ -283,19 +302,19 @@ mod tests {
             data: vec![0u8; PAGE_SIZE_BYTES],
             need_flush: false,
         }));
-        let evicted = cache.insert(MAX_PAGE_CACHE_SIZE as u64, page);
+        let evicted = cache.insert((MAX_PAGE_CACHE_BYTES / PAGE_SIZE_BYTES) as u64, page);
         
-        assert!(evicted.is_some(), "插入第 {} 个页面应该触发逐出", MAX_PAGE_CACHE_SIZE);
+        assert!(evicted.is_some(), "插入第 {} 个页面应该触发逐出", MAX_PAGE_CACHE_BYTES / PAGE_SIZE_BYTES);
         assert_eq!(evicted.unwrap().0, 0, "应该逐出最早插入的页面 0");
-        assert_eq!(cache.len(), MAX_PAGE_CACHE_SIZE, "缓存大小应该保持为容量值");
+        assert_eq!(cache.len(), MAX_PAGE_CACHE_BYTES / PAGE_SIZE_BYTES, "缓存大小应该保持为容量值");
     }
 
     #[test]
     fn test_lru_cache_access_refresh() {
-        let mut cache = LRUCache::new(MAX_PAGE_CACHE_SIZE);
+        let mut cache = LRUCache::new(MAX_PAGE_CACHE_BYTES / PAGE_SIZE_BYTES);
 
         // 插入3个页面
-        for i in 0..MAX_PAGE_CACHE_SIZE {
+        for i in 0..MAX_PAGE_CACHE_BYTES / PAGE_SIZE_BYTES {
             let page = Arc::new(RwLock::new(Page {
                 data: vec![0u8; PAGE_SIZE_BYTES],
                 need_flush: false,
@@ -311,7 +330,7 @@ mod tests {
             data: vec![0u8; PAGE_SIZE_BYTES],
             need_flush: false,
         }));
-        let evicted = cache.insert(MAX_PAGE_CACHE_SIZE as u64, page);
+        let evicted = cache.insert((MAX_PAGE_CACHE_BYTES / PAGE_SIZE_BYTES) as u64, page);
         
         assert!(evicted.is_some());
         assert_eq!(evicted.unwrap().0, 1, "应该逐出页面1而不是页面0");
@@ -414,7 +433,7 @@ mod tests {
         // 注意：我们需要创建 MAX_PAGE_CACHE_SIZE + 1 个页面来触发逐出
         let mut pages = Vec::new();
         
-        for i in 0..MAX_PAGE_CACHE_SIZE + 1 {
+        for i in 0..MAX_PAGE_CACHE_BYTES / PAGE_SIZE_BYTES + 1 {
             let (page_index, page_arc) = manager.new_page().unwrap();
             assert_eq!(page_index, i as u64, "页面索引应该递增");
             
@@ -433,7 +452,7 @@ mod tests {
         
         // 验证文件大小
         let metadata = fs::metadata(file_path).unwrap();
-        let expected_size = (MAX_PAGE_CACHE_SIZE + 1) as u64 * PAGE_SIZE_BYTES as u64;
+        let expected_size = ((MAX_PAGE_CACHE_BYTES / PAGE_SIZE_BYTES) + 1) as u64 * PAGE_SIZE_BYTES as u64;
         assert_eq!(metadata.len(), expected_size, "文件大小应该正确");
     }
 
@@ -507,8 +526,8 @@ mod tests {
     fn test_page_size_constants() {
         assert_eq!(PAGE_SIZE_BYTES, 4096, "页面大小应该为 4096 字节");
         assert!(PAGE_SIZE_BYTES.is_power_of_two(), "页面大小应该是2的幂次方");
-        assert!(MAX_PAGE_CACHE_SIZE > 0, "缓存容量应该大于0");
-        assert_eq!(MAX_PAGE_CACHE_SIZE, 100, "缓存容量应该为100");
+        assert!(MAX_PAGE_CACHE_BYTES / PAGE_SIZE_BYTES > 0, "缓存容量应该大于0");
+        assert_eq!(MAX_PAGE_CACHE_BYTES / PAGE_SIZE_BYTES, 100, "缓存容量应该为100");
     }
 
     #[test]
