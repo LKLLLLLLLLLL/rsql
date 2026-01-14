@@ -1,10 +1,11 @@
 use crate::config::{PAGE_SIZE_BYTES, MAX_PAGE_CACHE_SIZE};
 use super::super::errors::{RsqlError, RsqlResult};
-use std::sync::{RwLock, Arc};
+use super::cache::LRUCache;
+use std::sync::{RwLock, Arc, OnceLock};
 use std::fs::{self, OpenOptions, File};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
-use super::cache::LRUCache;
+use std::collections::HashSet;
 
 #[derive(Clone)]
 pub struct Page {
@@ -32,7 +33,32 @@ pub struct StorageManager {
     pages: LRUCache,  // cache of pages which has the latest data
 }
 
+static STORAGE_MANAGERS: OnceLock<RwLock<HashSet<String>>> = OnceLock::new(); // global single instance registry
+
 impl StorageManager {
+    fn get_registry() -> &'static RwLock<HashSet<String>> {
+        STORAGE_MANAGERS.get_or_init(|| RwLock::new(HashSet::new()))
+    }
+
+    fn register_file_path(file_path: &str) -> RsqlResult<()> {
+        let registry = Self::get_registry();
+        let mut paths = registry.write()
+            .map_err(|_| RsqlError::StorageError("Poisoned RwLock in registry".to_string()))?;
+        
+        // use insert method, false means the file path already exists
+        if !paths.insert(file_path.to_string()) {
+            panic!("StorageManager for file {} already exists!", file_path);
+        }
+        
+        Ok(())
+    }
+
+    fn unregister_file_path(file_path: &str) {
+        if let Ok(mut registry) = Self::get_registry().write() {
+            registry.remove(file_path);
+        }
+    }
+
     fn create_file<P: AsRef<Path>>(path: P) -> RsqlResult<()> {
         let path = path.as_ref();
         if let Some(parent) = path.parent() {
@@ -50,7 +76,7 @@ impl StorageManager {
     }
 
     fn max_page_index(&self) -> Option<u64> {
-        let max_file_page_index = if self.file_page_num - 1 >= 0 {Some(self.file_page_num - 1)} else {None};
+        let max_file_page_index = if self.file_page_num >= 1 {Some(self.file_page_num - 1)} else {None};
         let max_cached_page_index = self.pages.max_key();
 
         match (max_file_page_index, max_cached_page_index) {
@@ -96,6 +122,8 @@ impl StorageManager {
     }
 
     pub fn new(file_path: &str) -> RsqlResult<Self> {
+        Self::register_file_path(file_path)?; // register file path
+
         Self::create_file(file_path)?;
         let file = OpenOptions::new()
             .read(true)
@@ -105,6 +133,7 @@ impl StorageManager {
         let metadata= fs::metadata(file_path).map_err(|e| RsqlError::StorageError(format!("Failed to read file metadata: {}", e)))?;
         let file_size = metadata.len(); // file size in bytes
         if file_size % PAGE_SIZE_BYTES as u64 != 0 {
+            Self::unregister_file_path(file_path); // unregister file path
             return Err(RsqlError::StorageError(
                 "file size is not aligned to page size".to_string()
             ));
@@ -193,5 +222,12 @@ impl StorageManager {
         self.file.sync_data()?; // ensure data is written to the disk
         self.file_page_num = file_page_num; // update pages number in the file
         Ok(())
+    }
+}
+
+// implement Drop trait so that StorageManager will be unregistered when it is dropped
+impl Drop for StorageManager {
+    fn drop(&mut self) {
+        Self::unregister_file_path(&self.file_path);
     }
 }
