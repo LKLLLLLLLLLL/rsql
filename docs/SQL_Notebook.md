@@ -1,6 +1,23 @@
 # SQL Language Implementation Functions
 
-## 1. Data Definition Language (DDL)
+## 1. Transaction Support
+
+### Supported
+- Explicit transactions:
+- BEGIN
+- COMMIT
+- ROLLBACK
+- Implicit transactions (statements without BEGIN)
+
+### Semantics
+- A transaction starts at BEGIN and must end with either COMMIT or ROLLBACK.
+- Statements outside explicit transactions are grouped into implicit transactions.
+
+### Errors
+-	Nested transactions are not supported.
+- Explicit transactions must be closed.
+
+## 2. Data Definition Language (DDL)
 
 ### a) CREATE TABLE
 
@@ -26,6 +43,8 @@ The `CREATE TABLE` statement defines the schema of a table, including:
 - **NOT NULL:** Prevents insertion or update of `NULL` values.  
 - **UNIQUE (optional):** Ensures column values are not duplicated.
 
+Unsupported or unrecognized constraints will result in a `ParserError`.
+
 ### b) ALTER TABLE
 
 - **ADD column:** Appends a new column definition to metadata; existing records are filled with default values or `NULL`.  
@@ -34,9 +53,11 @@ The `CREATE TABLE` statement defines the schema of a table, including:
 
 ### c) DROP TABLE
 
+- Optional `IF EXISTS` is supported
+
 ---
 
-## 2. Data Manipulation Language (DML)
+## 3. Data Manipulation Language (DML)
 
 ### a) INSERT INTO
 
@@ -59,18 +80,26 @@ The `CREATE TABLE` statement defines the schema of a table, including:
 
 ### d) SELECT
 
-#### i. Selection
+#### i. Supported sources:
+- Base tables
+-	Subqueries (derived tables)
 
-- **Keyword:** `WHERE`  
+#### ii. Supported join types:
+-	INNER JOIN
+-	LEFT JOIN
+-	RIGHT JOIN
+-	FULL JOIN
+-	CROSS JOIN
 
-- **Example:**  
-  ```sql
-  SELECT * FROM users WHERE age > 18;
-  ```
+Join conditions are supported via ON expressions only.
+
+#### iii.Unsupported:
+-	NATURAL JOIN
+-	USING clause
 
 ---
 
-## 3. Operations and Expressions
+## 4. Operations and Expressions
 
 ### a) Comparison Operators
 

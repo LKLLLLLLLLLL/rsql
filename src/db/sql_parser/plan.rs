@@ -49,7 +49,6 @@ pub enum JoinType {
 #[derive(Debug, Clone, Copy)]
 pub enum ApplyType {
     Scalar,  // Scalar subquery
-    Exists,  // EXISTS subquery
     In,      // IN subquery
     NotIn,   // NOT IN subquery
 }
@@ -281,7 +280,7 @@ impl Plan {
         let mut plan = Self::build_from(&select.from)?;
 
         if let Some(selection) = &select.selection {
-            let (clean_predicate, sub_info) = Self::extract_subqueries_from_expr(selection);
+            let (clean_predicate, sub_info) = Self::extract_subqueries_from_expr(selection)?;
             plan = PlanNode::Filter {
                 predicate: clean_predicate,
                 input: Box::new(plan),
@@ -309,7 +308,7 @@ impl Plan {
         }
 
         if let Some(having) = &select.having {
-            let (clean_having, sub_info) = Self::extract_subqueries_from_expr(having);
+            let (clean_having, sub_info) = Self::extract_subqueries_from_expr(having)?;
             plan = PlanNode::Filter {
                 predicate: clean_having,
                 input: Box::new(plan),
@@ -323,7 +322,7 @@ impl Plan {
             }
         }
 
-        let (clean_exprs, sub_info) = Self::extract_subqueries_from_exprs(&Self::extract_projection(&select.projection));
+        let (clean_exprs, sub_info) = Self::extract_subqueries_from_exprs(&Self::extract_projection(&select.projection))?;
         plan = PlanNode::Projection {
             exprs: clean_exprs,
             input: Box::new(plan),
@@ -412,45 +411,66 @@ impl Plan {
             || Self::extract_aggr_exprs(&select.projection).len() > 0
     }
 
-    fn extract_subqueries_from_expr(expr: &Expr) -> (Expr, Option<(PlanNode, ApplyType)>) {
+    fn extract_subqueries_from_expr(expr: &Expr) -> RsqlResult<(Expr, Option<(PlanNode, ApplyType)>)> {
         match expr {
             Expr::Subquery(query) => {
-                match Self::build_query(query) {
-                    Ok(plan) => (expr.clone(), Some((plan, ApplyType::Scalar))),
-                    Err(_) => (expr.clone(), None),
-                }
+                let plan = Self::build_query(query)?;
+                Ok((expr.clone(), Some((plan, ApplyType::Scalar))))
             }
-            Expr::InSubquery { expr: _, subquery, negated } => {
-                match Self::build_query(subquery) {
-                    Ok(plan) => (expr.clone(), Some((plan, if *negated { ApplyType::NotIn } else { ApplyType::In }))),
-                    Err(_) => (expr.clone(), None),
-                }
+
+            Expr::InSubquery { subquery, negated, .. } => {
+                let plan = Self::build_query(subquery)?;
+                Ok((
+                    expr.clone(),
+                    Some((
+                        plan,
+                        if *negated { ApplyType::NotIn } else { ApplyType::In },
+                    )),
+                ))
             }
-            Expr::Exists { subquery, negated: _ } => {
-                match Self::build_query(subquery) {
-                    Ok(plan) => (expr.clone(), Some((plan, ApplyType::Exists))),
-                    Err(_) => (expr.clone(), None),
-                }
+
+            Expr::Exists { .. } => {
+                Err(RsqlError::ParserError(
+                    "EXISTS subquery is not supported".to_string(),
+                ))
             }
+
             Expr::BinaryOp { left, op, right } => {
-                let (left_clean, left_sub) = Self::extract_subqueries_from_expr(left);
-                let (right_clean, right_sub) = Self::extract_subqueries_from_expr(right);
-                let sub = left_sub.or(right_sub);
-                (Expr::BinaryOp { left: Box::new(left_clean), op: op.clone(), right: Box::new(right_clean) }, sub)
+                let (left_clean, left_sub) =
+                    Self::extract_subqueries_from_expr(left)?;
+                let (right_clean, right_sub) =
+                    Self::extract_subqueries_from_expr(right)?;
+
+                Ok((
+                    Expr::BinaryOp {
+                        left: Box::new(left_clean),
+                        op: op.clone(),
+                        right: Box::new(right_clean),
+                    },
+                    left_sub.or(right_sub),
+                ))
             }
-            _ => (expr.clone(), None),
+
+            // Handle other expression types recursively as needed
+            _ => Err(RsqlError::ParserError(
+                format!("Unsupported expression: {}", expr),
+            )),
         }
     }
 
-    fn extract_subqueries_from_exprs(exprs: &[Expr]) -> (Vec<Expr>, Option<(PlanNode, ApplyType)>) {
-        let mut clean_exprs = vec![];
+    fn extract_subqueries_from_exprs(exprs: &[Expr]) -> RsqlResult<(Vec<Expr>, Option<(PlanNode, ApplyType)>)> {
+        let mut clean_exprs = Vec::new();
         let mut sub = None;
+
         for expr in exprs {
-            let (clean, s) = Self::extract_subqueries_from_expr(expr);
+            let (clean, s) = Self::extract_subqueries_from_expr(expr)?;
             clean_exprs.push(clean);
-            if sub.is_none() { sub = s; }
+            if sub.is_none() {
+                sub = s;
+            }
         }
-        (clean_exprs, sub)
+
+        Ok((clean_exprs, sub))
     }
 
     // ==================== DDL / INSERT / UPDATE / DELETE ====================
