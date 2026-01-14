@@ -278,7 +278,7 @@ mod tests {
                 need_flush: false,
             }));
             let evicted = cache.insert(i as u64, page);
-            assert!(evicted.is_none(), "插入第 {} 个页面不应该触发逐出", i);
+            assert!(evicted.is_none(), "Inserting page {} should not trigger eviction", i);
         }
 
         assert_eq!(cache.len(), MAX_PAGE_CACHE_BYTES / PAGE_SIZE_BYTES);
@@ -288,7 +288,7 @@ mod tests {
     fn test_lru_cache_eviction() {
         let mut cache = LRUCache::new(MAX_PAGE_CACHE_BYTES / PAGE_SIZE_BYTES);
 
-        // 先填满缓存
+        // First fill the cache
         for i in 0..MAX_PAGE_CACHE_BYTES / PAGE_SIZE_BYTES {
             let page = Arc::new(RwLock::new(Page {
                 data: vec![0u8; PAGE_SIZE_BYTES],
@@ -297,23 +297,23 @@ mod tests {
             cache.insert(i as u64, page);
         }
 
-        // 插入第4个页面，应该触发逐出
+        // Insert page 4, should trigger eviction
         let page = Arc::new(RwLock::new(Page {
             data: vec![0u8; PAGE_SIZE_BYTES],
             need_flush: false,
         }));
         let evicted = cache.insert((MAX_PAGE_CACHE_BYTES / PAGE_SIZE_BYTES) as u64, page);
         
-        assert!(evicted.is_some(), "插入第 {} 个页面应该触发逐出", MAX_PAGE_CACHE_BYTES / PAGE_SIZE_BYTES);
-        assert_eq!(evicted.unwrap().0, 0, "应该逐出最早插入的页面 0");
-        assert_eq!(cache.len(), MAX_PAGE_CACHE_BYTES / PAGE_SIZE_BYTES, "缓存大小应该保持为容量值");
+        assert!(evicted.is_some(), "Inserting page {} should trigger eviction", MAX_PAGE_CACHE_BYTES / PAGE_SIZE_BYTES);
+        assert_eq!(evicted.unwrap().0, 0, "Should evict the earliest inserted page 0");
+        assert_eq!(cache.len(), MAX_PAGE_CACHE_BYTES / PAGE_SIZE_BYTES, "Cache size should remain at capacity");
     }
 
     #[test]
     fn test_lru_cache_access_refresh() {
         let mut cache = LRUCache::new(MAX_PAGE_CACHE_BYTES / PAGE_SIZE_BYTES);
 
-        // 插入3个页面
+        // Insert 3 pages
         for i in 0..MAX_PAGE_CACHE_BYTES / PAGE_SIZE_BYTES {
             let page = Arc::new(RwLock::new(Page {
                 data: vec![0u8; PAGE_SIZE_BYTES],
@@ -322,10 +322,10 @@ mod tests {
             cache.insert(i as u64, page);
         }
 
-        // 访问第一个页面，它应该变为最新的
+        // Access the first page, it should become the latest
         let _ = cache.get(&0);
 
-        // 插入第4个页面，现在应该逐出页面1（因为页面0被访问过）
+        // Insert page 4, now should evict page 1 (because page 0 was accessed)
         let page = Arc::new(RwLock::new(Page {
             data: vec![0u8; PAGE_SIZE_BYTES],
             need_flush: false,
@@ -333,72 +333,72 @@ mod tests {
         let evicted = cache.insert((MAX_PAGE_CACHE_BYTES / PAGE_SIZE_BYTES) as u64, page);
         
         assert!(evicted.is_some());
-        assert_eq!(evicted.unwrap().0, 1, "应该逐出页面1而不是页面0");
+        assert_eq!(evicted.unwrap().0, 1, "Should evict page 1 instead of page 0");
     }
 
     #[test]
     fn test_storage_manager_new() {
-        let temp_file = NamedTempFile::new().expect("创建临时文件失败");
+        let temp_file = NamedTempFile::new().expect("Failed to create temp file");
         let file_path = temp_file.path().to_str().unwrap();
         
-        // 删除临时文件，让 StorageManager 自己创建
+        // Delete temp file, let StorageManager create it
         fs::remove_file(file_path).ok();
         
         let result = StorageManager::new(file_path);
-        assert!(result.is_ok(), "StorageManager::new 应该成功");
+        assert!(result.is_ok(), "StorageManager::new should succeed");
         
         let manager = result.unwrap();
-        assert_eq!(manager.file_page_num, 0, "新文件应该没有页面");
+        assert_eq!(manager.file_page_num, 0, "New file should have no pages");
     }
 
     #[test]
     fn test_storage_manager_new_page() {
-        let temp_file = NamedTempFile::new().expect("创建临时文件失败");
+        let temp_file = NamedTempFile::new().expect("Failed to create temp file");
         let file_path = temp_file.path().to_str().unwrap();
         
         fs::remove_file(file_path).ok();
         
         let mut manager = StorageManager::new(file_path).unwrap();
         
-        // 创建一个新页面
+        // Create a new page
         let result = manager.new_page();
-        assert!(result.is_ok(), "创建新页面应该成功");
+        assert!(result.is_ok(), "Creating new page should succeed");
         
         let (page_index, page) = result.unwrap();
-        assert_eq!(page_index, 0, "第一个新页面索引应该是 0");
+        assert_eq!(page_index, 0, "First new page index should be 0");
         
-        // 检查页面内容
+        // Check page content
         let page_read = page.read().unwrap();
-        assert_eq!(page_read.data.len(), PAGE_SIZE_BYTES, "页面大小应该正确");
-        assert!(page_read.need_flush, "新页面应该标记为需要刷新");
+        assert_eq!(page_read.data.len(), PAGE_SIZE_BYTES, "Page size should be correct");
+        assert!(page_read.need_flush, "New page should be marked as need_flush");
         
-        // 创建第二个页面
+        // Create second page
         let result2 = manager.new_page();
-        assert!(result2.is_ok(), "创建第二个新页面应该成功");
+        assert!(result2.is_ok(), "Creating second new page should succeed");
         let (page_index2, _) = result2.unwrap();
-        assert_eq!(page_index2, 1, "第二个新页面索引应该是 1");
+        assert_eq!(page_index2, 1, "Second new page index should be 1");
     }
 
     #[test]
     fn test_storage_manager_read_write_page() {
-        let temp_file = NamedTempFile::new().expect("创建临时文件失败");
+        let temp_file = NamedTempFile::new().expect("Failed to create temp file");
         let file_path = temp_file.path().to_str().unwrap();
         
         fs::remove_file(file_path).ok();
         
         let mut manager = StorageManager::new(file_path).unwrap();
         
-        // 创建一个新页面
+        // Create a new page
         let (page_index, page_arc) = manager.new_page().unwrap();
         
-        // 修改页面数据
+        // Modify page data
         {
             let mut page = page_arc.write().unwrap();
             page.data[0] = 42;
             page.data[1] = 24;
         }
         
-        // 将页面写入存储
+        // Write page to storage
         let page_to_write = {
             let page_ref = page_arc.read().unwrap();
             Page {
@@ -408,36 +408,36 @@ mod tests {
         };
         
         let result = manager.write_page(page_to_write, page_index);
-        assert!(result.is_ok(), "写入页面应该成功");
+        assert!(result.is_ok(), "Writing page should succeed");
         
-        // 从缓存读取页面 - 修复生命周期问题
+        // Read page from cache
         let cached_page_result = manager.read_page(page_index);
-        assert!(cached_page_result.is_ok(), "从缓存读取页面应该成功");
+        assert!(cached_page_result.is_ok(), "Reading page from cache should succeed");
         
         let cached_page_arc = cached_page_result.unwrap();
         let cached_page_read = cached_page_arc.read().unwrap();
-        assert_eq!(cached_page_read.data[0], 42, "读取的数据应该正确");
-        assert_eq!(cached_page_read.data[1], 24, "读取的数据应该正确");
+        assert_eq!(cached_page_read.data[0], 42, "Read data should be correct");
+        assert_eq!(cached_page_read.data[1], 24, "Read data should be correct");
     }
 
     #[test]
     fn test_storage_manager_cache_eviction() {
-        let temp_file = NamedTempFile::new().expect("创建临时文件失败");
+        let temp_file = NamedTempFile::new().expect("Failed to create temp file");
         let file_path = temp_file.path().to_str().unwrap();
         
         fs::remove_file(file_path).ok();
         
         let mut manager = StorageManager::new(file_path).unwrap();
         
-        // 创建足够多的页面以触发缓存逐出
-        // 注意：我们需要创建 MAX_PAGE_CACHE_SIZE + 1 个页面来触发逐出
+        // Create enough pages to trigger cache eviction
+        // Note: We need to create MAX_PAGE_CACHE_SIZE + 1 pages to trigger eviction
         let mut pages = Vec::new();
         
         for i in 0..MAX_PAGE_CACHE_BYTES / PAGE_SIZE_BYTES + 1 {
             let (page_index, page_arc) = manager.new_page().unwrap();
-            assert_eq!(page_index, i as u64, "页面索引应该递增");
+            assert_eq!(page_index, i as u64, "Page index should increment");
             
-            // 修改页面数据以标记为脏页
+            // Modify page data to mark as dirty
             {
                 let mut page = page_arc.write().unwrap();
                 page.data[0] = i as u8;
@@ -446,100 +446,100 @@ mod tests {
             pages.push((page_index, page_arc));
         }
         
-        // 强制刷新，确保所有脏页都写入文件
+        // Force flush to ensure all dirty pages are written to file
         let flush_result = manager.flush();
-        assert!(flush_result.is_ok(), "刷新应该成功");
+        assert!(flush_result.is_ok(), "Flush should succeed");
         
-        // 验证文件大小
+        // Verify file size
         let metadata = fs::metadata(file_path).unwrap();
         let expected_size = ((MAX_PAGE_CACHE_BYTES / PAGE_SIZE_BYTES) + 1) as u64 * PAGE_SIZE_BYTES as u64;
-        assert_eq!(metadata.len(), expected_size, "文件大小应该正确");
+        assert_eq!(metadata.len(), expected_size, "File size should be correct");
     }
 
     #[test]
     fn test_storage_manager_flush() {
-        let temp_file = NamedTempFile::new().expect("创建临时文件失败");
+        let temp_file = NamedTempFile::new().expect("Failed to create temp file");
         let file_path = temp_file.path().to_str().unwrap();
         
         fs::remove_file(file_path).ok();
         
         let mut manager = StorageManager::new(file_path).unwrap();
         
-        // 创建几个页面并修改它们
+        // Create several pages and modify them
         for i in 0..5 {
             let (page_index, page_arc) = manager.new_page().unwrap();
             
-            // 修改页面数据
+            // Modify page data
             {
                 let mut page = page_arc.write().unwrap();
                 page.data[0..4].copy_from_slice(&(i as u32).to_le_bytes());
             }
         }
         
-        // 刷新到磁盘
+        // Flush to disk
         let flush_result = manager.flush();
-        assert!(flush_result.is_ok(), "刷新应该成功");
+        assert!(flush_result.is_ok(), "Flush should succeed");
         
-        // 验证文件大小
+        // Verify file size
         let metadata = fs::metadata(file_path).unwrap();
         let expected_size = 5 * PAGE_SIZE_BYTES as u64;
-        assert_eq!(metadata.len(), expected_size, "文件大小应该正确");
+        assert_eq!(metadata.len(), expected_size, "File size should be correct");
         
-        // 重新打开文件验证内容
+        // Reopen file to verify content
         let file_content = fs::read(file_path).unwrap();
         
-        // 检查每个页面的第一个字
+        // Check first word of each page
         for i in 0..5 {
             let offset = i * PAGE_SIZE_BYTES;
             let page_data = &file_content[offset..offset + 4];
             let value = u32::from_le_bytes([page_data[0], page_data[1], page_data[2], page_data[3]]);
-            assert_eq!(value, i as u32, "页面 {} 的数据应该正确", i);
+            assert_eq!(value, i as u32, "Page {} data should be correct", i);
         }
     }
 
     #[test]
     fn test_storage_manager_drop_flush() {
-        let temp_file = NamedTempFile::new().expect("创建临时文件失败");
+        let temp_file = NamedTempFile::new().expect("Failed to create temp file");
         let file_path = temp_file.path().to_str().unwrap();
         
         fs::remove_file(file_path).ok();
         
-        // 在单独的作用域中创建 StorageManager
+        // Create StorageManager in a separate scope
         {
             let mut manager = StorageManager::new(file_path).unwrap();
             
-            // 创建并修改一个页面但不显式刷新
+            // Create and modify a page but don't explicitly flush
             let (page_index, page_arc) = manager.new_page().unwrap();
             
             {
                 let mut page = page_arc.write().unwrap();
                 page.data[0] = 255;
             }
-        } // manager 在这里被 drop
+        } // manager is dropped here
         
-        // 验证文件是否被创建且包含数据
+        // Verify file is created and contains data
         let metadata = fs::metadata(file_path);
-        assert!(metadata.is_ok(), "文件应该存在");
+        assert!(metadata.is_ok(), "File should exist");
     }
 
     #[test]
     fn test_page_size_constants() {
-        assert_eq!(PAGE_SIZE_BYTES, 4096, "页面大小应该为 4096 字节");
-        assert!(PAGE_SIZE_BYTES.is_power_of_two(), "页面大小应该是2的幂次方");
-        assert!(MAX_PAGE_CACHE_BYTES / PAGE_SIZE_BYTES > 0, "缓存容量应该大于0");
-        assert_eq!(MAX_PAGE_CACHE_BYTES / PAGE_SIZE_BYTES, 100, "缓存容量应该为100");
+        assert_eq!(PAGE_SIZE_BYTES, 4096, "Page size should be 4096 bytes");
+        assert!(PAGE_SIZE_BYTES.is_power_of_two(), "Page size should be a power of two");
+        assert!(MAX_PAGE_CACHE_BYTES / PAGE_SIZE_BYTES > 0, "Cache capacity should be greater than 0");
+        assert_eq!(MAX_PAGE_CACHE_BYTES / PAGE_SIZE_BYTES, 25600, "Cache capacity should be 25600");
     }
 
     #[test]
     fn test_read_page_from_disk() {
-        let temp_file = NamedTempFile::new().expect("创建临时文件失败");
+        let temp_file = NamedTempFile::new().expect("Failed to create temp file");
         let file_path = temp_file.path().to_str().unwrap();
         
         fs::remove_file(file_path).ok();
         
         let mut manager = StorageManager::new(file_path).unwrap();
         
-        // 创建一个页面并刷新到磁盘
+        // Create a page and flush to disk
         let (page_index, page_arc) = manager.new_page().unwrap();
         
         {
@@ -548,26 +548,26 @@ mod tests {
             page.data[1] = 200;
         }
         
-        // 刷新到磁盘
+        // Flush to disk
         manager.flush().unwrap();
         
-        // 清除缓存，模拟从磁盘重新读取
-        // 注意：在真实的 StorageManager 中，我们没有直接的方法来清除缓存
-        // 但我们可以通过创建新的 StorageManager 实例来模拟
+        // Clear cache and simulate reading from disk again
+        // Note: In a real StorageManager, we don't have a direct method to clear the cache
+        // But we can simulate it by creating a new StorageManager instance
         drop(manager);
         
-        // 重新打开 StorageManager
+        // Reopen StorageManager
         let mut manager2 = StorageManager::new(file_path).unwrap();
         
-        // 从磁盘读取页面
+        // Read page from disk
         let read_result = manager2.read_page(page_index);
-        assert!(read_result.is_ok(), "从磁盘读取页面应该成功");
+        assert!(read_result.is_ok(), "Reading page from disk should succeed");
         
         let read_page_arc = read_result.unwrap();
         let read_page = read_page_arc.read().unwrap();
         
-        assert_eq!(read_page.data[0], 100, "从磁盘读取的数据应该正确");
-        assert_eq!(read_page.data[1], 200, "从磁盘读取的数据应该正确");
-        assert!(!read_page.need_flush, "从磁盘读取的页面不应该标记为需要刷新");
+        assert_eq!(read_page.data[0], 100, "Data read from disk should be correct");
+        assert_eq!(read_page.data[1], 200, "Data read from disk should be correct");
+        assert!(!read_page.need_flush, "Page read from disk should not be marked as need_flush");
     }
 }
