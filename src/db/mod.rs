@@ -1,4 +1,6 @@
-pub mod server;mod wal;
+pub mod server;
+pub mod executor;
+mod wal;
 mod data_item;
 pub mod errors;
 pub mod storage;
