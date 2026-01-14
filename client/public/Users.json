@@ -3,7 +3,6 @@
   "type": ["CHAR", "CHAR", "CHAR", "VARCHAR", "CHAR"],
   "ableToBeNULL": [false, false, false, true, true],
   "primaryKey": [true, false, false, false, false],
-  "defaultValue": [26000000, null, "26000000@ecust.com", null, null],
   "rows": [
     ["23020001", "水杯", "23020001@test.com", "组员", "活跃"],
     ["23020002", "泡腾片", "23020002@test.com", "组员", "活跃"],

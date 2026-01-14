@@ -138,6 +138,56 @@ onMounted(() => {
     const tableBody = tableElement ? tableElement.querySelector('tbody') : null
     const tablesListEl = document.querySelector('.tables-list')
 
+    function checkTypeMatches(type, data) {
+        const t = String(type || '').trim().toUpperCase();
+        const makeResult = (valid, normalized = data, message = '') => ({ valid, normalized, message });
+
+        switch (t) {
+            case 'INT': {
+                const s = typeof data === 'number' ? String(data) : String(data ?? '').trim();
+                if (!/^[+-]?\d+$/.test(s)) return makeResult(false, null, 'INT expects an integer without decimals');
+                const n = Number(s);
+                if (!Number.isInteger(n)) return makeResult(false, null, 'INT expects an integer');
+                return makeResult(true, n);
+            }
+
+            case 'CHAR': {
+                const s = String(data ?? '');
+                if (s.length > 32) return makeResult(false, null, 'CHAR length must be <= 32');
+                return makeResult(true, s);
+            }
+
+            case 'VARCHAR': {
+                // Very permissive: accept anything and stringify
+                return makeResult(true, String(data ?? ''));
+            }
+
+            case 'FLOAT': {
+                const s = typeof data === 'number' ? String(data) : String(data ?? '').trim();
+                if (!/^[+-]?\d+(\.\d+)?$/.test(s)) return makeResult(false, null, 'FLOAT expects a numeric value');
+                const n = Number(s);
+                if (!Number.isFinite(n)) return makeResult(false, null, 'FLOAT expects a finite number');
+                // If no decimal part was provided, standardize to two decimals
+                const normalized = s.includes('.') ? n : Number(n.toFixed(2));
+                return makeResult(true, normalized);
+            }
+
+            case 'BOOLEAN': {
+                if (data === true || data === false) return makeResult(true, data);
+                const s = String(data ?? '').trim().toLowerCase();
+                if (s === 'true' || s === '1' || s === 'True') return makeResult(true, true);
+                if (s === 'false' || s === '0' || s === 'False') return makeResult(true, false);
+                return makeResult(false, null, 'BOOLEAN expects true or false');
+            }
+
+            case 'NULL':
+                return makeResult(true, null);
+
+            default:
+                return makeResult(false, null, `Unknown type: ${t}`);
+        }
+    }
+
     // Default table cache from public/DEFAULT_TABLE.json
     let defaultTableCache = null
     async function getDefaultTable() {
@@ -161,7 +211,7 @@ onMounted(() => {
     // Store current table headers (normalized objects) for insert operation
     let currentTableHeaders = []
 
-    // Normalize headers into objects: { name, type, ableToBeNULL, primaryKey, defaultValue }
+    // Normalize headers into objects: { name, type, ableToBeNULL, primaryKey }
     function normalizeHeaders(headers) {
         if (!Array.isArray(headers)) return []
         return headers.map((h) => {
@@ -170,8 +220,7 @@ onMounted(() => {
             name: h,
             type: '',
             ableToBeNULL: false,
-            primaryKey: false,
-            defaultValue: ''
+            primaryKey: false
             }
         }
         const able = ('ableToBeNULL' in h) ? !!h.ableToBeNULL : (('AbleToBeNULL' in h) ? !!h.AbleToBeNULL : false)
@@ -179,8 +228,7 @@ onMounted(() => {
             name: h.name || '',
             type: h.type || '',
             ableToBeNULL: able,
-            primaryKey: !!h.primaryKey,
-            defaultValue: (h.defaultValue ?? '')
+            primaryKey: !!h.primaryKey
         }
         })
     }
@@ -246,16 +294,14 @@ onMounted(() => {
                 const types = Array.isArray(json.type) ? json.type : null
                 const nullables = Array.isArray(json.ableToBeNULL) ? json.ableToBeNULL : (Array.isArray(json.AbleToBeNULL) ? json.AbleToBeNULL : null)
                 const pks = Array.isArray(json.primaryKey) ? json.primaryKey : null
-                const defaults = Array.isArray(json.defaultValue) ? json.defaultValue : null
 
-                if (Array.isArray(rawHeaders) && rawHeaders.length > 0 && types && nullables && pks && defaults &&
-                    rawHeaders.length === types.length && rawHeaders.length === nullables.length && rawHeaders.length === pks.length && rawHeaders.length === defaults.length) {
+                if (Array.isArray(rawHeaders) && rawHeaders.length > 0 && types && nullables && pks &&
+                    rawHeaders.length === types.length && rawHeaders.length === nullables.length && rawHeaders.length === pks.length) {
                     normalized = rawHeaders.map((name, i) => ({
                         name: name,
                         type: String(types[i] ?? ''),
                         ableToBeNULL: !!nullables[i],
-                        primaryKey: !!pks[i],
-                        defaultValue: defaults[i] == null ? '' : String(defaults[i])
+                        primaryKey: !!pks[i]
                     }))
                 } else {
                     normalized = normalizeHeaders(rawHeaders)
@@ -351,7 +397,6 @@ onMounted(() => {
             <input type="checkbox" class="primary-key">
             <span class="checkbox-label">主键</span>
         </label>
-        <input type="text" class="default-value" placeholder="  默认值（可选）" aria-label="默认值">
         <button type="button" class="remove-column">删除</button>
         `
 
@@ -419,6 +464,13 @@ onMounted(() => {
             }
         }
 
+        const columns = rows.map((row) => ({
+            name: ((row.querySelector('.column-name') || {}).value || '').trim(),
+            type: (row.querySelector('.column-type') || {}).value || 'TEXT',
+            allowNull: !!(row.querySelector('.allow-null') || {}).checked,
+            primaryKey: !!(row.querySelector('.primary-key') || {}).checked
+        }))
+
         // Check if at least one primary key is selected
         const hasPrimaryKey = columns.some(col => col.primaryKey)
         if (!hasPrimaryKey) {
@@ -433,14 +485,6 @@ onMounted(() => {
             return
         }
 
-        const columns = rows.map((row) => ({
-            name: ((row.querySelector('.column-name') || {}).value || '').trim(),
-            type: (row.querySelector('.column-type') || {}).value || 'TEXT',
-            allowNull: !!(row.querySelector('.allow-null') || {}).checked,
-            primaryKey: !!(row.querySelector('.primary-key') || {}).checked,
-            defaultValue: ((row.querySelector('.default-value') || {}).value || '').trim(),
-        }))
-
         console.log('Create table payload', { tableName, columns })
         alert('提交创建表数据：\n' + JSON.stringify({ tableName, columns }, null, 2))
 
@@ -449,7 +493,6 @@ onMounted(() => {
             sql += `  ${col.name} ${col.type}`
             if (!col.allowNull) sql += ' NOT NULL'
             if (col.primaryKey) sql += ' PRIMARY KEY'
-            if (col.defaultValue) sql += ` DEFAULT '${col.defaultValue}'`
             if (index < columns.length - 1) sql += ',\n'
         })
         sql += `\n);`
@@ -531,13 +574,11 @@ onMounted(() => {
             const name = (typeof h === 'string') ? h : (h && h.name ? h.name : '')
             const isPK = (typeof h === 'object') ? !!h.primaryKey : false
             const canNull = (typeof h === 'object') ? !!h.ableToBeNULL : false
-            const defVal = (typeof h === 'object' && h.defaultValue != null) ? String(h.defaultValue) : ''
 
             let labelText = name
             if (isPK) labelText += '*'
             if (canNull) labelText += '(ableToBeNULL)'
-
-            const placeholderText = defVal.trim() !== '' ? `默认值：${defVal}` : '无默认值'
+            const placeholderText = canNull ? '可为空' : '必填'
 
             return `
                 <div class="insert-field">
@@ -625,13 +666,13 @@ onMounted(() => {
                 return
             }
 
-            // Validate required fields: ableToBeNULL === false && defaultValue is empty
+            // Validate required fields: ableToBeNULL === false
             const validationErrors = []
             dataRows.forEach((dataRow, idx) => {
                 const missingCols = []
                 currentTableHeaders.forEach(h => {
                     const name = h.name
-                    const required = !h.ableToBeNULL && (!h.defaultValue || String(h.defaultValue).trim() === '')
+                    const required = !h.ableToBeNULL
                     if (!required) return
                     const input = dataRow.querySelector(`.insert-value[data-column="${name}"]`)
                     const value = input ? String(input.value).trim() : ''
@@ -650,7 +691,7 @@ onMounted(() => {
                 return
             }
 
-            // 主键不能为空（不论有没有默认值）：逐行检查所有 primaryKey 列
+            // 主键不能为空：逐行检查所有 primaryKey 列
             const pkErrors = []
             dataRows.forEach((dataRow, idx) => {
                 const missingPK = []
