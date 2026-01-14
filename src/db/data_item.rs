@@ -1,5 +1,8 @@
-use super::errors::{RsqlError, RsqlResult};
 use std::mem::size_of;
+use std::cmp::Ordering;
+use std::mem;
+
+use super::errors::{RsqlError, RsqlResult};
 
 /// Data item representation in one block in table.
 #[derive(Debug, PartialEq, Clone)]
@@ -169,6 +172,51 @@ impl DataItem {
     }
 }
 
+impl PartialOrd for DataItem {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        if mem::discriminant(self) != mem::discriminant(other) {
+            return None;
+        }
+        match self {
+            DataItem::Inteager(v1) => {
+                if let DataItem::Inteager(v2) = other {
+                    Some(v1.cmp(v2))
+                } else {
+                    None
+                }
+            },
+            DataItem::Float(v1) => {
+                if let DataItem::Float(v2) = other {
+                    v1.partial_cmp(v2)
+                } else {
+                    None
+                }
+            },
+            DataItem::Chars {value: v1, ..} => {
+                if let DataItem::Chars {value: v2, ..} = other {
+                    Some(v1.cmp(v2))
+                } else {
+                    None
+                }
+            },
+            DataItem::VarChar {value: v1, ..} => {
+                if let DataItem::VarChar {value: v2, ..} = other {
+                    Some(v1.cmp(v2))
+                } else {
+                    None
+                }
+            },
+            DataItem::Bool(b1) => {
+                if let DataItem::Bool(b2) = other {
+                    Some(b1.cmp(b2))
+                } else {
+                    None
+                }
+            },
+            DataItem::Null => Some(Ordering::Equal),
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {

@@ -239,3 +239,41 @@ impl WALEntry {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_walentry_roundtrip() {
+        let e1 = WALEntry::OpenTnx { tnx_id: 1 };
+        let e2 = WALEntry::CommitTnx { tnx_id: 1 };
+        let mut buf = Vec::new();
+        buf.extend(e1.to_bytes());
+        buf.extend(e2.to_bytes());
+
+        let mut iter = WALEntry::from_bytes(&buf);
+        let a = iter.next().expect("first entry");
+        match a {
+            WALEntry::OpenTnx { tnx_id } => assert_eq!(tnx_id, 1),
+            _ => ::core::panic!("unexpected entry type"),
+        }
+        let b = iter.next().expect("second entry");
+        match b {
+            WALEntry::CommitTnx { tnx_id } => assert_eq!(tnx_id, 1),
+            _ => ::core::panic!("unexpected entry type"),
+        }
+        assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn test_walentry_crc_mismatch() {
+        let e = WALEntry::OpenTnx { tnx_id: 7 };
+        let mut buf = e.to_bytes();
+        // flip a byte inside crc
+        let len = buf.len();
+        buf[len - 1] ^= 0xFF;
+        let mut iter = WALEntry::from_bytes(&buf);
+        assert!(iter.next().is_none(), "iterator should stop on crc mismatch");
+    }
+}
