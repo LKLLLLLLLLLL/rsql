@@ -120,7 +120,7 @@ pub enum PlanNode {
         table_name: String,
         columns: Option<Vec<String>>,
         values: Vec<Vec<Expr>>,
-        input: Option<Box<PlanNode>>, // 用于 INSERT ... SELECT 子查询
+        input: Option<Box<PlanNode>>, // for INSERT ... SELECT subquery
     },
     /// Deletes rows produced by the input plan.
     Delete {
