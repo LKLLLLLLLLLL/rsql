@@ -110,7 +110,24 @@
                     <button type="button" class="submit-insert-btn" id="submit-insert-btn">提交插入数据</button>
                 </div>
             </div>
-            <div class="delete-operation"></div>
+            <div class="delete-operation">
+                <div class="table-container delete-table-container">
+                    <div class="table-header">
+                        <h3 id="delete-table-title">Users Table Data</h3>
+                        <div class="table-info">
+                            <span>Total <span id="delete-records-count">0</span> records</span>
+                            <span>Updated on <span id="delete-update-time">1970-01-01 00:00</span></span>
+                        </div>
+                    </div>
+
+                    <div class="table-scroll-wrapper">
+                        <table>
+                            <thead class="delete-table-head"></thead>
+                            <tbody class="delete-table-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
             <div class="query-operation"></div>
             <div class="export-operation"></div>
         </div>
@@ -129,14 +146,20 @@ onMounted(() => {
     const tableContainer = document.querySelector('.table-container')
     const createSection = document.querySelector('.create-operation')
     const insertSection = document.querySelector('.insert-operation')
+    const deleteSection = document.querySelector('.delete-operation')
     const topBar = document.querySelector('.top-bar')
-    const sections = { table: tableContainer, create: createSection, insert: insertSection }
+    const sections = { table: tableContainer, create: createSection, insert: insertSection, delete: deleteSection }
 
     // Table elements and fallback data
     const tableElement = tableContainer ? tableContainer.querySelector('table') : null
     const tableHead = tableElement ? tableElement.querySelector('thead') : null
     const tableBody = tableElement ? tableElement.querySelector('tbody') : null
     const tablesListEl = document.querySelector('.tables-list')
+    const deleteTableElement = deleteSection ? deleteSection.querySelector('table') : null
+    const deleteTableHead = deleteTableElement ? deleteTableElement.querySelector('.delete-table-head') : null
+    const deleteTableBody = deleteTableElement ? deleteTableElement.querySelector('.delete-table-body') : null
+    const deleteRecordsCount = document.getElementById('delete-records-count')
+    const deleteTableTitle = document.getElementById('delete-table-title')
 
     function checkTypeMatches(type, data) {
         const t = String(type || '').trim().toUpperCase();
@@ -210,6 +233,8 @@ onMounted(() => {
 
     // Store current table headers (normalized objects) for insert operation
     let currentTableHeaders = []
+    let currentTableRows = []
+    let currentDisplayHeaders = []
 
     // Normalize headers into objects: { name, type, ableToBeNULL, primaryKey, unique }
     function normalizeHeaders(headers) {
@@ -270,6 +295,134 @@ onMounted(() => {
         if (countEl) countEl.textContent = Array.isArray(rows) ? rows.length : 0
     }
 
+    function renderDeleteTable(headers, rows) {
+        if (!deleteTableHead || !deleteTableBody) return
+
+        deleteTableHead.innerHTML = ''
+        deleteTableBody.innerHTML = ''
+
+        const headRow = document.createElement('tr')
+        const actionTh = document.createElement('th')
+        actionTh.textContent = 'Delete'
+        headRow.appendChild(actionTh)
+        const indexTh = document.createElement('th')
+        indexTh.textContent = '#'
+        headRow.appendChild(indexTh)
+        headers.forEach((text) => {
+            const th = document.createElement('th')
+            th.textContent = text
+            headRow.appendChild(th)
+        })
+        deleteTableHead.appendChild(headRow)
+
+        rows.forEach((row, idx) => {
+            const tr = document.createElement('tr')
+
+            const actionTd = document.createElement('td')
+            actionTd.className = 'delete-action-cell'
+            const actions = document.createElement('div')
+            actions.className = 'delete-actions'
+            const btn = document.createElement('button')
+            btn.className = 'delete-row-btn'
+            btn.textContent = 'Delete'
+            actions.appendChild(btn)
+            actionTd.appendChild(actions)
+            tr.appendChild(actionTd)
+
+            // Toggle to Cancel/Confirm on click
+            btn.addEventListener('click', () => {
+                actions.innerHTML = ''
+                const cancelBtn = document.createElement('button')
+                cancelBtn.className = 'cancel-delete-btn'
+                cancelBtn.textContent = 'Cancel'
+                const confirmBtn = document.createElement('button')
+                confirmBtn.className = 'confirm-delete-btn'
+                confirmBtn.textContent = 'Confirm'
+                actions.appendChild(cancelBtn)
+                actions.appendChild(confirmBtn)
+
+                cancelBtn.addEventListener('click', () => {
+                    actions.innerHTML = ''
+                    actions.appendChild(btn)
+                })
+
+                confirmBtn.addEventListener('click', () => {
+                    const currentTableEl = document.getElementById('current-table')
+                    const tableName = currentTableEl ? currentTableEl.textContent : ''
+                    if (!tableName) {
+                        alert('未获取到表名，无法生成删除语句')
+                        return
+                    }
+
+                    const pkHeaders = currentTableHeaders.filter(h => h.primaryKey)
+                    if (pkHeaders.length === 0) {
+                        alert('当前表未设置主键，无法生成删除语句')
+                        return
+                    }
+
+                    const rowData = Array.isArray(currentTableRows) ? currentTableRows[idx] : null
+                    if (!rowData) {
+                        alert('未找到该行数据，无法生成删除语句')
+                        return
+                    }
+
+                    const whereClauses = []
+                    for (const h of pkHeaders) {
+                        const colIndex = currentDisplayHeaders.findIndex(n => n === h.name)
+                        if (colIndex < 0) continue
+                        const rawValue = rowData[colIndex]
+                        if (rawValue === undefined || rawValue === null || String(rawValue).trim() === '') {
+                            alert(`主键列 "${h.name}" 的值为空，无法生成删除语句`)
+                            return
+                        }
+                        const t = String(h.type || '').trim().toUpperCase()
+                        let formatted
+                        if (t === 'INT' || t === 'INTEGER') {
+                            formatted = String(rawValue)
+                        } else if (t === 'FLOAT') {
+                            const s = String(rawValue)
+                            const n = parseFloat(s)
+                            formatted = s.includes('.') ? s : n.toFixed(2)
+                        } else {
+                            formatted = `'${String(rawValue).replace(/'/g, "''")}'`
+                        }
+                        whereClauses.push(`${h.name} = ${formatted}`)
+                    }
+
+                    if (whereClauses.length === 0) {
+                        alert('无法定位主键列，未生成删除语句')
+                        return
+                    }
+
+                    const sql = `DELETE FROM ${tableName} WHERE ${whereClauses.join(' AND ')};`
+                    alert('生成的 SQL 语句：\n' + sql)
+                    console.log('Delete SQL:', sql)
+
+                    // 重新渲染
+                    renderTable(currentDisplayHeaders, currentTableRows)
+                    renderDeleteTable(currentDisplayHeaders, currentTableRows)
+
+                    // 恢复为单个删除按钮
+                    actions.innerHTML = ''
+                    actions.appendChild(btn)
+                })
+            })
+
+            const indexTd = document.createElement('td')
+            indexTd.textContent = String(idx + 1)
+            tr.appendChild(indexTd)
+
+            row.forEach((cell) => {
+                const td = document.createElement('td')
+                td.textContent = cell
+                tr.appendChild(td)
+            })
+            deleteTableBody.appendChild(tr)
+        })
+
+        if (deleteRecordsCount) deleteRecordsCount.textContent = Array.isArray(rows) ? rows.length : 0
+    }
+
     async function loadTableData(tableName) { // 导入表数据
         const candidates = []
         if (tableName) {
@@ -313,7 +466,10 @@ onMounted(() => {
                 }
                 currentTableHeaders = normalized
                 const displayHeaders = normalized.map(h => h.name)
-                renderTable(displayHeaders, rows)
+                currentDisplayHeaders = displayHeaders
+                currentTableRows = Array.isArray(rows) ? rows : []
+                renderTable(displayHeaders, currentTableRows)
+                renderDeleteTable(displayHeaders, currentTableRows)
                 return
             } catch (e) {
                 // try next candidate
@@ -325,7 +481,10 @@ onMounted(() => {
         const normalized = normalizeHeaders(fallback.headers)
         currentTableHeaders = normalized
         const displayHeaders = normalized.map(h => h.name)
-        renderTable(displayHeaders, fallback.rows)
+        currentDisplayHeaders = displayHeaders
+        currentTableRows = Array.isArray(fallback.rows) ? fallback.rows : []
+        renderTable(displayHeaders, currentTableRows)
+        renderDeleteTable(displayHeaders, currentTableRows)
     }
 
     async function loadTablesList() { // 加载左侧导航栏的表列表
@@ -343,30 +502,38 @@ onMounted(() => {
         } catch (e) {
         console.warn('Load TABLES.json failed, using default list', e)
         }
-        renderTablesList(names)
+        // Sort by dictionary order ascending
+        const sorted = Array.isArray(names)
+            ? names.slice().map(n => String(n)).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
+            : []
+        renderTablesList(sorted)
     }
 
-    function renderTablesList(names) { // 动态渲染左侧导航栏的表列表
+    function renderTablesList(names) { // 动态渲染左侧导航栏的表列表（按字典序升序）
         if (!tablesListEl) return
         const header = '<h3>Table List</h3>'
-        const items = names.map((n) => `<div class="table-item"><span>${n}</span></div>`).join('')
+        const sorted = Array.isArray(names)
+            ? names.slice().map(n => String(n)).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
+            : []
+        const items = sorted.map((n) => `<div class="table-item"><span>${n}</span></div>`).join('')
         tablesListEl.innerHTML = header + items
         const countEl = document.getElementById('tables-counts')
-        if (countEl) countEl.textContent = String(names.length)
+        if (countEl) countEl.textContent = String(sorted.length)
         attachTableItemClickHandlers()
     }
 
     function showSection(key) { // 切换右侧内容区显示的部分
         Object.values(sections).forEach((el) => {
-        if (!el) return
+            if (!el) return
             el.style.display = 'none'
         })
         if (key && sections[key]) {
-            sections[key].style.display = key === 'table' ? 'flex' : 'block'
+            const shouldFlex = key === 'table' || key === 'delete'
+            sections[key].style.display = shouldFlex ? 'flex' : 'block'
         }
 
         if (topBar) {
-            topBar.style.display = key === 'table' ? 'flex' : 'none'
+            topBar.style.display = (key === 'table' || key === 'delete') ? 'flex' : 'none'
         }
     }
 
@@ -552,7 +719,15 @@ onMounted(() => {
             initInsertOperation(tableName)
             showSection('insert')
         } else if (action === 'Delete') {
-            alert(`Performing ${action} operation\n(In a real application, this would trigger the corresponding operation interface)`)
+            if (currentTableHeaders.length === 0) {
+                alert('请先选择一个表格查看数据，然后再执行删除操作')
+                return
+            }
+            if (deleteTableTitle) {
+                deleteTableTitle.textContent = `${tableName} Table Data`
+            }
+            renderDeleteTable(currentDisplayHeaders, currentTableRows)
+            showSection('delete')
 
         } else if (action === 'Update') {
 
@@ -1160,6 +1335,80 @@ body {
 .query-operation,
 .export-operation {
     display: none;
+}
+
+.delete-operation {
+    width: 100%;
+    flex: 1;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+.delete-row-btn {
+    padding: 6px 12px;
+    background-color: #e74c3c;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.85rem;
+    width: 80px;
+    text-align: center;
+}
+
+.delete-row-btn:hover {
+    background-color: #c0392b;
+}
+
+.delete-table-container th:first-child,
+.delete-table-container td:first-child {
+    width: 180px;
+    min-width: 180px;
+    max-width: 180px;
+    text-align: center;
+    vertical-align: middle;
+}
+
+.delete-actions {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+}
+
+.cancel-delete-btn {
+    padding: 6px 12px;
+    background-color: #95a5a6;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.85rem;
+    width: 80px;
+}
+
+.cancel-delete-btn:hover {
+    background-color: #7f8c8d;
+}
+
+.confirm-delete-btn {
+    padding: 6px 12px;
+    background-color: #e74c3c;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.85rem;
+    width: 80px;
+}
+
+.confirm-delete-btn:hover {
+    background-color: #c0392b;
 }
 
 table {
