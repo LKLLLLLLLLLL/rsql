@@ -5,17 +5,22 @@ use std::mem;
 use super::errors::{RsqlError, RsqlResult};
 
 /// Data item representation in one block in table.
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq,Clone)]
 pub enum DataItem {
     Inteager(i64),
     Float(f64),
     Chars {len: u64, value: String}, // Fixed length, the len is in bytes
     VarChar {head: VarCharHead, value: String}, // Variable length
     Bool(bool),
-    Null,
+    // Nulls for fixed width support
+    NullInt,
+    NullFloat,
+    NullChars {len: u64},
+    NullVarChar,
+    NullBool,
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, PartialOrd, Clone)]
 pub struct VarCharHead {
     max_len: u64,
     len: u64,
@@ -27,12 +32,11 @@ impl DataItem {
     /// If the data item organized in pointer, return the size of its head.
     pub fn size(&self) -> usize {
         match self {
-            DataItem::Inteager(_) => 1 + 8,
-            DataItem::Float(_) => 1 + 8,
-            DataItem::Chars {len, ..} => 1 + *len as usize,
-            DataItem::VarChar {..}=> 1 + size_of::<VarCharHead>(),
-            DataItem::Bool(_) => 1 + 1,
-            DataItem::Null => 1 + 0,
+            DataItem::Inteager(_) | DataItem::NullInt => 1 + 8,
+            DataItem::Float(_) | DataItem::NullFloat => 1 + 8,
+            DataItem::Chars {len, ..} | DataItem::NullChars {len} => 1 + *len as usize,
+            DataItem::VarChar {..} | DataItem::NullVarChar => 1 + size_of::<VarCharHead>(),
+            DataItem::Bool(_) | DataItem::NullBool => 1 + 1,
         }
     }
     fn tag_to_byte(&self) -> u8 {
@@ -42,7 +46,11 @@ impl DataItem {
             DataItem::Chars {..} => 3,
             DataItem::VarChar {..}=> 4,
             DataItem::Bool(_) => 5,
-            DataItem::Null => 0,
+            DataItem::NullInt => 6,
+            DataItem::NullFloat => 7,
+            DataItem::NullChars {..} => 8,
+            DataItem::NullVarChar => 9,
+            DataItem::NullBool => 10,
         }
     }
     pub fn to_bytes(&self) -> RsqlResult<(Vec<u8>, Option<Vec<u8>>)> {
@@ -89,8 +97,32 @@ impl DataItem {
                 bytes.push(if *v {1} else {0});
                 Ok((bytes, None))
             },
-            DataItem::Null => {
-                Ok((vec![self.tag_to_byte()], None))
+            // Nulls
+            DataItem::NullInt => {
+                let mut bytes = vec![self.tag_to_byte()];
+                bytes.extend_from_slice(&[0u8; 8]);
+                Ok((bytes, None))
+            },
+            DataItem::NullFloat => {
+                let mut bytes = vec![self.tag_to_byte()];
+                bytes.extend_from_slice(&[0u8; 8]);
+                Ok((bytes, None))
+            },
+            DataItem::NullChars {len} => {
+                let mut bytes = vec![self.tag_to_byte()];
+                bytes.extend_from_slice(&len.to_le_bytes());
+                bytes.extend(vec![0u8; *len as usize]);
+                Ok((bytes, None))
+            },
+            DataItem::NullVarChar => {
+                let mut bytes = vec![self.tag_to_byte()];
+                bytes.extend_from_slice(&[0u8; 24]); // VarCharHead is 24 bytes (8+8+8)
+                Ok((bytes, None))
+            },
+            DataItem::NullBool => {
+                let mut bytes = vec![self.tag_to_byte()];
+                bytes.push(0);
+                Ok((bytes, None))
             },
         }
     }
@@ -100,9 +132,8 @@ impl DataItem {
         }
         let tag_byte = head_bytes[0];
         match tag_byte {
-            0 => Ok(DataItem::Null),
             1 => {
-                if head_bytes.len() != 9 {
+                if head_bytes.len() < 9 {
                     return Err(RsqlError::Unknown("Invalid bytes length for Inteager".to_string() + &head_bytes.len().to_string()));
                 }
                 let mut int_bytes = [0u8; 8];
@@ -110,7 +141,7 @@ impl DataItem {
                 Ok(DataItem::Inteager(i64::from_le_bytes(int_bytes)))
             },
             2 => {
-                if head_bytes.len() != 9 {
+                if head_bytes.len() < 9 {
                     return Err(RsqlError::Unknown("Invalid bytes length for Float".to_string() + &head_bytes.len().to_string()));
                 }
                 let mut float_bytes = [0u8; 8];
@@ -125,15 +156,15 @@ impl DataItem {
                 len_bytes.copy_from_slice(&head_bytes[1..9]);
                 let len = u64::from_le_bytes(len_bytes);
                 let expected_len = 1 + 8 + len as usize;
-                if head_bytes.len() != expected_len {
+                if head_bytes.len() < expected_len {
                     return Err(RsqlError::Unknown("Invalid bytes length for Chars value".to_string()));
                 }
-                let value = String::from_utf8(head_bytes[9..].to_vec()).map_err(|e| RsqlError::ParserError(e.to_string()))?;
+                let value = String::from_utf8(head_bytes[9..expected_len].to_vec()).map_err(|e| RsqlError::ParserError(e.to_string()))?;
                 Ok(DataItem::Chars {len, value})
             },
             4 => {
                 // head layout: [tag(1)] [max_len(8)] [len(8)] [page_ptr(8)] => total 25
-                if head_bytes.len() != 1 + 8 + 8 + 8 {
+                if head_bytes.len() < 25 {
                     return Err(RsqlError::Unknown("Invalid bytes length for VarChar head".to_string() + &head_bytes.len().to_string()));
                 }
                 let mut max_len_bytes = [0u8; 8];
@@ -157,7 +188,7 @@ impl DataItem {
                 Ok(DataItem::VarChar {head: VarCharHead {max_len, len, page_ptr}, value})
             },
             5 => {
-                if head_bytes.len() != 2 {
+                if head_bytes.len() < 2 {
                     return Err(RsqlError::Unknown("Invalid bytes length for Bool".to_string() + &head_bytes.len().to_string()));
                 }
                 let value = match head_bytes[1] {
@@ -167,6 +198,45 @@ impl DataItem {
                 };
                 Ok(DataItem::Bool(value))
             },
+            // Nulls
+            6 => { // NullInt
+                if head_bytes.len() < 9 {
+                     return Err(RsqlError::Unknown("Invalid bytes length for NullInt".to_string()));
+                }
+                Ok(DataItem::NullInt)
+            },
+            7 => { // NullFloat
+                if head_bytes.len() < 9 {
+                     return Err(RsqlError::Unknown("Invalid bytes length for NullFloat".to_string()));
+                }
+                Ok(DataItem::NullFloat)
+            },
+            8 => { // NullChars
+                if head_bytes.len() < 9 {
+                     return Err(RsqlError::Unknown("Invalid bytes length for NullChars header".to_string()));
+                }
+                let mut len_bytes = [0u8; 8];
+                len_bytes.copy_from_slice(&head_bytes[1..9]);
+                let len = u64::from_le_bytes(len_bytes);
+                
+                let expected_len = 1 + 8 + len as usize;
+                if head_bytes.len() < expected_len {
+                    return Err(RsqlError::Unknown("Invalid bytes length for NullChars padding".to_string()));
+                }
+                Ok(DataItem::NullChars { len })
+            },
+            9 => { // NullVarChar
+                if head_bytes.len() < 25 {
+                     return Err(RsqlError::Unknown("Invalid bytes length for NullVarChar".to_string()));
+                }
+                Ok(DataItem::NullVarChar)
+            },
+            10 => { // NullBool
+                if head_bytes.len() < 2 {
+                     return Err(RsqlError::Unknown("Invalid bytes length for NullBool".to_string()));
+                }
+                Ok(DataItem::NullBool)
+            },
             _ => Err(RsqlError::Unknown("Unknown data type tag".to_string())),
         }
     }
@@ -174,46 +244,54 @@ impl DataItem {
 
 impl PartialOrd for DataItem {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        if mem::discriminant(self) != mem::discriminant(other) {
-            return None;
+        // check groups first.
+        let same_group = match (self, other) {
+            (DataItem::Inteager(_) | DataItem::NullInt, DataItem::Inteager(_) | DataItem::NullInt) => true,
+            (DataItem::Float(_) | DataItem::NullFloat, DataItem::Float(_) | DataItem::NullFloat) => true,
+            (DataItem::Chars{..} | DataItem::NullChars{..}, DataItem::Chars{..} | DataItem::NullChars{..}) => true,
+            (DataItem::VarChar{..} | DataItem::NullVarChar, DataItem::VarChar{..} | DataItem::NullVarChar) => true,
+            (DataItem::Bool(_) | DataItem::NullBool, DataItem::Bool(_) | DataItem::NullBool) => true,
+            _ => false,
+        };
+
+        if !same_group {
+             // If different groups, fallback to tag comparison (consistent but arbitrary order between types)
+             return None;
         }
-        match self {
-            DataItem::Inteager(v1) => {
-                if let DataItem::Inteager(v2) = other {
-                    Some(v1.cmp(v2))
-                } else {
-                    None
-                }
-            },
-            DataItem::Float(v1) => {
-                if let DataItem::Float(v2) = other {
-                    v1.partial_cmp(v2)
-                } else {
-                    None
-                }
-            },
-            DataItem::Chars {value: v1, ..} => {
-                if let DataItem::Chars {value: v2, ..} = other {
-                    Some(v1.cmp(v2))
-                } else {
-                    None
-                }
-            },
-            DataItem::VarChar {value: v1, ..} => {
-                if let DataItem::VarChar {value: v2, ..} = other {
-                    Some(v1.cmp(v2))
-                } else {
-                    None
-                }
-            },
-            DataItem::Bool(b1) => {
-                if let DataItem::Bool(b2) = other {
-                    Some(b1.cmp(b2))
-                } else {
-                    None
-                }
-            },
-            DataItem::Null => Some(Ordering::Equal),
+
+        // Same group comparison
+        match (self, other) {
+            // Int Group
+            (DataItem::NullInt, DataItem::Inteager(_)) => Some(Ordering::Less),
+            (DataItem::Inteager(_), DataItem::NullInt) => Some(Ordering::Greater),
+            (DataItem::NullInt, DataItem::NullInt) => Some(Ordering::Equal),
+            (DataItem::Inteager(v1), DataItem::Inteager(v2)) => Some(v1.cmp(v2)),
+
+            // Float Group
+            (DataItem::NullFloat, DataItem::Float(_)) => Some(Ordering::Less),
+            (DataItem::Float(_), DataItem::NullFloat) => Some(Ordering::Greater),
+            (DataItem::NullFloat, DataItem::NullFloat) => Some(Ordering::Equal),
+            (DataItem::Float(v1), DataItem::Float(v2)) => v1.partial_cmp(v2),
+
+            // Chars Group
+            (DataItem::NullChars{..}, DataItem::Chars{..}) => Some(Ordering::Less),
+            (DataItem::Chars{..}, DataItem::NullChars{..}) => Some(Ordering::Greater),
+            (DataItem::NullChars{..}, DataItem::NullChars{..}) => Some(Ordering::Equal),
+            (DataItem::Chars {value: v1, ..}, DataItem::Chars {value: v2, ..}) => Some(v1.cmp(v2)),
+
+            // VarChar Group
+            (DataItem::NullVarChar, DataItem::VarChar{..}) => Some(Ordering::Less),
+            (DataItem::VarChar{..}, DataItem::NullVarChar) => Some(Ordering::Greater),
+            (DataItem::NullVarChar, DataItem::NullVarChar) => Some(Ordering::Equal),
+            (DataItem::VarChar {value: v1, ..}, DataItem::VarChar {value: v2, ..}) => Some(v1.cmp(v2)),
+
+            // Bool Group
+            (DataItem::NullBool, DataItem::Bool(_)) => Some(Ordering::Less),
+            (DataItem::Bool(_), DataItem::NullBool) => Some(Ordering::Greater),
+            (DataItem::NullBool, DataItem::NullBool) => Some(Ordering::Equal),
+            (DataItem::Bool(b1), DataItem::Bool(b2)) => Some(b1.cmp(b2)),
+
+            _ => panic!("DataItem compare should be covered by same_group check"),
         }
     }
 }
@@ -247,10 +325,15 @@ mod tests {
         assert!(bb.is_none());
         assert_eq!(DataItem::from_bytes(&hb, None).unwrap(), b);
 
-        let n = DataItem::Null;
+        let n = DataItem::NullInt;
         let (hn, nb) = n.to_bytes().unwrap();
         assert!(nb.is_none());
         assert_eq!(DataItem::from_bytes(&hn, None).unwrap(), n);
+        
+        let nf = DataItem::NullFloat;
+        let (hnf, nbf) = nf.to_bytes().unwrap();
+        assert!(nbf.is_none());
+        assert_eq!(DataItem::from_bytes(&hnf, None).unwrap(), nf);
     }
 
     #[test]

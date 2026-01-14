@@ -8,11 +8,23 @@ pub struct IndexItem {
     pub child_page_num: u64,
 }
 
+impl IndexItem {
+    pub fn size(&self) -> usize {
+        self.key.size() + 8 // key size + child_page_num size
+    }
+}
+
 #[derive(Clone)]
 pub struct LeafItem {
     pub key: data_item::DataItem, // not allowed varchar type
     pub child_page_num: u64,
     pub page_offset: u64,
+}
+
+impl LeafItem {
+    pub fn size(&self) -> usize {
+        self.key.size() + 8 + 8 // key size + child_page_num size + page_offset size
+    }
 }
 
 #[derive(Clone)]
@@ -37,7 +49,7 @@ impl BTreeNode {
         &self, 
         page: &mut storage::Page
     ) -> RsqlResult<()> {
-        let max_size = 4 * 1024; // For debug
+        let max_size = storage::Page::max_size();
         let buf = match self {
             BTreeNode::Internal { items , next_page_num } => {
                 // Serialize internal node
@@ -119,5 +131,19 @@ impl BTreeNode {
         } else {
             panic!("BTreeNode::from_page: invalid node type");
         }
+    }
+    pub fn size(&self) -> usize {
+        match self {
+            BTreeNode::Internal { items, .. } => {
+                8 + 1 + items.iter().map(|i| i.size()).sum::<usize>() + 8
+            }
+            BTreeNode::Leaf { items, .. } => {
+                8 + 1 + items.iter().map(|i| i.size()).sum::<usize>() + 8
+            }
+        }
+    }
+    pub fn has_space_for(&self, new_item_size: usize) -> bool {
+        let max_size = storage::Page::max_size();
+        self.size() + new_item_size <= max_size
     }
 }

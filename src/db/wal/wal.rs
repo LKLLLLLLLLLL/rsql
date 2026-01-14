@@ -7,6 +7,7 @@ use tracing::{warn, info};
 
 use crate::config::{DB_DIR, MAX_WAL_SIZE};
 use super::super::errors::{RsqlError, RsqlResult};
+use super::super::storage;
 
 use super::wal_entry::WALEntry;
 
@@ -152,7 +153,7 @@ impl WAL {
                 },
                 WALEntry::DeletePage { tnx_id, page_id, .. } => {
                     if redo_tnx_ids.contains(tnx_id) {
-                        write_page(*page_id, vec![0u8; 4096])?;
+                        write_page(*page_id, vec![0u8; storage::Page::max_size()])?;
                         recover_num += 1;
                     }
                 },
@@ -170,7 +171,7 @@ impl WAL {
                 },
                 WALEntry::NewPage { tnx_id, page_id, .. } => {
                     if undo_tnx_ids.contains(tnx_id) {
-                        write_page(*page_id, vec![0u8; 4096])?;
+                        write_page(*page_id, vec![0u8; storage::Page::max_size()])?;
                         recover_num += 1;
                     }
                 },
