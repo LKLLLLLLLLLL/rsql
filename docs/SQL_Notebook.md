@@ -93,9 +93,17 @@ Unsupported or unrecognized constraints will result in a `ParserError`.
 
 Join conditions are supported via ON expressions only.
 
-#### iii.Unsupported:
+#### iii. Supported Functions
+-   "COUNT"
+-   "SUM"
+-   "AVG"
+-   "MIN"
+-   "MAX"
+
+#### iv.Unsupported:
 -	NATURAL JOIN
 -	USING clause
+-   EXISTS
 
 ---
 
