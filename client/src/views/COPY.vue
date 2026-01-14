@@ -211,7 +211,7 @@ onMounted(() => {
     // Store current table headers (normalized objects) for insert operation
     let currentTableHeaders = []
 
-    // Normalize headers into objects: { name, type, ableToBeNULL, primaryKey }
+    // Normalize headers into objects: { name, type, ableToBeNULL, primaryKey, unique }
     function normalizeHeaders(headers) {
         if (!Array.isArray(headers)) return []
         return headers.map((h) => {
@@ -220,7 +220,8 @@ onMounted(() => {
             name: h,
             type: '',
             ableToBeNULL: false,
-            primaryKey: false
+            primaryKey: false,
+            unique: false
             }
         }
         const able = ('ableToBeNULL' in h) ? !!h.ableToBeNULL : (('AbleToBeNULL' in h) ? !!h.AbleToBeNULL : false)
@@ -228,7 +229,8 @@ onMounted(() => {
             name: h.name || '',
             type: h.type || '',
             ableToBeNULL: able,
-            primaryKey: !!h.primaryKey
+            primaryKey: !!h.primaryKey,
+            unique: !!h.unique
         }
         })
     }
@@ -294,14 +296,16 @@ onMounted(() => {
                 const types = Array.isArray(json.type) ? json.type : null
                 const nullables = Array.isArray(json.ableToBeNULL) ? json.ableToBeNULL : (Array.isArray(json.AbleToBeNULL) ? json.AbleToBeNULL : null)
                 const pks = Array.isArray(json.primaryKey) ? json.primaryKey : null
+                const uniques = Array.isArray(json.unique) ? json.unique : null
 
-                if (Array.isArray(rawHeaders) && rawHeaders.length > 0 && types && nullables && pks &&
-                    rawHeaders.length === types.length && rawHeaders.length === nullables.length && rawHeaders.length === pks.length) {
+                if (Array.isArray(rawHeaders) && rawHeaders.length > 0 && types && nullables && pks && uniques &&
+                    rawHeaders.length === types.length && rawHeaders.length === nullables.length && rawHeaders.length === pks.length && rawHeaders.length === uniques.length) {
                     normalized = rawHeaders.map((name, i) => ({
                         name: name,
                         type: String(types[i] ?? ''),
                         ableToBeNULL: !!nullables[i],
-                        primaryKey: !!pks[i]
+                        primaryKey: !!pks[i],
+                        unique: !!uniques[i]
                     }))
                 } else {
                     normalized = normalizeHeaders(rawHeaders)
@@ -394,6 +398,10 @@ onMounted(() => {
             <span class="checkbox-label">允许 NULL</span>
         </label>
         <label class="checkbox-group">
+            <input type="checkbox" class="unique-key">
+            <span class="checkbox-label">唯一</span>
+        </label>
+        <label class="checkbox-group">
             <input type="checkbox" class="primary-key">
             <span class="checkbox-label">主键</span>
         </label>
@@ -468,7 +476,8 @@ onMounted(() => {
             name: ((row.querySelector('.column-name') || {}).value || '').trim(),
             type: (row.querySelector('.column-type') || {}).value || 'TEXT',
             allowNull: !!(row.querySelector('.allow-null') || {}).checked,
-            primaryKey: !!(row.querySelector('.primary-key') || {}).checked
+            primaryKey: !!(row.querySelector('.primary-key') || {}).checked,
+            unique: !!(row.querySelector('.unique-key') || {}).checked
         }))
 
         // Check if at least one primary key is selected
@@ -493,6 +502,7 @@ onMounted(() => {
             sql += `  ${col.name} ${col.type}`
             if (!col.allowNull) sql += ' NOT NULL'
             if (col.primaryKey) sql += ' PRIMARY KEY'
+            else if (col.unique) sql += ' UNIQUE'
             if (index < columns.length - 1) sql += ',\n'
         })
         sql += `\n);`
