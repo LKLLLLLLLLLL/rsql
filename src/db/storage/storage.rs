@@ -14,7 +14,7 @@ pub struct Page {
 }
 
 impl Page {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             data: vec![0u8; PAGE_SIZE_BYTES],
             need_flush: true, 
