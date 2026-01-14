@@ -6,6 +6,7 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use super::cache::LRUCache;
 
+#[derive(Clone)]
 pub struct Page {
     pub data: Vec<u8>,
     need_flush: bool,
@@ -149,12 +150,14 @@ impl StorageManager {
         Ok(())
     }
 
-    pub fn new_page(&self) -> RsqlResult<(u64, Arc<RwLock<Page>>)> {
+    pub fn new_page(&mut self) -> RsqlResult<(u64, Arc<RwLock<Page>>)> {
         let new_page_index = match self.max_page_index() {
             Some(max_index) => max_index + 1,
             None => 0,
         };
         let new_page = Arc::new(RwLock::new(Page::new()));
+        let evicted = self.pages.insert(new_page_index, Arc::clone(&new_page));
+        self.write_back_evicted_page(evicted)?;
         Ok((new_page_index, new_page))
     }
 
