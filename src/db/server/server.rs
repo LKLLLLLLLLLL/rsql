@@ -1,5 +1,5 @@
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
-use log::info;
+use tracing::info;
 use crate::config::{PORT};
 use super::thread_pool::WorkingThreadPool;
 use super::types::{HttpQueryRequest, HttpQueryResponse};

@@ -1184,7 +1184,6 @@ dependencies = [
  "crc32fast",
  "futures",
  "linked-hash-map",
- "log",
  "num_cpus",
  "rayon",
  "serde",
