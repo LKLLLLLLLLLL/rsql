@@ -114,21 +114,21 @@ pub enum PlanNode {
         if_exists: bool,
     },
     /// Inserts data into a table.
+    /// If `input` is Some, it represents an INSERT ... SELECT subquery plan.
     Insert {
         table_name: String,
         columns: Option<Vec<String>>,
         values: Vec<Vec<Expr>>,
+        input: Option<Box<PlanNode>>, // for INSERT ... SELECT subquery
     },
-    /// Deletes data from a table.
+    /// Deletes rows produced by the input plan.
     Delete {
-        table_name: String,
-        predicate: Option<Expr>,
+        input: Box<PlanNode>,
     },
-    /// Updates data in a table.
+    /// Updates rows produced by the input plan.
     Update {
-        table_name: String,
+        input: Box<PlanNode>,
         assignments: Vec<(String, Expr)>,
-        predicate: Option<Expr>,
     },
 }
 
@@ -417,30 +417,16 @@ impl Plan {
                 let plan = Self::build_query(query)?;
                 Ok((expr.clone(), Some((plan, ApplyType::Scalar))))
             }
-
             Expr::InSubquery { subquery, negated, .. } => {
                 let plan = Self::build_query(subquery)?;
-                Ok((
-                    expr.clone(),
-                    Some((
-                        plan,
-                        if *negated { ApplyType::NotIn } else { ApplyType::In },
-                    )),
-                ))
+                Ok((expr.clone(), Some((plan, if *negated { ApplyType::NotIn } else { ApplyType::In }))))
             }
-
             Expr::Exists { .. } => {
-                Err(RsqlError::ParserError(
-                    "EXISTS subquery is not supported".to_string(),
-                ))
+                Err(RsqlError::ParserError("EXISTS subquery is not supported".to_string()))
             }
-
             Expr::BinaryOp { left, op, right } => {
-                let (left_clean, left_sub) =
-                    Self::extract_subqueries_from_expr(left)?;
-                let (right_clean, right_sub) =
-                    Self::extract_subqueries_from_expr(right)?;
-
+                let (left_clean, left_sub) = Self::extract_subqueries_from_expr(left)?;
+                let (right_clean, right_sub) = Self::extract_subqueries_from_expr(right)?;
                 Ok((
                     Expr::BinaryOp {
                         left: Box::new(left_clean),
@@ -450,11 +436,8 @@ impl Plan {
                     left_sub.or(right_sub),
                 ))
             }
-
-            // Handle other expression types recursively as needed
-            _ => Err(RsqlError::ParserError(
-                format!("Unsupported expression: {}", expr),
-            )),
+            Expr::Identifier(_) | Expr::Value(_) | Expr::Nested(_) => Ok((expr.clone(), None)),
+            _ => Err(RsqlError::ParserError(format!("Unsupported expression: {}", expr))),
         }
     }
 
@@ -491,25 +474,114 @@ impl Plan {
                 } else { Err(RsqlError::ParserError("Only DROP TABLE supported".to_string())) }
             }
             Statement::Insert(insert) => {
-                let values = if let Some(source) = &insert.source {
-                    match &*source.body { SetExpr::Values(values) => values.rows.clone(), _ => return Err(RsqlError::ParserError("Only VALUES supported in INSERT".to_string())) }
-                } else { vec![] };
-                let cols_opt = if insert.columns.is_empty() { None } else { Some(insert.columns.iter().map(|c| c.to_string()).collect()) };
-                Ok(PlanNode::Insert { table_name: insert.table.to_string(), columns: cols_opt, values })
-            }
-            Statement::Update(update) => {
-                let assignments = update.assignments.iter().map(|a| (format!("{}", a.target), a.value.clone())).collect();
-                Ok(PlanNode::Update { table_name: update.table.to_string(), assignments, predicate: update.selection.clone() })
+                if let Some(source) = &insert.source {
+                    match &*source.body {
+                        SetExpr::Values(values) => {
+                            let rows: Vec<Vec<Expr>> = values.rows.iter()
+                                .map(|row: &Vec<Expr>| row.iter().map(|expr: &Expr| expr.clone()).collect::<Vec<Expr>>())
+                                .collect::<Vec<Vec<Expr>>>();
+                            Ok(PlanNode::Insert {
+                                table_name: insert.table.to_string(),
+                                columns: if insert.columns.is_empty() { None } else { Some(insert.columns.iter().map(|c| c.to_string()).collect()) },
+                                values: rows,
+                                input: None,
+                            })
+                        },
+                        SetExpr::Select(select) => {
+                            let sub_plan = Self::build_select_plan(select)?;
+                            Ok(PlanNode::Insert {
+                                table_name: insert.table.to_string(),
+                                columns: if insert.columns.is_empty() { None } else { Some(insert.columns.iter().map(|c| c.to_string()).collect()) },
+                                values: vec![],
+                                input: Some(Box::new(sub_plan)),
+                            })
+                        }
+                        _ => return Err(RsqlError::ParserError("Unsupported INSERT source".to_string())),
+                    }
+                } else {
+                    Ok(PlanNode::Insert {
+                        table_name: insert.table.to_string(),
+                        columns: if insert.columns.is_empty() { None } else { Some(insert.columns.iter().map(|c| c.to_string()).collect()) },
+                        values: vec![],
+                        input: None,
+                    })
+                }
             }
             Statement::Delete(delete) => {
                 let table_name = match &delete.from {
                     sqlparser::ast::FromTable::WithFromKeyword(tables)
                     | sqlparser::ast::FromTable::WithoutKeyword(tables) => {
-                        if tables.is_empty() { return Err(RsqlError::ParserError("DELETE with no table".to_string())); }
-                        match &tables[0].relation { TableFactor::Table { name, .. } => name.to_string(), _ => return Err(RsqlError::ParserError("Unsupported table factor in DELETE".to_string())) }
+                        if tables.is_empty() {
+                            return Err(RsqlError::ParserError("DELETE with no table".to_string()));
+                        }
+                        match &tables[0].relation {
+                            TableFactor::Table { name, .. } => name.to_string(),
+                            _ => {
+                                return Err(RsqlError::ParserError(
+                                    "Unsupported table factor in DELETE".to_string(),
+                                ))
+                            }
+                        }
                     }
                 };
-                Ok(PlanNode::Delete { table_name, predicate: delete.selection.clone() })
+
+                // Base scan
+                let mut plan = PlanNode::TableScan { table: table_name };
+
+                // WHERE clause → Filter (+ Apply if needed)
+                if let Some(selection) = &delete.selection {
+                    let (clean_pred, sub_info) =
+                        Self::extract_subqueries_from_expr(selection)?;
+                    plan = PlanNode::Filter {
+                        predicate: clean_pred,
+                        input: Box::new(plan),
+                    };
+                    if let Some((sub_plan, apply_type)) = sub_info {
+                        plan = PlanNode::Apply {
+                            input: Box::new(plan),
+                            subquery: Box::new(sub_plan),
+                            apply_type,
+                        };
+                    }
+                }
+
+                Ok(PlanNode::Delete {
+                    input: Box::new(plan),
+                })
+            }
+            Statement::Update(update) => {
+                let table_name = update.table.to_string();
+
+                // Base scan
+                let mut plan = PlanNode::TableScan { table: table_name };
+
+                // WHERE clause → Filter (+ Apply if needed)
+                if let Some(selection) = &update.selection {
+                    let (clean_pred, sub_info) =
+                        Self::extract_subqueries_from_expr(selection)?;
+                    plan = PlanNode::Filter {
+                        predicate: clean_pred,
+                        input: Box::new(plan),
+                    };
+                    if let Some((sub_plan, apply_type)) = sub_info {
+                        plan = PlanNode::Apply {
+                            input: Box::new(plan),
+                            subquery: Box::new(sub_plan),
+                            apply_type,
+                        };
+                    }
+                }
+
+                let assignments = update
+                    .assignments
+                    .iter()
+                    .map(|a| (format!("{}", a.target), a.value.clone()))
+                    .collect();
+
+                Ok(PlanNode::Update {
+                    input: Box::new(plan),
+                    assignments,
+                })
             }
             _ => Err(RsqlError::ParserError("DDL not implemented yet".to_string())),
         }
@@ -556,9 +628,23 @@ impl Plan {
                 PlanNode::DropTable { table_name, if_exists } => {
                     if *if_exists { format!("DropTable [{}] IF EXISTS", table_name) } else { format!("DropTable [{}]", table_name) }
                 }
-                PlanNode::Insert { table_name, columns, values } => format!("Insert [{}] cols={:?} rows={}", table_name, columns, values.len()),
-                PlanNode::Delete { table_name, predicate } => format!("Delete [{}] where={}", table_name, predicate.as_ref().map_or("None".to_string(), |p| format!("{}", p))),
-                PlanNode::Update { table_name, assignments, predicate } => format!("Update [{}] assigns={} where={}", table_name, assignments.len(), predicate.as_ref().map_or("None".to_string(), |p| format!("{}", p))),
+                PlanNode::Insert { table_name, columns, values, input } => {
+                    if let Some(_) = input {
+                        format!("Insert [{}] cols={:?} [Subquery]", table_name, columns)
+                    } else {
+                        let rows_str = values.iter().map(|row: &Vec<Expr>| {
+                            row.iter().map(|e: &Expr| match e {
+                                Expr::Subquery(_) => "[Subquery]".to_string(),
+                                _ => format!("{}", e)
+                            }).collect::<Vec<_>>().join(", ")
+                        }).collect::<Vec<_>>().join(" | ");
+                        format!("Insert [{}] cols={:?} rows={}", table_name, columns, rows_str)
+                    }
+                }
+                PlanNode::Delete { .. } => "Delete".to_string(),
+                PlanNode::Update { assignments, .. } => {
+                    format!("Update [assigns={}]", assignments.len())
+                }
             }
         }
 
@@ -571,6 +657,9 @@ impl Plan {
                 PlanNode::Aggregate { input, .. } => vec![input],
                 PlanNode::Projection { input, .. } => vec![input],
                 PlanNode::Join { left, right, .. } => vec![left, right],
+                PlanNode::Delete { input } => vec![input],
+                PlanNode::Update { input, .. } => vec![input],
+                PlanNode::Insert { input: Some(sub_plan), .. } => vec![sub_plan],
                 _ => vec![],
             }
         }
