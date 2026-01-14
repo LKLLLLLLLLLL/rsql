@@ -128,6 +128,24 @@
                     </div>
                 </div>
             </div>
+            <div class="update-operation">
+                <div class="table-container update-table-container">
+                    <div class="table-header">
+                        <h3 id="update-table-title">Users Table Data</h3>
+                        <div class="table-info">
+                            <span>Total <span id="update-records-count">0</span> records</span>
+                            <span>Updated on <span id="update-update-time">1970-01-01 00:00</span></span>
+                        </div>
+                    </div>
+
+                    <div class="table-scroll-wrapper">
+                        <table>
+                            <thead class="update-table-head"></thead>
+                            <tbody class="update-table-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
             <div class="query-operation"></div>
             <div class="export-operation"></div>
         </div>
@@ -147,8 +165,9 @@ onMounted(() => {
     const createSection = document.querySelector('.create-operation')
     const insertSection = document.querySelector('.insert-operation')
     const deleteSection = document.querySelector('.delete-operation')
+    const updateSection = document.querySelector('.update-operation')
     const topBar = document.querySelector('.top-bar')
-    const sections = { table: tableContainer, create: createSection, insert: insertSection, delete: deleteSection }
+    const sections = { table: tableContainer, create: createSection, insert: insertSection, delete: deleteSection, update: updateSection }
 
     // Table elements and fallback data
     const tableElement = tableContainer ? tableContainer.querySelector('table') : null
@@ -160,6 +179,11 @@ onMounted(() => {
     const deleteTableBody = deleteTableElement ? deleteTableElement.querySelector('.delete-table-body') : null
     const deleteRecordsCount = document.getElementById('delete-records-count')
     const deleteTableTitle = document.getElementById('delete-table-title')
+    const updateTableElement = updateSection ? updateSection.querySelector('table') : null
+    const updateTableHead = updateTableElement ? updateTableElement.querySelector('.update-table-head') : null
+    const updateTableBody = updateTableElement ? updateTableElement.querySelector('.update-table-body') : null
+    const updateRecordsCount = document.getElementById('update-records-count')
+    const updateTableTitle = document.getElementById('update-table-title')
 
     function checkTypeMatches(type, data) {
         const t = String(type || '').trim().toUpperCase();
@@ -423,6 +447,226 @@ onMounted(() => {
         if (deleteRecordsCount) deleteRecordsCount.textContent = Array.isArray(rows) ? rows.length : 0
     }
 
+    function renderUpdateTable(headers, rows) {
+        if (!updateTableHead || !updateTableBody) return
+
+        updateTableHead.innerHTML = ''
+        updateTableBody.innerHTML = ''
+
+        const headRow = document.createElement('tr')
+        const actionTh = document.createElement('th')
+        actionTh.textContent = 'Update'
+        headRow.appendChild(actionTh)
+        const indexTh = document.createElement('th')
+        indexTh.textContent = '#'
+        headRow.appendChild(indexTh)
+        headers.forEach((text) => {
+            const th = document.createElement('th')
+            th.textContent = text
+            headRow.appendChild(th)
+        })
+        updateTableHead.appendChild(headRow)
+
+        rows.forEach((row, idx) => {
+            const tr = document.createElement('tr')
+
+            const actionTd = document.createElement('td')
+            actionTd.className = 'update-action-cell'
+            const actions = document.createElement('div')
+            actions.className = 'update-actions'
+            const btn = document.createElement('button')
+            btn.className = 'update-row-btn'
+            btn.textContent = 'Update'
+            actions.appendChild(btn)
+            actionTd.appendChild(actions)
+            tr.appendChild(actionTd)
+
+            btn.addEventListener('click', () => {
+                actions.innerHTML = ''
+                const cancelBtn = document.createElement('button')
+                cancelBtn.className = 'cancel-update-btn'
+                cancelBtn.textContent = 'Cancel'
+                const confirmBtn = document.createElement('button')
+                confirmBtn.className = 'confirm-update-btn'
+                confirmBtn.textContent = 'Confirm'
+                actions.appendChild(cancelBtn)
+                actions.appendChild(confirmBtn)
+
+                const originalRow = Array.isArray(currentTableRows) && Array.isArray(currentTableRows[idx])
+                    ? [...currentTableRows[idx]]
+                    : []
+
+                // Annotate header cells temporarily with PK/Unique marks
+                const headerThs = updateTableHead ? Array.from(updateTableHead.querySelectorAll('tr th')).slice(2) : []
+                headerThs.forEach((thEl, i) => {
+                    const colName = Array.isArray(headers) && i < headers.length ? headers[i] : ''
+                    const meta = currentTableHeaders.find(h => h.name === colName)
+                    let label = colName
+                    if (meta && meta.primaryKey) label += '*'
+                    if (meta && meta.unique) label += ' (Unique)'
+                    thEl.textContent = label
+                })
+
+                // Turn data cells into inputs with default values and placeholders
+                const dataCells = Array.from(tr.querySelectorAll('td[data-column]'))
+                dataCells.forEach((td) => {
+                    const originalValue = td.textContent || ''
+                    td.innerHTML = ''
+                    const input = document.createElement('input')
+                    input.type = 'text'
+                    input.className = 'update-value'
+                    const colName = td.getAttribute('data-column') || ''
+                    input.value = originalValue
+                    input.setAttribute('data-column', colName)
+                    const meta = currentTableHeaders.find(h => h.name === colName)
+                    const required = meta ? !meta.ableToBeNULL : false
+                    input.placeholder = required ? '必填' : '可为空'
+                    td.appendChild(input)
+                })
+
+                // Cancel restores original values
+                cancelBtn.addEventListener('click', () => {
+                    renderUpdateTable(currentDisplayHeaders, currentTableRows)
+                })
+
+                // Confirm saves inputs back to currentTableRows and re-renders
+                confirmBtn.addEventListener('click', () => {
+                    const newRow = []
+                    dataCells.forEach((td, i) => {
+                        const input = td.querySelector('.update-value')
+                        const value = input ? input.value : ''
+                        newRow[i] = value
+                    })
+
+                    // Validation: required / PK / type / unique
+                    const missingRequired = []
+                    const missingPK = []
+                    const typeErrors = []
+                    const uniqueErrors = []
+
+                    currentTableHeaders.forEach((h, i) => {
+                        const val = newRow[i] ?? ''
+                        const trimmed = String(val).trim()
+
+                        // Required / PK not null
+                        if (!h.ableToBeNULL && trimmed === '') missingRequired.push(h.name)
+                        if (h.primaryKey && trimmed === '') missingPK.push(h.name)
+
+                        // Type check (skip empty if nullable)
+                        if (trimmed !== '') {
+                            const result = checkTypeMatches(h.type, trimmed)
+                            if (!result.valid) {
+                                typeErrors.push({ column: h.name, type: h.type, value: trimmed, message: result.message })
+                            }
+                        }
+                    })
+
+                    if (missingRequired.length > 0) {
+                        alert(`未填写必填列：${missingRequired.join(', ')}`)
+                        return
+                    }
+                    if (missingPK.length > 0) {
+                        alert(`主键未填写：${missingPK.join(', ')}`)
+                        return
+                    }
+                    if (typeErrors.length > 0) {
+                        const msg = typeErrors.map(e => `列 "${e.column}" (类型: ${e.type})：值 "${e.value}" 不匹配 - ${e.message}`).join('\n')
+                        alert('数据类型验证失败：\n' + msg)
+                        return
+                    }
+
+                    // Unique constraint: compare with other rows (exclude current idx)
+                    const uniqueCols = currentTableHeaders
+                        .map((h, i) => ({ h, i }))
+                        .filter(({ h }) => h.unique)
+                    uniqueCols.forEach(({ h, i }) => {
+                        const val = newRow[i]
+                        const trimmed = String(val ?? '').trim()
+                        if (trimmed === '') return
+                        const dupRowIndex = currentTableRows.findIndex((row, ridx) => ridx !== idx && Array.isArray(row) && row[i] === trimmed)
+                        if (dupRowIndex >= 0) {
+                            uniqueErrors.push({ column: h.name, value: trimmed, row: dupRowIndex + 1 })
+                        }
+                    })
+
+                    if (uniqueErrors.length > 0) {
+                        const msg = uniqueErrors.map(e => `列 "${e.column}" (唯一) 值 "${e.value}" 在第 ${e.row} 行重复`).join('\n')
+                        alert('唯一性约束验证失败：\n' + msg)
+                        return
+                    }
+
+                    // Build SQL UPDATE using PK in WHERE
+                    const currentTableEl = document.getElementById('current-table')
+                    const tableName = currentTableEl ? currentTableEl.textContent : ''
+                    if (!tableName) {
+                        alert('未获取到表名，无法生成更新语句')
+                        return
+                    }
+
+                    const formatValue = (type, value) => {
+                        const t = String(type || '').trim().toUpperCase()
+                        if (t === 'INT' || t === 'INTEGER') return String(value)
+                        if (t === 'FLOAT') {
+                            const s = String(value)
+                            const n = parseFloat(s)
+                            return s.includes('.') ? s : n.toFixed(2)
+                        }
+                        return `'${String(value).replace(/'/g, "''")}'`
+                    }
+
+                    const setClauses = currentTableHeaders.map((h, i) => `${h.name} = ${formatValue(h.type, newRow[i] ?? '')}`)
+
+                    const pkHeaders = currentTableHeaders.filter(h => h.primaryKey)
+                    if (pkHeaders.length === 0) {
+                        alert('当前表未设置主键，无法生成更新语句')
+                        return
+                    }
+
+                    const whereClauses = []
+                    for (const h of pkHeaders) {
+                        const colIndex = currentDisplayHeaders.findIndex(n => n === h.name)
+                        if (colIndex < 0) continue
+                        const rawValue = (originalRow && colIndex < originalRow.length) ? originalRow[colIndex] : ''
+                        if (rawValue === undefined || rawValue === null || String(rawValue).trim() === '') {
+                            alert(`主键列 "${h.name}" 的值为空，无法生成更新语句`)
+                            return
+                        }
+                        whereClauses.push(`${h.name} = ${formatValue(h.type, rawValue)}`)
+                    }
+
+                    if (whereClauses.length === 0) {
+                        alert('无法定位主键列，未生成更新语句')
+                        return
+                    }
+
+                    const sql = `UPDATE ${tableName} SET ${setClauses.join(', ')} WHERE ${whereClauses.join(' AND ')};`
+                    alert('生成的 SQL 语句：\n' + sql)
+                    console.log('Update SQL:', sql)
+
+                    // 前端不更新数据，只重新渲染
+                    renderTable(currentDisplayHeaders, currentTableRows)
+                    renderUpdateTable(currentDisplayHeaders, currentTableRows)
+                })
+            })
+
+            const indexTd = document.createElement('td')
+            indexTd.textContent = String(idx + 1)
+            tr.appendChild(indexTd)
+
+            row.forEach((cell, dataColIdx) => {
+                const td = document.createElement('td')
+                td.textContent = cell
+                // Map data cell to its header name for editing
+                const colName = Array.isArray(headers) && dataColIdx < headers.length ? headers[dataColIdx] : ''
+                td.setAttribute('data-column', String(colName))
+                tr.appendChild(td)
+            })
+            updateTableBody.appendChild(tr)
+        })
+
+        if (updateRecordsCount) updateRecordsCount.textContent = Array.isArray(rows) ? rows.length : 0
+    }
+
     async function loadTableData(tableName) { // 导入表数据
         const candidates = []
         if (tableName) {
@@ -470,6 +714,7 @@ onMounted(() => {
                 currentTableRows = Array.isArray(rows) ? rows : []
                 renderTable(displayHeaders, currentTableRows)
                 renderDeleteTable(displayHeaders, currentTableRows)
+                renderUpdateTable(displayHeaders, currentTableRows)
                 return
             } catch (e) {
                 // try next candidate
@@ -485,6 +730,7 @@ onMounted(() => {
         currentTableRows = Array.isArray(fallback.rows) ? fallback.rows : []
         renderTable(displayHeaders, currentTableRows)
         renderDeleteTable(displayHeaders, currentTableRows)
+        renderUpdateTable(displayHeaders, currentTableRows)
     }
 
     async function loadTablesList() { // 加载左侧导航栏的表列表
@@ -528,12 +774,12 @@ onMounted(() => {
             el.style.display = 'none'
         })
         if (key && sections[key]) {
-            const shouldFlex = key === 'table' || key === 'delete'
+            const shouldFlex = key === 'table' || key === 'delete' || key === 'update'
             sections[key].style.display = shouldFlex ? 'flex' : 'block'
         }
 
         if (topBar) {
-            topBar.style.display = (key === 'table' || key === 'delete') ? 'flex' : 'none'
+            topBar.style.display = (key === 'table' || key === 'delete' || key === 'update') ? 'flex' : 'none'
         }
     }
 
@@ -730,7 +976,15 @@ onMounted(() => {
             showSection('delete')
 
         } else if (action === 'Update') {
-
+            if (currentTableHeaders.length === 0) {
+                alert('请先选择一个表格查看数据，然后再执行更新操作')
+                return
+            }
+            if (updateTableTitle) {
+                updateTableTitle.textContent = `${tableName} Table Data`
+            }
+            renderUpdateTable(currentDisplayHeaders, currentTableRows)
+            showSection('update')
         } else if (action === 'Query') {
 
         } else if (action === 'Export') {
@@ -1332,12 +1586,21 @@ body {
 .create-operation,
 .insert-operation,
 .delete-operation,
+.update-operation,
 .query-operation,
 .export-operation {
     display: none;
 }
 
 .delete-operation {
+    width: 100%;
+    flex: 1;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+.update-operation {
     width: 100%;
     flex: 1;
     height: 100%;
@@ -1371,7 +1634,24 @@ body {
     vertical-align: middle;
 }
 
+.update-table-container th:first-child,
+.update-table-container td:first-child {
+    width: 180px;
+    min-width: 180px;
+    max-width: 180px;
+    text-align: center;
+    vertical-align: middle;
+}
+
 .delete-actions {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+}
+
+.update-actions {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1409,6 +1689,63 @@ body {
 
 .confirm-delete-btn:hover {
     background-color: #c0392b;
+}
+
+.update-row-btn {
+    padding: 6px 12px;
+    background-color: #3498db;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.85rem;
+    width: 80px;
+    text-align: center;
+}
+
+.update-row-btn:hover {
+    background-color: #217dbb;
+}
+
+.cancel-update-btn {
+    padding: 6px 12px;
+    background-color: #95a5a6;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.85rem;
+    width: 80px;
+}
+
+.cancel-update-btn:hover {
+    background-color: #7f8c8d;
+}
+
+.confirm-update-btn {
+    padding: 6px 12px;
+    background-color: #3498db;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.85rem;
+    width: 80px;
+}
+
+.confirm-update-btn:hover {
+    background-color: #217dbb;
+}
+
+.update-value {
+    padding: 8px 10px;
+    border: 1px solid #dfe4ea;
+    border-radius: 6px;
+    font-size: 0.95rem;
+    min-width: 160px;
 }
 
 table {
