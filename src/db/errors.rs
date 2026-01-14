@@ -14,6 +14,9 @@ pub enum RsqlError {
     #[error("WAL Error: {0}")]
     WalError(String),
 
+    #[error("Storage Error: {0}")]
+    StorageError(String),
+
     #[error("Unknown Error: {0}")]
     Unknown(String),
 }
