@@ -298,14 +298,15 @@ onMounted(() => {
                 const pks = Array.isArray(json.primaryKey) ? json.primaryKey : null
                 const uniques = Array.isArray(json.unique) ? json.unique : null
 
-                if (Array.isArray(rawHeaders) && rawHeaders.length > 0 && types && nullables && pks && uniques &&
-                    rawHeaders.length === types.length && rawHeaders.length === nullables.length && rawHeaders.length === pks.length && rawHeaders.length === uniques.length) {
+                // Merge parallel arrays when the required ones exist and match in length; unique is optional
+                if (Array.isArray(rawHeaders) && rawHeaders.length > 0 && types && nullables && pks &&
+                    rawHeaders.length === types.length && rawHeaders.length === nullables.length && rawHeaders.length === pks.length) {
                     normalized = rawHeaders.map((name, i) => ({
                         name: name,
                         type: String(types[i] ?? ''),
                         ableToBeNULL: !!nullables[i],
                         primaryKey: !!pks[i],
-                        unique: !!uniques[i]
+                        unique: (Array.isArray(uniques) && uniques.length === rawHeaders.length) ? !!uniques[i] : false
                     }))
                 } else {
                     normalized = normalizeHeaders(rawHeaders)
@@ -584,10 +585,11 @@ onMounted(() => {
             const name = (typeof h === 'string') ? h : (h && h.name ? h.name : '')
             const isPK = (typeof h === 'object') ? !!h.primaryKey : false
             const canNull = (typeof h === 'object') ? !!h.ableToBeNULL : false
+            const isUnique = (typeof h === 'object') ? !!h.unique : false
 
             let labelText = name
             if (isPK) labelText += '*'
-            if (canNull) labelText += '(ableToBeNULL)'
+            if (isUnique) labelText += ' (Unique)'
             const placeholderText = canNull ? '可为空' : '必填'
 
             return `
