@@ -110,7 +110,42 @@
                     <button type="button" class="submit-insert-btn" id="submit-insert-btn">提交插入数据</button>
                 </div>
             </div>
-            <div class="delete-operation"></div>
+            <div class="delete-operation">
+                <div class="table-container delete-table-container">
+                    <div class="table-header">
+                        <h3 id="delete-table-title">Users Table Data</h3>
+                        <div class="table-info">
+                            <span>Total <span id="delete-records-count">0</span> records</span>
+                            <span>Updated on <span id="delete-update-time">1970-01-01 00:00</span></span>
+                        </div>
+                    </div>
+
+                    <div class="table-scroll-wrapper">
+                        <table>
+                            <thead class="delete-table-head"></thead>
+                            <tbody class="delete-table-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            <div class="update-operation">
+                <div class="table-container update-table-container">
+                    <div class="table-header">
+                        <h3 id="update-table-title">Users Table Data</h3>
+                        <div class="table-info">
+                            <span>Total <span id="update-records-count">0</span> records</span>
+                            <span>Updated on <span id="update-update-time">1970-01-01 00:00</span></span>
+                        </div>
+                    </div>
+
+                    <div class="table-scroll-wrapper">
+                        <table>
+                            <thead class="update-table-head"></thead>
+                            <tbody class="update-table-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
             <div class="query-operation"></div>
             <div class="export-operation"></div>
         </div>
@@ -129,14 +164,76 @@ onMounted(() => {
     const tableContainer = document.querySelector('.table-container')
     const createSection = document.querySelector('.create-operation')
     const insertSection = document.querySelector('.insert-operation')
+    const deleteSection = document.querySelector('.delete-operation')
+    const updateSection = document.querySelector('.update-operation')
     const topBar = document.querySelector('.top-bar')
-    const sections = { table: tableContainer, create: createSection, insert: insertSection }
+    const sections = { table: tableContainer, create: createSection, insert: insertSection, delete: deleteSection, update: updateSection }
 
     // Table elements and fallback data
     const tableElement = tableContainer ? tableContainer.querySelector('table') : null
     const tableHead = tableElement ? tableElement.querySelector('thead') : null
     const tableBody = tableElement ? tableElement.querySelector('tbody') : null
     const tablesListEl = document.querySelector('.tables-list')
+    const deleteTableElement = deleteSection ? deleteSection.querySelector('table') : null
+    const deleteTableHead = deleteTableElement ? deleteTableElement.querySelector('.delete-table-head') : null
+    const deleteTableBody = deleteTableElement ? deleteTableElement.querySelector('.delete-table-body') : null
+    const deleteRecordsCount = document.getElementById('delete-records-count')
+    const deleteTableTitle = document.getElementById('delete-table-title')
+    const updateTableElement = updateSection ? updateSection.querySelector('table') : null
+    const updateTableHead = updateTableElement ? updateTableElement.querySelector('.update-table-head') : null
+    const updateTableBody = updateTableElement ? updateTableElement.querySelector('.update-table-body') : null
+    const updateRecordsCount = document.getElementById('update-records-count')
+    const updateTableTitle = document.getElementById('update-table-title')
+
+    function checkTypeMatches(type, data) {
+        const t = String(type || '').trim().toUpperCase();
+        const makeResult = (valid, normalized = data, message = '') => ({ valid, normalized, message });
+
+        switch (t) {
+            case 'INT': {
+                const s = typeof data === 'number' ? String(data) : String(data ?? '').trim();
+                if (!/^[+-]?\d+$/.test(s)) return makeResult(false, null, 'INT expects an integer without decimals');
+                const n = Number(s);
+                if (!Number.isInteger(n)) return makeResult(false, null, 'INT expects an integer');
+                return makeResult(true, n);
+            }
+
+            case 'CHAR': {
+                const s = String(data ?? '');
+                if (s.length > 32) return makeResult(false, null, 'CHAR length must be <= 32');
+                return makeResult(true, s);
+            }
+
+            case 'VARCHAR': {
+                // Very permissive: accept anything and stringify
+                return makeResult(true, String(data ?? ''));
+            }
+
+            case 'FLOAT': {
+                const s = typeof data === 'number' ? String(data) : String(data ?? '').trim();
+                if (!/^[+-]?\d+(\.\d+)?$/.test(s)) return makeResult(false, null, 'FLOAT expects a numeric value');
+                const n = Number(s);
+                if (!Number.isFinite(n)) return makeResult(false, null, 'FLOAT expects a finite number');
+                // If no decimal part was provided, standardize to two decimals
+                const normalized = s.includes('.') ? n : Number(n.toFixed(2));
+                return makeResult(true, normalized);
+            }
+
+            case 'BOOLEAN': {
+                if (data === true || data === false) return makeResult(true, data);
+                const s = String(data ?? '').trim().toLowerCase();
+                if (s === 'true' || s === '1' || s === 'True') return makeResult(true, true);
+                if (s === 'false' || s === '0' || s === 'False') return makeResult(true, false);
+                return makeResult(false, null, 'BOOLEAN expects true or false');
+            }
+
+            case 'NULL':
+                return makeResult(true, null);
+
+            default:
+                return makeResult(false, null, `Unknown type: ${t}`);
+        }
+    }
 
     // Default table cache from public/DEFAULT_TABLE.json
     let defaultTableCache = null
@@ -160,8 +257,10 @@ onMounted(() => {
 
     // Store current table headers (normalized objects) for insert operation
     let currentTableHeaders = []
+    let currentTableRows = []
+    let currentDisplayHeaders = []
 
-    // Normalize headers into objects: { name, type, ableToBeNULL, primaryKey, defaultValue }
+    // Normalize headers into objects: { name, type, ableToBeNULL, primaryKey, unique }
     function normalizeHeaders(headers) {
         if (!Array.isArray(headers)) return []
         return headers.map((h) => {
@@ -171,7 +270,7 @@ onMounted(() => {
             type: '',
             ableToBeNULL: false,
             primaryKey: false,
-            defaultValue: ''
+            unique: false
             }
         }
         const able = ('ableToBeNULL' in h) ? !!h.ableToBeNULL : (('AbleToBeNULL' in h) ? !!h.AbleToBeNULL : false)
@@ -180,7 +279,7 @@ onMounted(() => {
             type: h.type || '',
             ableToBeNULL: able,
             primaryKey: !!h.primaryKey,
-            defaultValue: (h.defaultValue ?? '')
+            unique: !!h.unique
         }
         })
     }
@@ -220,6 +319,354 @@ onMounted(() => {
         if (countEl) countEl.textContent = Array.isArray(rows) ? rows.length : 0
     }
 
+    function renderDeleteTable(headers, rows) {
+        if (!deleteTableHead || !deleteTableBody) return
+
+        deleteTableHead.innerHTML = ''
+        deleteTableBody.innerHTML = ''
+
+        const headRow = document.createElement('tr')
+        const actionTh = document.createElement('th')
+        actionTh.textContent = 'Delete'
+        headRow.appendChild(actionTh)
+        const indexTh = document.createElement('th')
+        indexTh.textContent = '#'
+        headRow.appendChild(indexTh)
+        headers.forEach((text) => {
+            const th = document.createElement('th')
+            th.textContent = text
+            headRow.appendChild(th)
+        })
+        deleteTableHead.appendChild(headRow)
+
+        rows.forEach((row, idx) => {
+            const tr = document.createElement('tr')
+
+            const actionTd = document.createElement('td')
+            actionTd.className = 'delete-action-cell'
+            const actions = document.createElement('div')
+            actions.className = 'delete-actions'
+            const btn = document.createElement('button')
+            btn.className = 'delete-row-btn'
+            btn.textContent = 'Delete'
+            actions.appendChild(btn)
+            actionTd.appendChild(actions)
+            tr.appendChild(actionTd)
+
+            // Toggle to Cancel/Confirm on click
+            btn.addEventListener('click', () => {
+                actions.innerHTML = ''
+                const cancelBtn = document.createElement('button')
+                cancelBtn.className = 'cancel-delete-btn'
+                cancelBtn.textContent = 'Cancel'
+                const confirmBtn = document.createElement('button')
+                confirmBtn.className = 'confirm-delete-btn'
+                confirmBtn.textContent = 'Confirm'
+                actions.appendChild(cancelBtn)
+                actions.appendChild(confirmBtn)
+
+                cancelBtn.addEventListener('click', () => {
+                    actions.innerHTML = ''
+                    actions.appendChild(btn)
+                })
+
+                confirmBtn.addEventListener('click', () => {
+                    const currentTableEl = document.getElementById('current-table')
+                    const tableName = currentTableEl ? currentTableEl.textContent : ''
+                    if (!tableName) {
+                        alert('未获取到表名，无法生成删除语句')
+                        return
+                    }
+
+                    const pkHeaders = currentTableHeaders.filter(h => h.primaryKey)
+                    if (pkHeaders.length === 0) {
+                        alert('当前表未设置主键，无法生成删除语句')
+                        return
+                    }
+
+                    const rowData = Array.isArray(currentTableRows) ? currentTableRows[idx] : null
+                    if (!rowData) {
+                        alert('未找到该行数据，无法生成删除语句')
+                        return
+                    }
+
+                    const whereClauses = []
+                    for (const h of pkHeaders) {
+                        const colIndex = currentDisplayHeaders.findIndex(n => n === h.name)
+                        if (colIndex < 0) continue
+                        const rawValue = rowData[colIndex]
+                        if (rawValue === undefined || rawValue === null || String(rawValue).trim() === '') {
+                            alert(`主键列 "${h.name}" 的值为空，无法生成删除语句`)
+                            return
+                        }
+                        const t = String(h.type || '').trim().toUpperCase()
+                        let formatted
+                        if (t === 'INT' || t === 'INTEGER') {
+                            formatted = String(rawValue)
+                        } else if (t === 'FLOAT') {
+                            const s = String(rawValue)
+                            const n = parseFloat(s)
+                            formatted = s.includes('.') ? s : n.toFixed(2)
+                        } else {
+                            formatted = `'${String(rawValue).replace(/'/g, "''")}'`
+                        }
+                        whereClauses.push(`${h.name} = ${formatted}`)
+                    }
+
+                    if (whereClauses.length === 0) {
+                        alert('无法定位主键列，未生成删除语句')
+                        return
+                    }
+
+                    const sql = `DELETE FROM ${tableName} WHERE ${whereClauses.join(' AND ')};`
+                    alert('生成的 SQL 语句：\n' + sql)
+                    console.log('Delete SQL:', sql)
+
+                    // 重新渲染
+                    renderTable(currentDisplayHeaders, currentTableRows)
+                    renderDeleteTable(currentDisplayHeaders, currentTableRows)
+
+                    // 恢复为单个删除按钮
+                    actions.innerHTML = ''
+                    actions.appendChild(btn)
+                })
+            })
+
+            const indexTd = document.createElement('td')
+            indexTd.textContent = String(idx + 1)
+            tr.appendChild(indexTd)
+
+            row.forEach((cell) => {
+                const td = document.createElement('td')
+                td.textContent = cell
+                tr.appendChild(td)
+            })
+            deleteTableBody.appendChild(tr)
+        })
+
+        if (deleteRecordsCount) deleteRecordsCount.textContent = Array.isArray(rows) ? rows.length : 0
+    }
+
+    function renderUpdateTable(headers, rows) {
+        if (!updateTableHead || !updateTableBody) return
+
+        updateTableHead.innerHTML = ''
+        updateTableBody.innerHTML = ''
+
+        const headRow = document.createElement('tr')
+        const actionTh = document.createElement('th')
+        actionTh.textContent = 'Update'
+        headRow.appendChild(actionTh)
+        const indexTh = document.createElement('th')
+        indexTh.textContent = '#'
+        headRow.appendChild(indexTh)
+        headers.forEach((text) => {
+            const th = document.createElement('th')
+            th.textContent = text
+            headRow.appendChild(th)
+        })
+        updateTableHead.appendChild(headRow)
+
+        rows.forEach((row, idx) => {
+            const tr = document.createElement('tr')
+
+            const actionTd = document.createElement('td')
+            actionTd.className = 'update-action-cell'
+            const actions = document.createElement('div')
+            actions.className = 'update-actions'
+            const btn = document.createElement('button')
+            btn.className = 'update-row-btn'
+            btn.textContent = 'Update'
+            actions.appendChild(btn)
+            actionTd.appendChild(actions)
+            tr.appendChild(actionTd)
+
+            btn.addEventListener('click', () => {
+                actions.innerHTML = ''
+                const cancelBtn = document.createElement('button')
+                cancelBtn.className = 'cancel-update-btn'
+                cancelBtn.textContent = 'Cancel'
+                const confirmBtn = document.createElement('button')
+                confirmBtn.className = 'confirm-update-btn'
+                confirmBtn.textContent = 'Confirm'
+                actions.appendChild(cancelBtn)
+                actions.appendChild(confirmBtn)
+
+                const originalRow = Array.isArray(currentTableRows) && Array.isArray(currentTableRows[idx])
+                    ? [...currentTableRows[idx]]
+                    : []
+
+                // Annotate header cells temporarily with PK/Unique marks
+                const headerThs = updateTableHead ? Array.from(updateTableHead.querySelectorAll('tr th')).slice(2) : []
+                headerThs.forEach((thEl, i) => {
+                    const colName = Array.isArray(headers) && i < headers.length ? headers[i] : ''
+                    const meta = currentTableHeaders.find(h => h.name === colName)
+                    let label = colName
+                    if (meta && meta.primaryKey) label += '*'
+                    if (meta && meta.unique) label += ' (Unique)'
+                    thEl.textContent = label
+                })
+
+                // Turn data cells into inputs with default values and placeholders
+                const dataCells = Array.from(tr.querySelectorAll('td[data-column]'))
+                dataCells.forEach((td) => {
+                    const originalValue = td.textContent || ''
+                    td.innerHTML = ''
+                    const input = document.createElement('input')
+                    input.type = 'text'
+                    input.className = 'update-value'
+                    const colName = td.getAttribute('data-column') || ''
+                    input.value = originalValue
+                    input.setAttribute('data-column', colName)
+                    const meta = currentTableHeaders.find(h => h.name === colName)
+                    const required = meta ? !meta.ableToBeNULL : false
+                    input.placeholder = required ? '必填' : '可为空'
+                    td.appendChild(input)
+                })
+
+                // Cancel restores original values
+                cancelBtn.addEventListener('click', () => {
+                    renderUpdateTable(currentDisplayHeaders, currentTableRows)
+                })
+
+                // Confirm saves inputs back to currentTableRows and re-renders
+                confirmBtn.addEventListener('click', () => {
+                    const newRow = []
+                    dataCells.forEach((td, i) => {
+                        const input = td.querySelector('.update-value')
+                        const value = input ? input.value : ''
+                        newRow[i] = value
+                    })
+
+                    // Validation: required / PK / type / unique
+                    const missingRequired = []
+                    const missingPK = []
+                    const typeErrors = []
+                    const uniqueErrors = []
+
+                    currentTableHeaders.forEach((h, i) => {
+                        const val = newRow[i] ?? ''
+                        const trimmed = String(val).trim()
+
+                        // Required / PK not null
+                        if (!h.ableToBeNULL && trimmed === '') missingRequired.push(h.name)
+                        if (h.primaryKey && trimmed === '') missingPK.push(h.name)
+
+                        // Type check (skip empty if nullable)
+                        if (trimmed !== '') {
+                            const result = checkTypeMatches(h.type, trimmed)
+                            if (!result.valid) {
+                                typeErrors.push({ column: h.name, type: h.type, value: trimmed, message: result.message })
+                            }
+                        }
+                    })
+
+                    if (missingRequired.length > 0) {
+                        alert(`未填写必填列：${missingRequired.join(', ')}`)
+                        return
+                    }
+                    if (missingPK.length > 0) {
+                        alert(`主键未填写：${missingPK.join(', ')}`)
+                        return
+                    }
+                    if (typeErrors.length > 0) {
+                        const msg = typeErrors.map(e => `列 "${e.column}" (类型: ${e.type})：值 "${e.value}" 不匹配 - ${e.message}`).join('\n')
+                        alert('数据类型验证失败：\n' + msg)
+                        return
+                    }
+
+                    // Unique constraint: compare with other rows (exclude current idx)
+                    const uniqueCols = currentTableHeaders
+                        .map((h, i) => ({ h, i }))
+                        .filter(({ h }) => h.unique)
+                    uniqueCols.forEach(({ h, i }) => {
+                        const val = newRow[i]
+                        const trimmed = String(val ?? '').trim()
+                        if (trimmed === '') return
+                        const dupRowIndex = currentTableRows.findIndex((row, ridx) => ridx !== idx && Array.isArray(row) && row[i] === trimmed)
+                        if (dupRowIndex >= 0) {
+                            uniqueErrors.push({ column: h.name, value: trimmed, row: dupRowIndex + 1 })
+                        }
+                    })
+
+                    if (uniqueErrors.length > 0) {
+                        const msg = uniqueErrors.map(e => `列 "${e.column}" (唯一) 值 "${e.value}" 在第 ${e.row} 行重复`).join('\n')
+                        alert('唯一性约束验证失败：\n' + msg)
+                        return
+                    }
+
+                    // Build SQL UPDATE using PK in WHERE
+                    const currentTableEl = document.getElementById('current-table')
+                    const tableName = currentTableEl ? currentTableEl.textContent : ''
+                    if (!tableName) {
+                        alert('未获取到表名，无法生成更新语句')
+                        return
+                    }
+
+                    const formatValue = (type, value) => {
+                        const t = String(type || '').trim().toUpperCase()
+                        if (t === 'INT' || t === 'INTEGER') return String(value)
+                        if (t === 'FLOAT') {
+                            const s = String(value)
+                            const n = parseFloat(s)
+                            return s.includes('.') ? s : n.toFixed(2)
+                        }
+                        return `'${String(value).replace(/'/g, "''")}'`
+                    }
+
+                    const setClauses = currentTableHeaders.map((h, i) => `${h.name} = ${formatValue(h.type, newRow[i] ?? '')}`)
+
+                    const pkHeaders = currentTableHeaders.filter(h => h.primaryKey)
+                    if (pkHeaders.length === 0) {
+                        alert('当前表未设置主键，无法生成更新语句')
+                        return
+                    }
+
+                    const whereClauses = []
+                    for (const h of pkHeaders) {
+                        const colIndex = currentDisplayHeaders.findIndex(n => n === h.name)
+                        if (colIndex < 0) continue
+                        const rawValue = (originalRow && colIndex < originalRow.length) ? originalRow[colIndex] : ''
+                        if (rawValue === undefined || rawValue === null || String(rawValue).trim() === '') {
+                            alert(`主键列 "${h.name}" 的值为空，无法生成更新语句`)
+                            return
+                        }
+                        whereClauses.push(`${h.name} = ${formatValue(h.type, rawValue)}`)
+                    }
+
+                    if (whereClauses.length === 0) {
+                        alert('无法定位主键列，未生成更新语句')
+                        return
+                    }
+
+                    const sql = `UPDATE ${tableName} SET ${setClauses.join(', ')} WHERE ${whereClauses.join(' AND ')};`
+                    alert('生成的 SQL 语句：\n' + sql)
+                    console.log('Update SQL:', sql)
+
+                    // 前端不更新数据，只重新渲染
+                    renderTable(currentDisplayHeaders, currentTableRows)
+                    renderUpdateTable(currentDisplayHeaders, currentTableRows)
+                })
+            })
+
+            const indexTd = document.createElement('td')
+            indexTd.textContent = String(idx + 1)
+            tr.appendChild(indexTd)
+
+            row.forEach((cell, dataColIdx) => {
+                const td = document.createElement('td')
+                td.textContent = cell
+                // Map data cell to its header name for editing
+                const colName = Array.isArray(headers) && dataColIdx < headers.length ? headers[dataColIdx] : ''
+                td.setAttribute('data-column', String(colName))
+                tr.appendChild(td)
+            })
+            updateTableBody.appendChild(tr)
+        })
+
+        if (updateRecordsCount) updateRecordsCount.textContent = Array.isArray(rows) ? rows.length : 0
+    }
+
     async function loadTableData(tableName) { // 导入表数据
         const candidates = []
         if (tableName) {
@@ -246,23 +693,28 @@ onMounted(() => {
                 const types = Array.isArray(json.type) ? json.type : null
                 const nullables = Array.isArray(json.ableToBeNULL) ? json.ableToBeNULL : (Array.isArray(json.AbleToBeNULL) ? json.AbleToBeNULL : null)
                 const pks = Array.isArray(json.primaryKey) ? json.primaryKey : null
-                const defaults = Array.isArray(json.defaultValue) ? json.defaultValue : null
+                const uniques = Array.isArray(json.unique) ? json.unique : null
 
-                if (Array.isArray(rawHeaders) && rawHeaders.length > 0 && types && nullables && pks && defaults &&
-                    rawHeaders.length === types.length && rawHeaders.length === nullables.length && rawHeaders.length === pks.length && rawHeaders.length === defaults.length) {
+                // Merge parallel arrays when the required ones exist and match in length; unique is optional
+                if (Array.isArray(rawHeaders) && rawHeaders.length > 0 && types && nullables && pks &&
+                    rawHeaders.length === types.length && rawHeaders.length === nullables.length && rawHeaders.length === pks.length) {
                     normalized = rawHeaders.map((name, i) => ({
                         name: name,
                         type: String(types[i] ?? ''),
                         ableToBeNULL: !!nullables[i],
                         primaryKey: !!pks[i],
-                        defaultValue: defaults[i] == null ? '' : String(defaults[i])
+                        unique: (Array.isArray(uniques) && uniques.length === rawHeaders.length) ? !!uniques[i] : false
                     }))
                 } else {
                     normalized = normalizeHeaders(rawHeaders)
                 }
                 currentTableHeaders = normalized
                 const displayHeaders = normalized.map(h => h.name)
-                renderTable(displayHeaders, rows)
+                currentDisplayHeaders = displayHeaders
+                currentTableRows = Array.isArray(rows) ? rows : []
+                renderTable(displayHeaders, currentTableRows)
+                renderDeleteTable(displayHeaders, currentTableRows)
+                renderUpdateTable(displayHeaders, currentTableRows)
                 return
             } catch (e) {
                 // try next candidate
@@ -274,7 +726,11 @@ onMounted(() => {
         const normalized = normalizeHeaders(fallback.headers)
         currentTableHeaders = normalized
         const displayHeaders = normalized.map(h => h.name)
-        renderTable(displayHeaders, fallback.rows)
+        currentDisplayHeaders = displayHeaders
+        currentTableRows = Array.isArray(fallback.rows) ? fallback.rows : []
+        renderTable(displayHeaders, currentTableRows)
+        renderDeleteTable(displayHeaders, currentTableRows)
+        renderUpdateTable(displayHeaders, currentTableRows)
     }
 
     async function loadTablesList() { // 加载左侧导航栏的表列表
@@ -292,30 +748,38 @@ onMounted(() => {
         } catch (e) {
         console.warn('Load TABLES.json failed, using default list', e)
         }
-        renderTablesList(names)
+        // Sort by dictionary order ascending
+        const sorted = Array.isArray(names)
+            ? names.slice().map(n => String(n)).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
+            : []
+        renderTablesList(sorted)
     }
 
-    function renderTablesList(names) { // 动态渲染左侧导航栏的表列表
+    function renderTablesList(names) { // 动态渲染左侧导航栏的表列表（按字典序升序）
         if (!tablesListEl) return
         const header = '<h3>Table List</h3>'
-        const items = names.map((n) => `<div class="table-item"><span>${n}</span></div>`).join('')
+        const sorted = Array.isArray(names)
+            ? names.slice().map(n => String(n)).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
+            : []
+        const items = sorted.map((n) => `<div class="table-item"><span>${n}</span></div>`).join('')
         tablesListEl.innerHTML = header + items
         const countEl = document.getElementById('tables-counts')
-        if (countEl) countEl.textContent = String(names.length)
+        if (countEl) countEl.textContent = String(sorted.length)
         attachTableItemClickHandlers()
     }
 
     function showSection(key) { // 切换右侧内容区显示的部分
         Object.values(sections).forEach((el) => {
-        if (!el) return
+            if (!el) return
             el.style.display = 'none'
         })
         if (key && sections[key]) {
-            sections[key].style.display = key === 'table' ? 'flex' : 'block'
+            const shouldFlex = key === 'table' || key === 'delete' || key === 'update'
+            sections[key].style.display = shouldFlex ? 'flex' : 'block'
         }
 
         if (topBar) {
-            topBar.style.display = key === 'table' ? 'flex' : 'none'
+            topBar.style.display = (key === 'table' || key === 'delete' || key === 'update') ? 'flex' : 'none'
         }
     }
 
@@ -348,10 +812,13 @@ onMounted(() => {
             <span class="checkbox-label">允许 NULL</span>
         </label>
         <label class="checkbox-group">
+            <input type="checkbox" class="unique-key">
+            <span class="checkbox-label">唯一</span>
+        </label>
+        <label class="checkbox-group">
             <input type="checkbox" class="primary-key">
             <span class="checkbox-label">主键</span>
         </label>
-        <input type="text" class="default-value" placeholder="  默认值（可选）" aria-label="默认值">
         <button type="button" class="remove-column">删除</button>
         `
 
@@ -419,6 +886,14 @@ onMounted(() => {
             }
         }
 
+        const columns = rows.map((row) => ({
+            name: ((row.querySelector('.column-name') || {}).value || '').trim(),
+            type: (row.querySelector('.column-type') || {}).value || 'TEXT',
+            allowNull: !!(row.querySelector('.allow-null') || {}).checked,
+            primaryKey: !!(row.querySelector('.primary-key') || {}).checked,
+            unique: !!(row.querySelector('.unique-key') || {}).checked
+        }))
+
         // Check if at least one primary key is selected
         const hasPrimaryKey = columns.some(col => col.primaryKey)
         if (!hasPrimaryKey) {
@@ -433,14 +908,6 @@ onMounted(() => {
             return
         }
 
-        const columns = rows.map((row) => ({
-            name: ((row.querySelector('.column-name') || {}).value || '').trim(),
-            type: (row.querySelector('.column-type') || {}).value || 'TEXT',
-            allowNull: !!(row.querySelector('.allow-null') || {}).checked,
-            primaryKey: !!(row.querySelector('.primary-key') || {}).checked,
-            defaultValue: ((row.querySelector('.default-value') || {}).value || '').trim(),
-        }))
-
         console.log('Create table payload', { tableName, columns })
         alert('提交创建表数据：\n' + JSON.stringify({ tableName, columns }, null, 2))
 
@@ -449,7 +916,7 @@ onMounted(() => {
             sql += `  ${col.name} ${col.type}`
             if (!col.allowNull) sql += ' NOT NULL'
             if (col.primaryKey) sql += ' PRIMARY KEY'
-            if (col.defaultValue) sql += ` DEFAULT '${col.defaultValue}'`
+            if (col.unique) sql += ' UNIQUE'
             if (index < columns.length - 1) sql += ',\n'
         })
         sql += `\n);`
@@ -498,10 +965,26 @@ onMounted(() => {
             initInsertOperation(tableName)
             showSection('insert')
         } else if (action === 'Delete') {
-            alert(`Performing ${action} operation\n(In a real application, this would trigger the corresponding operation interface)`)
+            if (currentTableHeaders.length === 0) {
+                alert('请先选择一个表格查看数据，然后再执行删除操作')
+                return
+            }
+            if (deleteTableTitle) {
+                deleteTableTitle.textContent = `${tableName} Table Data`
+            }
+            renderDeleteTable(currentDisplayHeaders, currentTableRows)
+            showSection('delete')
 
         } else if (action === 'Update') {
-
+            if (currentTableHeaders.length === 0) {
+                alert('请先选择一个表格查看数据，然后再执行更新操作')
+                return
+            }
+            if (updateTableTitle) {
+                updateTableTitle.textContent = `${tableName} Table Data`
+            }
+            renderUpdateTable(currentDisplayHeaders, currentTableRows)
+            showSection('update')
         } else if (action === 'Query') {
 
         } else if (action === 'Export') {
@@ -531,13 +1014,12 @@ onMounted(() => {
             const name = (typeof h === 'string') ? h : (h && h.name ? h.name : '')
             const isPK = (typeof h === 'object') ? !!h.primaryKey : false
             const canNull = (typeof h === 'object') ? !!h.ableToBeNULL : false
-            const defVal = (typeof h === 'object' && h.defaultValue != null) ? String(h.defaultValue) : ''
+            const isUnique = (typeof h === 'object') ? !!h.unique : false
 
             let labelText = name
             if (isPK) labelText += '*'
-            if (canNull) labelText += '(ableToBeNULL)'
-
-            const placeholderText = defVal.trim() !== '' ? `默认值：${defVal}` : '无默认值'
+            if (isUnique) labelText += ' (Unique)'
+            const placeholderText = canNull ? '可为空' : '必填'
 
             return `
                 <div class="insert-field">
@@ -625,13 +1107,13 @@ onMounted(() => {
                 return
             }
 
-            // Validate required fields: ableToBeNULL === false && defaultValue is empty
+            // Validate required fields: ableToBeNULL === false
             const validationErrors = []
             dataRows.forEach((dataRow, idx) => {
                 const missingCols = []
                 currentTableHeaders.forEach(h => {
                     const name = h.name
-                    const required = !h.ableToBeNULL && (!h.defaultValue || String(h.defaultValue).trim() === '')
+                    const required = !h.ableToBeNULL
                     if (!required) return
                     const input = dataRow.querySelector(`.insert-value[data-column="${name}"]`)
                     const value = input ? String(input.value).trim() : ''
@@ -650,7 +1132,7 @@ onMounted(() => {
                 return
             }
 
-            // 主键不能为空（不论有没有默认值）：逐行检查所有 primaryKey 列
+            // 主键不能为空：逐行检查所有 primaryKey 列
             const pkErrors = []
             dataRows.forEach((dataRow, idx) => {
                 const missingPK = []
@@ -695,6 +1177,87 @@ onMounted(() => {
                 return
             }
 
+            // Type validation: check if each value matches its column type
+            const typeErrors = []
+            insertData.forEach((row, rowIdx) => {
+                const errors = []
+                currentTableHeaders.forEach(h => {
+                    const colName = h.name
+                    const colType = h.type
+                    const value = row[colName]
+                    
+                    // Skip empty values for nullable columns
+                    if (!value || value === '') {
+                        return
+                    }
+                    
+                    // Perform type checking
+                    const result = checkTypeMatches(colType, value)
+                    if (!result.valid) {
+                        errors.push({ column: colName, type: colType, value: value, message: result.message })
+                    }
+                })
+                if (errors.length > 0) {
+                    typeErrors.push({ row: rowIdx + 1, errors: errors })
+                }
+            })
+
+            if (typeErrors.length > 0) {
+                const msg = typeErrors.map(e => {
+                    const errDetails = e.errors.map(err => 
+                        `  列 "${err.column}" (类型: ${err.type})：值 "${err.value}" 不匹配 - ${err.message}`
+                    ).join('\n')
+                    return `行 ${e.row} 类型错误：\n${errDetails}`
+                }).join('\n\n')
+                alert('数据类型验证失败：\n\n' + msg)
+                return
+            }
+
+            // Unique constraint validation: check for duplicate values in unique columns
+            const uniqueErrors = []
+            const uniqueColumns = currentTableHeaders.filter(h => h.unique)
+            
+            uniqueColumns.forEach(h => {
+                const colName = h.name
+                const valuesMap = new Map() // value -> array of row indices
+                
+                insertData.forEach((row, rowIdx) => {
+                    const value = row[colName]
+                    // Skip empty values
+                    if (!value || value === '') {
+                        return
+                    }
+                    
+                    if (!valuesMap.has(value)) {
+                        valuesMap.set(value, [])
+                    }
+                    valuesMap.get(value).push(rowIdx + 1)
+                })
+                
+                // Find duplicate values
+                const duplicates = []
+                valuesMap.forEach((rowIndices, value) => {
+                    if (rowIndices.length > 1) {
+                        duplicates.push({ value, rows: rowIndices })
+                    }
+                })
+                
+                if (duplicates.length > 0) {
+                    uniqueErrors.push({ column: colName, duplicates })
+                }
+            })
+
+            if (uniqueErrors.length > 0) {
+                const msg = uniqueErrors.map(e => {
+                    const dupDetails = e.duplicates.map(dup => 
+                        `  值 "${dup.value}" 在行 ${dup.rows.join(', ')} 中重复`
+                    ).join('\n')
+                    return `列 "${e.column}" (唯一约束) 存在重复值：\n${dupDetails}`
+                }).join('\n\n')
+                alert('唯一性约束验证失败：\n\n' + msg)
+                return
+            }
+
             // Generate JSON
             const jsonOutput = {
                 table: tableName,
@@ -706,7 +1269,27 @@ onMounted(() => {
             let sqlStatements = []
             insertData.forEach(row => {
                 const columns = Object.keys(row).filter(col => row[col] !== '')
-                const values = columns.map(col => `'${row[col].replace(/'/g, "''")}'`)
+                const values = columns.map(col => {
+                    const value = row[col]
+                    // Find column metadata to get type
+                    const colMeta = currentTableHeaders.find(h => h.name === col)
+                    const colType = colMeta ? colMeta.type.toUpperCase() : ''
+                    
+                    // Handle INT and FLOAT without quotes
+                    if (colType === 'INT' || colType === 'INTEGER') {
+                        return value
+                    } else if (colType === 'FLOAT') {
+                        const numValue = parseFloat(value)
+                        // If no decimal point in original value, format with .00
+                        if (!value.includes('.')) {
+                            return numValue.toFixed(2)
+                        }
+                        return value
+                    } else {
+                        // For other types, wrap in quotes and escape single quotes
+                        return `'${value.replace(/'/g, "''")}'`
+                    }
+                })
                 
                 if (columns.length > 0) {
                     const sql = `INSERT INTO ${tableName} (${columns.join(', ')}) VALUES (${values.join(', ')});`
@@ -1003,9 +1586,166 @@ body {
 .create-operation,
 .insert-operation,
 .delete-operation,
+.update-operation,
 .query-operation,
 .export-operation {
     display: none;
+}
+
+.delete-operation {
+    width: 100%;
+    flex: 1;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+.update-operation {
+    width: 100%;
+    flex: 1;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+.delete-row-btn {
+    padding: 6px 12px;
+    background-color: #e74c3c;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.85rem;
+    width: 80px;
+    text-align: center;
+}
+
+.delete-row-btn:hover {
+    background-color: #c0392b;
+}
+
+.delete-table-container th:first-child,
+.delete-table-container td:first-child {
+    width: 180px;
+    min-width: 180px;
+    max-width: 180px;
+    text-align: center;
+    vertical-align: middle;
+}
+
+.update-table-container th:first-child,
+.update-table-container td:first-child {
+    width: 180px;
+    min-width: 180px;
+    max-width: 180px;
+    text-align: center;
+    vertical-align: middle;
+}
+
+.delete-actions {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+}
+
+.update-actions {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+}
+
+.cancel-delete-btn {
+    padding: 6px 12px;
+    background-color: #95a5a6;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.85rem;
+    width: 80px;
+}
+
+.cancel-delete-btn:hover {
+    background-color: #7f8c8d;
+}
+
+.confirm-delete-btn {
+    padding: 6px 12px;
+    background-color: #e74c3c;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.85rem;
+    width: 80px;
+}
+
+.confirm-delete-btn:hover {
+    background-color: #c0392b;
+}
+
+.update-row-btn {
+    padding: 6px 12px;
+    background-color: #3498db;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.85rem;
+    width: 80px;
+    text-align: center;
+}
+
+.update-row-btn:hover {
+    background-color: #217dbb;
+}
+
+.cancel-update-btn {
+    padding: 6px 12px;
+    background-color: #95a5a6;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.85rem;
+    width: 80px;
+}
+
+.cancel-update-btn:hover {
+    background-color: #7f8c8d;
+}
+
+.confirm-update-btn {
+    padding: 6px 12px;
+    background-color: #3498db;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.85rem;
+    width: 80px;
+}
+
+.confirm-update-btn:hover {
+    background-color: #217dbb;
+}
+
+.update-value {
+    padding: 8px 10px;
+    border: 1px solid #dfe4ea;
+    border-radius: 6px;
+    font-size: 0.95rem;
+    min-width: 160px;
 }
 
 table {
@@ -1170,7 +1910,8 @@ tbody tr:hover {
 
 .column-row {
     display: grid;
-    grid-template-columns: 1.2fr 1fr auto auto 1fr auto;
+    /* Adjusted to prevent the primary key column from stretching */
+    grid-template-columns: 1.5fr 1fr auto auto auto auto;
     gap: 10px;
     align-items: center;
     background-color: #f8f9fa;
