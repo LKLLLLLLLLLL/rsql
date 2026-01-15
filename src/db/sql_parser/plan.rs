@@ -655,6 +655,17 @@ impl Plan {
                         format!("DROP COLUMN {}", cols)
                     }
                 }
+                // Handle RENAME COLUMN at the correct enum level (see below for new branch)
+                AlterTableOperation::RenameColumn {
+                    old_column_name,
+                    new_column_name,
+                } => {
+                    format!(
+                        "RENAME COLUMN {} TO {}",
+                        old_column_name,
+                        new_column_name
+                    )
+                }
                 AlterTableOperation::AlterColumn { column_name, op } => {
                     match op {
                         sqlparser::ast::AlterColumnOperation::SetDataType { data_type, .. } => {
