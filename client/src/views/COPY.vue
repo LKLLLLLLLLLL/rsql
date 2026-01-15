@@ -15,6 +15,9 @@
             <div class="tables-btn drop">
             <span>Drop Table</span>
             </div>
+            <div class="tables-btn terminal">
+            <span>Open Terminal</span>
+            </div>
         </div>
 
         <div class="tables-list">
@@ -95,6 +98,21 @@
                     </div>
 
                     <button type="button" class="submit-create-btn" id="submit-create-btn">提交创建表</button>
+                </div>
+            </div>
+
+            <div class="terminal-operation">
+                <h1>Terminal</h1>
+                <div class="terminal-panel">
+                    <!-- 代码编写区 -->
+                    <div class="code-area">
+                        <textarea class="codeArea-text"></textarea>
+                    </div>
+                    <button class="codeArea-submit">Submit</button>
+                    <!-- 结果展示区 -->
+                    <div class="codeArea-result">
+                        <!-- 这里将展示终端执行结果 -->
+                    </div>
                 </div>
             </div>
 
@@ -541,8 +559,9 @@ onMounted(() => {
     const insertSection = document.querySelector('.insert-operation')
     const deleteSection = document.querySelector('.delete-operation')
     const updateSection = document.querySelector('.update-operation')
+    const terminalSection = document.querySelector('.terminal-operation')
     const topBar = document.querySelector('.top-bar')
-    const sections = { table: tableContainer, create: createSection, insert: insertSection, delete: deleteSection, update: updateSection }
+    const sections = { table: tableContainer, create: createSection, insert: insertSection, delete: deleteSection, update: updateSection, terminal: terminalSection }
 
     // Table elements and fallback data
     const tableElement = tableContainer ? tableContainer.querySelector('table') : null
@@ -1311,7 +1330,8 @@ onMounted(() => {
         button.addEventListener('click', function () {
         const action = this.classList.contains('create') ? 'Create' : 
             this.classList.contains('drop') ? 'Drop' : 
-            this.classList.contains('rename') ? 'Rename' : 'Unknown'
+            this.classList.contains('rename') ? 'Rename' : 
+            this.classList.contains('terminal') ? 'Terminal' : 'Unknown'
         if (action === 'Create') {
             document.querySelectorAll('.table-item').forEach((el) => {
                 el.classList.remove('active')
@@ -1321,6 +1341,11 @@ onMounted(() => {
 
         } else if (action === 'Rename') {
             
+        } else if (action === 'Terminal') {
+            document.querySelectorAll('.table-item').forEach((el) => {
+                el.classList.remove('active')
+            })
+            showSection('terminal')
         }
         })
     })
@@ -1403,6 +1428,74 @@ body {
 .tables-btn.rename {
     background-color: #3c8dc3;
     color: white;
+}
+
+.tables-btn.terminal {
+    border-bottom: 1px solid #34495e;
+    user-select: none;
+    padding: 15px 20px;
+    cursor: pointer;
+    border-bottom: 1px solid #34495e;
+    font-weight: 600;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background-color: #f08080
+}
+.tables-btn.terminal:hover {
+    border-left: 4px solid #2c3e50;
+}
+
+.terminal-panel {
+    display: flex; 
+    flex-direction: column; 
+    height: 800px; 
+    min-height: 320px; 
+    background: #f8f8f8; 
+    border-radius: 8px; 
+    box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+}
+
+.code-area {
+    flex: 0 0 40%; 
+    position: relative; 
+    padding: 16px; 
+    background: #f5f5f5; 
+    border-bottom: 1px solid #eee;
+}
+
+.codeArea-text {
+    width: 100%; 
+    height: 100%; 
+    resize: none; 
+    font-family: monospace; 
+    font-size: 24px; 
+    border-radius: 4px; 
+    border: 1px solid #ccc; 
+    padding: 8px;
+}
+
+.codeArea-submit {
+    padding: 10px 24px; 
+    background: #4caf50; 
+    color: #fff;
+    border: none; 
+    border-radius: 4px; 
+    cursor: pointer; 
+    font-weight: 600; 
+    font-size: 15px;
+    flex: 0 0 auto;
+    align-self: center;
+    margin: 12px 0;
+    margin-left: auto
+}
+
+.codeArea-result {
+    flex: 1 1 60%; 
+    padding: 16px; 
+    background: #fff; 
+    min-height: 120px;
 }
 
 .tables-list {
@@ -1579,6 +1672,7 @@ body {
 }
 
 .create-operation,
+.terminal-operation,
 .insert-operation,
 .delete-operation,
 .update-operation,
