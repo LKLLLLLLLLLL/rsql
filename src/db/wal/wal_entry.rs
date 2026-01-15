@@ -5,6 +5,7 @@ use std::iter;
 pub enum WALEntry {
     UpdatePage {
         tnx_id: u64,
+        table_id: u64,
         page_id: u64,
         offset: u64,
         len: u64,
@@ -13,11 +14,13 @@ pub enum WALEntry {
     },
     NewPage { // allocate a new page
         tnx_id: u64,
+        table_id: u64,
         page_id: u64, // the page id should always be the biggest one
         data: Vec<u8>,
     },
     DeletePage {
         tnx_id: u64,
+        table_id: u64,
         page_id: u64, // the page id should always be the biggest one
         old_data: Vec<u8>,
     },
@@ -47,9 +50,10 @@ impl WALEntry {
         buf.extend(&0u64.to_le_bytes());
         // 2. operation
         match &self {
-            WALEntry::UpdatePage { tnx_id, page_id, offset, len, old_data, new_data } => {
+            WALEntry::UpdatePage { tnx_id, table_id, page_id, offset, len, old_data, new_data } => {
                 buf.push(0u8); // operation type
                 buf.extend(&tnx_id.to_le_bytes());
+                buf.extend(&table_id.to_le_bytes());
                 buf.extend(&page_id.to_le_bytes());
                 buf.extend(&offset.to_le_bytes());
                 buf.extend(&len.to_le_bytes());
@@ -58,16 +62,18 @@ impl WALEntry {
                 buf.extend(&(new_data.len() as u64).to_le_bytes());
                 buf.extend(new_data);
             },
-            WALEntry::NewPage { tnx_id, page_id, data } => {
+            WALEntry::NewPage { tnx_id, table_id, page_id, data } => {
                 buf.push(1u8); // operation type
                 buf.extend(&tnx_id.to_le_bytes());
+                buf.extend(&table_id.to_le_bytes());
                 buf.extend(&page_id.to_le_bytes());
                 buf.extend(&(data.len() as u64).to_le_bytes());
                 buf.extend(data);
             },
-            WALEntry::DeletePage { tnx_id, page_id, old_data } => {
+            WALEntry::DeletePage { tnx_id, table_id, page_id, old_data } => {
                 buf.push(2u8); // operation type
                 buf.extend(&tnx_id.to_le_bytes());
+                buf.extend(&table_id.to_le_bytes());
                 buf.extend(&page_id.to_le_bytes());
                 buf.extend(&(old_data.len() as u64).to_le_bytes());
                 buf.extend(old_data);
@@ -136,6 +142,10 @@ impl WALEntry {
                     tnx_id_bytes.copy_from_slice(&entry_buf[offset..offset+8]);
                     let tnx_id = u64::from_le_bytes(tnx_id_bytes);
                     offset += 8;
+                    let mut table_id_bytes = [0u8; 8];
+                    table_id_bytes.copy_from_slice(&entry_buf[offset..offset+8]);
+                    let table_id = u64::from_le_bytes(table_id_bytes);
+                    offset += 8;
                     let mut page_id_bytes = [0u8; 8];
                     page_id_bytes.copy_from_slice(&entry_buf[offset..offset+8]);
                     let page_id = u64::from_le_bytes(page_id_bytes);
@@ -159,12 +169,16 @@ impl WALEntry {
                     let new_data_len = u64::from_le_bytes(new_data_len_bytes) as usize;
                     offset += 8;
                     let new_data = entry_buf[offset..offset+new_data_len].to_vec();
-                    WALEntry::UpdatePage { tnx_id, page_id, offset: page_offset, len, old_data, new_data  }
+                    WALEntry::UpdatePage { tnx_id, table_id, page_id, offset: page_offset, len, old_data, new_data  }
                 },
                 1 => { // NewPage
                     let mut tnx_id_bytes = [0u8; 8];
                     tnx_id_bytes.copy_from_slice(&entry_buf[offset..offset+8]);
                     let tnx_id = u64::from_le_bytes(tnx_id_bytes);
+                    offset += 8;
+                    let mut table_id_bytes = [0u8; 8];
+                    table_id_bytes.copy_from_slice(&entry_buf[offset..offset+8]);
+                    let table_id = u64::from_le_bytes(table_id_bytes);
                     offset += 8;
                     let mut page_id_bytes = [0u8; 8];
                     page_id_bytes.copy_from_slice(&entry_buf[offset..offset+8]);
@@ -175,12 +189,16 @@ impl WALEntry {
                     let data_len = u64::from_le_bytes(data_len_bytes) as usize;
                     offset += 8;
                     let data = entry_buf[offset..offset+data_len].to_vec();
-                    WALEntry::NewPage { tnx_id, page_id, data }
+                    WALEntry::NewPage { tnx_id, table_id, page_id, data }
                 },
                 2 => { // DeletePage
                     let mut tnx_id_bytes = [0u8; 8];
                     tnx_id_bytes.copy_from_slice(&entry_buf[offset..offset+8]);
                     let tnx_id = u64::from_le_bytes(tnx_id_bytes);
+                    offset += 8;
+                    let mut table_id_bytes = [0u8; 8];
+                    table_id_bytes.copy_from_slice(&entry_buf[offset..offset+8]);
+                    let table_id = u64::from_le_bytes(table_id_bytes);
                     offset += 8;
                     let mut page_id_bytes = [0u8; 8];
                     page_id_bytes.copy_from_slice(&entry_buf[offset..offset+8]);
@@ -191,27 +209,27 @@ impl WALEntry {
                     let old_data_len = u64::from_le_bytes(old_data_len_bytes) as usize;
                     offset += 8;
                     let old_data = entry_buf[offset..offset+old_data_len].to_vec();
-                    WALEntry::DeletePage { tnx_id, page_id, old_data }
+                    WALEntry::DeletePage { tnx_id, table_id, page_id, old_data }
                 },
                 3 => { // OpenTnx
                     let mut tnx_id_bytes = [0u8; 8];
                     tnx_id_bytes.copy_from_slice(&entry_buf[offset..offset+8]);
                     let tnx_id = u64::from_le_bytes(tnx_id_bytes);
-                    offset += 8;
+                    // offset += 8;
                     WALEntry::OpenTnx { tnx_id }
                 },
                 4 => { // CommitTnx
                     let mut tnx_id_bytes = [0u8; 8];
                     tnx_id_bytes.copy_from_slice(&entry_buf[offset..offset+8]);
                     let tnx_id = u64::from_le_bytes(tnx_id_bytes);
-                    offset += 8;
+                    // offset += 8;
                     WALEntry::CommitTnx { tnx_id }
                 },
                 5 => { // RollbackTnx
                     let mut tnx_id_bytes = [0u8; 8];
                     tnx_id_bytes.copy_from_slice(&entry_buf[offset..offset+8]);
                     let tnx_id = u64::from_le_bytes(tnx_id_bytes);
-                    offset += 8;
+                    // offset += 8;
                     WALEntry::RollbackTnx { tnx_id }
                 },
                 6 => { // Checkpoint

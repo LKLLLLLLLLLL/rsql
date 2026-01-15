@@ -1,6 +1,5 @@
 use std::mem::size_of;
 use std::cmp::Ordering;
-use std::mem;
 
 use super::errors::{RsqlError, RsqlResult};
 
