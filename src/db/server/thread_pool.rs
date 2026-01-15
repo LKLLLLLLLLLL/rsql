@@ -1,11 +1,13 @@
 use rayon::ThreadPoolBuilder;
-// use crate::{config::THREAD_MAXNUM};
-use super::types::{HttpQueryRequest};
-use super::super::executor;
 use num_cpus;
 use tracing::{error};
-use crate::db::errors::{RsqlResult,RsqlError};
 use futures::channel::oneshot;
+
+use crate::{config::THREAD_MAXNUM};
+use crate::db::errors::{RsqlResult,RsqlError};
+use super::types::{HttpQueryRequest};
+use super::super::executor;
+
 pub struct WorkingThreadPool{
     thread_pool: rayon::ThreadPool,
     max_thread_num: usize,
@@ -13,13 +15,22 @@ pub struct WorkingThreadPool{
 
 impl WorkingThreadPool{
     pub fn new() -> Self{
-        let detected = num_cpus::get();
+        if THREAD_MAXNUM == 0 {
+            let detected = num_cpus::get();
+            return Self{
+                thread_pool: ThreadPoolBuilder::new()
+                   .num_threads(detected)
+                   .build()
+                   .unwrap(),
+                max_thread_num: detected,
+            }
+        }
         Self{
             thread_pool: ThreadPoolBuilder::new()
-                .num_threads(detected)
+                .num_threads(THREAD_MAXNUM)
                 .build()
                 .unwrap(),
-            max_thread_num: detected,
+            max_thread_num: THREAD_MAXNUM,
         }
     }
 
