@@ -236,10 +236,7 @@ impl Table {
             return Err(RsqlError::StorageError(format!("Table {id} file is empty, maybe corrupted")));
         };
         let header_page = storage_manager
-            .read_page(0)?
-            .read()
-            .map_err(|_| RsqlError::StorageError("Poisoned RwLock in page cache".to_string()))?
-            .clone();
+            .read_page(0)?;
         // read magic number and version
         let magic = u32::from_le_bytes(header_page.data[0..4].try_into().unwrap());
         if magic != HEADER_MAGIC {
@@ -343,14 +340,11 @@ impl Table {
         // 4. write wal first
         wal.new_page(tnx_id, id, 0, page_data.clone())?;
         // 5. write head to disk
-        let (page_num, header_page) = storage_manager_cell.borrow_mut()
+        let (page_num, mut header_page) = storage_manager_cell.borrow_mut()
             .new_page()?;
         if page_num != 0 {
             panic!("First page of table file should be page 0");
         }
-        let mut header_page = header_page
-            .write()
-            .map_err(|_| RsqlError::StorageError("Poisoned RwLock in page cache".to_string()))?;
         header_page.data = page_data;
         Ok(Table {
             id,

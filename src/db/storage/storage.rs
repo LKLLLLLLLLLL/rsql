@@ -148,39 +148,37 @@ impl StorageManager {
     }
 
     /// deallocate last page
-    pub fn free(&mut self) -> RsqlResult<()> {
+    pub fn free(&mut self) -> RsqlResult<u64> {
         let page_idx = match self.max_page_index() {
-            Some(num) => num + 1,
+            Some(num) => num,
             None => return Err(RsqlError::StorageError("No pages to free".to_string())),
         };
         // 1. delete from cache
         if let Some(_) = self.pages.get(&page_idx) {
-            self.pages.remove(& (page_idx - 1));
+            self.pages.remove(&page_idx);
         }
         // 2. truncate file
-        let new_file_size = (page_idx + 1) * PAGE_SIZE_BYTES as u64;
+        let new_file_size = (page_idx) * PAGE_SIZE_BYTES as u64;
         self.file.set_len(new_file_size)?;
         self.file_page_num = page_idx;
-        Ok(())
+        Ok(page_idx)
     }
 
-    pub fn read_page(&mut self, page_index: u64) -> RsqlResult<Arc<RwLock<Page>>> {
+    pub fn read_page(&mut self, page_index: u64) -> RsqlResult<Page> {
         self.is_page_index_valid(page_index)?;
 
         if let Some(page_arc) = self.pages.get(&page_index) {
-            Ok(Arc::clone(page_arc))
+            let page = page_arc.read().unwrap().clone();
+            Ok(page)
         } else {
             self.file.seek(SeekFrom::Start(page_index * PAGE_SIZE_BYTES as u64))?; // go to the start position of the page with page_index
             let mut buffer = vec![0u8; PAGE_SIZE_BYTES];
             self.file.read_exact(&mut buffer)?;
-            let page = Arc::new(RwLock::new(
-                Page {
-                    data: buffer,
-                    need_flush: false,
-                }
-            ));
-
-            let evicted = self.pages.insert(page_index, Arc::clone(&page)); // insert the page into cache
+            let page = Page {
+                data: buffer,
+                need_flush: false,
+            };
+            let evicted = self.pages.insert(page_index, Arc::new(RwLock::new(page.clone()))); // insert the page into cache
             self.write_back_evicted_page(evicted)?;
             Ok(page)
         }
@@ -196,13 +194,13 @@ impl StorageManager {
         Ok(())
     }
 
-    pub fn new_page(&mut self) -> RsqlResult<(u64, Arc<RwLock<Page>>)> {
+    pub fn new_page(&mut self) -> RsqlResult<(u64, Page)> {
         let new_page_index = match self.max_page_index() {
             Some(max_index) => max_index + 1,
             None => 0,
         };
-        let new_page = Arc::new(RwLock::new(Page::new()));
-        let evicted = self.pages.insert(new_page_index, Arc::clone(&new_page));
+        let new_page = Page::new();
+        let evicted = self.pages.insert(new_page_index, Arc::new(RwLock::new(new_page.clone())));
         self.write_back_evicted_page(evicted)?;
         Ok((new_page_index, new_page))
     }

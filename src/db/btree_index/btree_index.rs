@@ -59,12 +59,11 @@ pub struct BTreeIndex {
 
 impl BTreeIndex {
     pub fn new(
-        new_page: impl FnOnce() -> RsqlResult<(Arc<RwLock<storage::Page>>, u64)>,
+        new_page: impl FnOnce() -> RsqlResult<(storage::Page, u64)>,
         write_page: impl Fn(u64, &storage::Page) -> RsqlResult<()>,
     ) -> RsqlResult<Self> {
-        let (page, page_num) = new_page()?;
+        let (mut page, page_num) = new_page()?;
         let root_node = btree_node::BTreeNode::Leaf { items: vec![], next_page_num: 0 };
-        let mut page = page.write().unwrap();
         root_node.to_page(&mut page)?;
         write_page(page_num, &page)?;
         Ok(Self { root: page_num})
