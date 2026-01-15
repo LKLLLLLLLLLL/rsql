@@ -4,8 +4,8 @@ use tracing::{error};
 use futures::channel::oneshot;
 
 use crate::{config::THREAD_MAXNUM};
-use crate::db::errors::{RsqlResult,RsqlError};
-use super::types::{HttpQueryRequest};
+use crate::db::errors::{ RsqlResult};
+use super::types::{ RayonQueryRequest };
 use super::super::executor;
 
 pub struct WorkingThreadPool{
@@ -34,7 +34,7 @@ impl WorkingThreadPool{
         }
     }
 
-    pub async fn parse_and_execute_query(&self, query: HttpQueryRequest) -> RsqlResult<String> {
+    pub async fn parse_and_execute_query(&self, query: RayonQueryRequest) -> RsqlResult<String> {
         let (sender, receiver) = oneshot::channel::<RsqlResult<String>>();
         self.thread_pool.spawn(move ||{
             if let Err(err) = executor::execute(&query.request_content){
@@ -49,6 +49,7 @@ impl WorkingThreadPool{
             Err(e) => Err(e)
         }
     }
+
     pub fn show_info(&self){
         println!("max thread num: {}", self.max_thread_num);
         println!("thread pool:{:?}",self.thread_pool)
