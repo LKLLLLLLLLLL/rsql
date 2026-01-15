@@ -667,3 +667,27 @@ impl Plan {
         inner(plan, "", true);
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_plan_pretty_print() {
+        let sql = "\
+            select a
+            from t1
+            where c = 1 and b = 1
+        ";
+        let plan = Plan::build_plan(sql).unwrap();
+        Plan::pretty_print(&plan.tnxs[0].stmts[0]);
+        let sql = "\
+            SELECT  *
+            FROM    TA
+            CROSS JOIN TB
+        ";
+        let plan = Plan::build_plan(sql).unwrap();
+        Plan::pretty_print(&plan.tnxs[0].stmts[0]);
+        assert!(false);
+    }
+}
