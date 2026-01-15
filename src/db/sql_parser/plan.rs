@@ -120,7 +120,7 @@ pub enum PlanNode {
         table_name: String,
         columns: Option<Vec<String>>,
         values: Vec<Vec<Expr>>,
-        input: Option<Box<PlanNode>>, // for INSERT ... SELECT subquery
+        input: Option<Box<PlanNode>>, // 用于 INSERT ... SELECT 子查询
     },
     /// Deletes rows produced by the input plan.
     Delete {
@@ -637,7 +637,45 @@ impl Plan {
         fn fmt_alter_op(op: &AlterTableOperation) -> String {
             match op {
                 AlterTableOperation::AddColumn { column_def, .. } => {
-                    format!("ADD COLUMN {} {}", column_def.name, column_def.data_type)
+                    format!(
+                        "ADD COLUMN {} {}",
+                        column_def.name,
+                        column_def.data_type
+                    )
+                }
+                AlterTableOperation::DropColumn { column_names, if_exists, .. } => {
+                    let cols = column_names
+                        .iter()
+                        .map(|c| c.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    if *if_exists {
+                        format!("DROP COLUMN IF EXISTS {}", cols)
+                    } else {
+                        format!("DROP COLUMN {}", cols)
+                    }
+                }
+                AlterTableOperation::AlterColumn { column_name, op } => {
+                    match op {
+                        sqlparser::ast::AlterColumnOperation::SetDataType { data_type, .. } => {
+                            format!(
+                                "ALTER COLUMN {} TYPE {}",
+                                column_name,
+                                data_type
+                            )
+                        }
+                        sqlparser::ast::AlterColumnOperation::SetNotNull => {
+                            format!("ALTER COLUMN {} SET NOT NULL", column_name)
+                        }
+                        sqlparser::ast::AlterColumnOperation::DropNotNull => {
+                            format!("ALTER COLUMN {} DROP NOT NULL", column_name)
+                        }
+                        _ => format!(
+                            "ALTER COLUMN {} {:?}",
+                            column_name,
+                            op
+                        ),
+                    }
                 }
                 _ => format!("{:?}", op),
             }
