@@ -69,7 +69,7 @@ const scrollRef = ref(null)
 const startIndex = ref(0)
 const maxHeightPx = computed(() => `${props.visibleCount * props.rowHeight}px`)
 const totalColumns = computed(() => props.headers.length + props.leadingHeaders.length)
-const buffer = 0
+const buffer = 4
 const safeStart = computed(() => Math.max(startIndex.value - buffer, 0))
 const endIndex = computed(() => Math.min(startIndex.value + props.visibleCount + buffer, props.rows.length))
 const renderStart = computed(() => safeStart.value)

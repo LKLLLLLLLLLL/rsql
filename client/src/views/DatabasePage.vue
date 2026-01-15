@@ -246,12 +246,14 @@
             <div class="export-operation"></div>
         </div>
         </div>
+    <Toast ref="toastRef" :message="toastMessage" :duration="toastDuration" />
     </div>
 </template>
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import VirtualList from './List.vue'
+import Toast from '../components/Toast.vue'
 
 const viewHeaders = ref([])
 const viewRows = ref([])
@@ -262,6 +264,9 @@ const updateEditingRow = ref(null)
 const updateDraft = ref([])
 const deleteRenderKey = ref(0)
 const updateRenderKey = ref(0)
+const toastRef = ref(null)
+const toastMessage = ref('')
+const toastDuration = 2500
 let currentTableHeaders = []
 let currentTableRows = []
 let currentDisplayHeaders = []
@@ -332,6 +337,13 @@ function renderUpdateTable(headers, rows) {
     updateRenderKey.value += 1
 }
 
+function triggerToast(msg) {
+    toastMessage.value = msg
+    if (toastRef.value && typeof toastRef.value.show === 'function') {
+        toastRef.value.show()
+    }
+}
+
 function headerPlaceholder(headerName) {
     const meta = currentTableHeaders.find(h => h.name === headerName)
     if (!meta) return ''
@@ -388,6 +400,8 @@ function confirmDelete(idx) {
     const sql = `DELETE FROM ${tableName} WHERE ${whereClauses.join(' AND ')};`
     alert('生成的 SQL 语句：\n' + sql)
     console.log('Delete SQL:', sql)
+
+    triggerToast('删除成功')
 
     deletePendingRow.value = null
     renderTable(currentDisplayHeaders, currentTableRows)
@@ -508,6 +522,8 @@ function confirmUpdate(idx) {
     const sql = `UPDATE ${tableName} SET ${setClauses.join(', ')} WHERE ${whereClauses.join(' AND ')};`
     alert('生成的 SQL 语句：\n' + sql)
     console.log('Update SQL:', sql)
+
+    triggerToast('更新成功')
 
     updateEditingRow.value = null
     updateDraft.value = []
@@ -898,6 +914,7 @@ onMounted(() => {
         sql += `\n);`
         console.log('Generated SQL:\n', sql)
         alert('生成的 SQL 语句：\n' + sql)
+        triggerToast('创建表成功')
         })
     }
 
@@ -1286,6 +1303,7 @@ onMounted(() => {
 
             console.log('Insert JSON:', jsonOutput)
             console.log('Insert SQL:', sqlOutput)
+            triggerToast('插入数据成功')
         })
     }
 
