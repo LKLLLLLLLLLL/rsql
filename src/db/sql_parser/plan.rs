@@ -477,7 +477,10 @@ impl Plan {
                     left_sub.or(right_sub),
                 ))
             }
-            Expr::Identifier(_) | Expr::Value(_) | Expr::Nested(_) => Ok((expr.clone(), None)),
+            Expr::Identifier(_)
+            | Expr::CompoundIdentifier(_)
+            | Expr::Value(_)
+            | Expr::Nested(_) => Ok((expr.clone(), None)),
             _ => Err(RsqlError::ParserError(format!("Unsupported expression: {}", expr))),
         }
     }
@@ -753,7 +756,293 @@ impl Plan {
                 _ => vec![],
             }
         }
+        inner(plan, "", true);
+    }
+    
+    /// print LogicalPlan in a pretty tree format, with expression field paths
+    pub fn pretty_print_pro(plan: &PlanNode) {
+        fn fmt_exprs(exprs: &[Expr]) -> String {
+            exprs.iter().map(|e| format!("{}", e)).collect::<Vec<_>>().join(", ")
+        }
 
+        fn fmt_alter_op(op: &AlterTableOperation) -> String {
+            match op {
+                AlterTableOperation::AddColumn { column_def, .. } => {
+                    format!(
+                        "ADD COLUMN {} {}",
+                        column_def.name,
+                        column_def.data_type
+                    )
+                }
+                AlterTableOperation::DropColumn { column_names, if_exists, .. } => {
+                    let cols = column_names
+                        .iter()
+                        .map(|c| c.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    if *if_exists {
+                        format!("DROP COLUMN IF EXISTS {}", cols)
+                    } else {
+                        format!("DROP COLUMN {}", cols)
+                    }
+                }
+                AlterTableOperation::RenameColumn {
+                    old_column_name,
+                    new_column_name,
+                } => {
+                    format!(
+                        "RENAME COLUMN {} TO {}",
+                        old_column_name,
+                        new_column_name
+                    )
+                }
+                AlterTableOperation::AlterColumn { column_name, op } => {
+                    match op {
+                        sqlparser::ast::AlterColumnOperation::SetDataType { data_type, .. } => {
+                            format!(
+                                "ALTER COLUMN {} TYPE {}",
+                                column_name,
+                                data_type
+                            )
+                        }
+                        sqlparser::ast::AlterColumnOperation::SetNotNull => {
+                            format!("ALTER COLUMN {} SET NOT NULL", column_name)
+                        }
+                        sqlparser::ast::AlterColumnOperation::DropNotNull => {
+                            format!("ALTER COLUMN {} DROP NOT NULL", column_name)
+                        }
+                        _ => format!(
+                            "ALTER COLUMN {} {:?}",
+                            column_name,
+                            op
+                        ),
+                    }
+                }
+                _ => format!("{:?}", op),
+            }
+        }
+
+        // Print the PlanNode recursively, and for each PlanNode, print its expressions with paths.
+        fn inner(plan: &PlanNode, prefix: &str, is_last: bool) {
+            let branch = if is_last { "└── " } else { "├── " };
+            println!("{}{}{}", prefix, branch, label(plan));
+            // Print expressions with paths for this PlanNode.
+            let expr_prefix = if is_last { format!("{}    ", prefix) } else { format!("{}│   ", prefix) };
+            print_plan_expr_paths(plan, &expr_prefix, "");
+            let new_prefix = expr_prefix.clone();
+            for (i, child) in children(plan).iter().enumerate() {
+                inner(child, &new_prefix, i + 1 == children(plan).len());
+            }
+        }
+
+        // Print all expression fields of a PlanNode, with their field paths.
+        fn print_plan_expr_paths(plan: &PlanNode, prefix: &str, plan_path: &str) {
+            match plan {
+                PlanNode::Filter { predicate, .. } => {
+                    let path = format!("(PlanNode::Filter.predicate)");
+                    print_expr_with_path(predicate, prefix, &path);
+                }
+                PlanNode::Aggregate { group_by, aggr_exprs, .. } => {
+                    for (i, expr) in group_by.iter().enumerate() {
+                        let path = format!("(PlanNode::Aggregate.group_by[{}])", i);
+                        print_expr_with_path(expr, prefix, &path);
+                    }
+                    for (i, expr) in aggr_exprs.iter().enumerate() {
+                        let path = format!("(PlanNode::Aggregate.aggr_exprs[{}])", i);
+                        print_expr_with_path(expr, prefix, &path);
+                    }
+                }
+                PlanNode::Projection { exprs, .. } => {
+                    for (i, expr) in exprs.iter().enumerate() {
+                        let path = format!("(PlanNode::Projection.exprs[{}])", i);
+                        print_expr_with_path(expr, prefix, &path);
+                    }
+                }
+                PlanNode::Join { on: Some(expr), .. } => {
+                    let path = format!("(PlanNode::Join.on)");
+                    print_expr_with_path(expr, prefix, &path);
+                }
+                PlanNode::Insert { values, .. } => {
+                    for (row_idx, row) in values.iter().enumerate() {
+                        for (col_idx, expr) in row.iter().enumerate() {
+                            let path = format!("(PlanNode::Insert.values[{}][{}])", row_idx, col_idx);
+                            print_expr_with_path(expr, prefix, &path);
+                        }
+                    }
+                }
+                PlanNode::Update { assignments, .. } => {
+                    for (i, (_col, expr)) in assignments.iter().enumerate() {
+                        let path = format!("(PlanNode::Update.assignments[{}].1)", i);
+                        print_expr_with_path(expr, prefix, &path);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Print an Expr, recursively, with its path (e.g., "(PlanNode::Filter.predicate)").
+        fn print_expr_with_path(expr: &Expr, prefix: &str, path: &str) {
+            // Print the path and the current expr node kind
+            #[allow(unused_variables)]
+            let _expr_label = expr_kind_label(expr);
+            println!("{}{} -> {}", prefix, path, _expr_label);
+            // For nested expressions, print their fields recursively with extended path
+            match expr {
+                Expr::BinaryOp { left, op, right } => {
+                    let left_path = format!("{}.left", path);
+                    print_expr_with_path(left, prefix, &left_path);
+                    let op_path = format!("{}.op", path);
+                    println!("{}{} -> {:?}", prefix, op_path, op);
+                    let right_path = format!("{}.right", path);
+                    print_expr_with_path(right, prefix, &right_path);
+                }
+                Expr::UnaryOp { op, expr: inner } => {
+                    let op_path = format!("{}.op", path);
+                    println!("{}{} -> {:?}", prefix, op_path, op);
+                    let expr_path = format!("{}.expr", path);
+                    print_expr_with_path(inner, prefix, &expr_path);
+                }
+                Expr::Nested(inner) => {
+                    let inner_path = format!("{}.expr", path);
+                    print_expr_with_path(inner, prefix, &inner_path);
+                }
+                Expr::Identifier(ident) => {
+                    let val_path = format!("{}.ident", path);
+                    println!("{}{} -> {:?}", prefix, val_path, ident);
+                }
+                Expr::Value(val) => {
+                    let val_path = format!("{}.value", path);
+                    println!("{}{} -> {:?}", prefix, val_path, val.value);
+                }
+                Expr::Function(func) => {
+                    let name_path = format!("{}.name", path);
+                    println!("{}{} -> {:?}", prefix, name_path, func.name);
+                    // 不深入遍历函数参数，保持与原始代码一致，避免 FunctionArguments 兼容问题
+                }
+                Expr::Cast { expr: inner, data_type, .. } => {
+                    let expr_path = format!("{}.expr", path);
+                    print_expr_with_path(inner, prefix, &expr_path);
+                    let dt_path = format!("{}.data_type", path);
+                    println!("{}{} -> {:?}", prefix, dt_path, data_type);
+                }
+                Expr::Subquery(_) | Expr::InSubquery { .. } | Expr::Exists { .. } => {
+                    // Do not recurse into subqueries for now
+                }
+                Expr::CompoundIdentifier(idents) => {
+                    let id_path = format!("{}.idents", path);
+                    println!("{}{} -> {:?}", prefix, id_path, idents);
+                }
+                Expr::Between { expr: inner, low, high, .. } => {
+                    let expr_path = format!("{}.expr", path);
+                    print_expr_with_path(inner, prefix, &expr_path);
+                    let low_path = format!("{}.low", path);
+                    print_expr_with_path(low, prefix, &low_path);
+                    let high_path = format!("{}.high", path);
+                    print_expr_with_path(high, prefix, &high_path);
+                }
+                Expr::Case {
+                    operand,
+                    conditions,
+                    else_result,
+                    ..
+                } => {
+                    if let Some(opnd) = operand {
+                        let opnd_path = format!("{}.operand", path);
+                        print_expr_with_path(opnd, prefix, &opnd_path);
+                    }
+                    for (i, cw) in conditions.iter().enumerate() {
+                        let cond_path = format!("{}.conditions[{}].condition", path, i);
+                        print_expr_with_path(&cw.condition, prefix, &cond_path);
+                        let res_path = format!("{}.conditions[{}].result", path, i);
+                        print_expr_with_path(&cw.result, prefix, &res_path);
+                    }
+                    if let Some(else_res) = else_result {
+                        let else_path = format!("{}.else_result", path);
+                        print_expr_with_path(else_res, prefix, &else_path);
+                    }
+                }
+                Expr::IsNull(inner) | Expr::IsNotNull(inner) => {
+                    let inner_path = format!("{}.expr", path);
+                    print_expr_with_path(inner, prefix, &inner_path);
+                }
+                _ => {}
+            }
+        }
+
+        // Return a short label for an Expr node
+        fn expr_kind_label(expr: &Expr) -> String {
+            match expr {
+                Expr::BinaryOp { .. } => format!("Expr::BinaryOp"),
+                Expr::UnaryOp { .. } => format!("Expr::UnaryOp"),
+                Expr::Value(val) => format!("Expr::Value({:?})", val.value),
+                Expr::Identifier(ident) => format!("Expr::Identifier({})", ident),
+                Expr::CompoundIdentifier(idents) => format!("Expr::CompoundIdentifier({:?})", idents),
+                Expr::Nested(_) => format!("Expr::Nested"),
+                Expr::Function(func) => format!("Expr::Function({})", func.name),
+                Expr::Cast { .. } => format!("Expr::Cast"),
+                Expr::Subquery(_) => format!("Expr::Subquery"),
+                Expr::InSubquery { negated, .. } => format!("Expr::InSubquery(negated={})", negated),
+                Expr::Exists { .. } => format!("Expr::Exists"),
+                Expr::Between { .. } => format!("Expr::Between"),
+                Expr::Case { .. } => format!("Expr::Case"),
+                Expr::IsNull(_) => format!("Expr::IsNull"),
+                Expr::IsNotNull(_) => format!("Expr::IsNotNull"),
+                _ => format!("{:?}", expr),
+            }
+        }
+
+        fn label(plan: &PlanNode) -> String {
+            match plan {
+                PlanNode::TableScan { table } => format!("TableScan [{}]", table),
+                PlanNode::Subquery { alias, .. } => format!("Subquery{}", alias.as_ref().map(|a| format!(" AS {}", a)).unwrap_or_default()),
+                PlanNode::Apply { apply_type, .. } => format!("Apply [{:?}]", apply_type),
+                PlanNode::Filter { predicate, .. } => format!("Filter [{}]", predicate),
+                PlanNode::Aggregate { group_by, aggr_exprs, .. } => {
+                    format!("Aggregate [group_by: {}, aggr: {}]", fmt_exprs(group_by), fmt_exprs(aggr_exprs))
+                }
+                PlanNode::Projection { exprs, .. } => format!("Projection [{}]", fmt_exprs(exprs)),
+                PlanNode::Join { join_type, on, .. } => format!("Join [{:?}, on: {}]", join_type, on.as_ref().map_or("None".to_string(), |e| format!("{}", e))),
+                PlanNode::CreateTable { table_name, columns } => format!("CreateTable [{}] cols={}", table_name, columns.iter().map(|c| c.name.to_string()).collect::<Vec<_>>().join(", ")),
+                PlanNode::AlterTable { table_name, operation } => format!("AlterTable [{}] {}", table_name, fmt_alter_op(operation)),
+                PlanNode::DropTable { table_name, if_exists } => {
+                    if *if_exists { format!("DropTable [{}] IF EXISTS", table_name) } else { format!("DropTable [{}]", table_name) }
+                }
+                PlanNode::Insert { table_name, columns, values, input } => {
+                    if let Some(_) = input {
+                        format!("Insert [{}] cols={:?} [Subquery]", table_name, columns)
+                    } else {
+                        let rows_str = values.iter().map(|row: &Vec<Expr>| {
+                            row.iter().map(|e: &Expr| match e {
+                                Expr::Subquery(_) => "[Subquery]".to_string(),
+                                Expr::Value(v) => format!("{:?}", v.value),
+                                _ => format!("{}", e)
+                            }).collect::<Vec<_>>().join(", ")
+                        }).collect::<Vec<_>>().join(" | ");
+                        format!("Insert [{}] cols={:?} rows={}", table_name, columns, rows_str)
+                    }
+                }
+                PlanNode::Delete { .. } => "Delete".to_string(),
+                PlanNode::Update { assignments, .. } => {
+                    format!("Update [assigns={}]", assignments.len())
+                }
+            }
+        }
+
+        fn children(plan: &PlanNode) -> Vec<&PlanNode> {
+            match plan {
+                PlanNode::TableScan { .. } => vec![],
+                PlanNode::Subquery { subquery, .. } => vec![subquery],
+                PlanNode::Apply { input, subquery, .. } => vec![input, subquery],
+                PlanNode::Filter { input, .. } => vec![input],
+                PlanNode::Aggregate { input, .. } => vec![input],
+                PlanNode::Projection { input, .. } => vec![input],
+                PlanNode::Join { left, right, .. } => vec![left, right],
+                PlanNode::Delete { input } => vec![input],
+                PlanNode::Update { input, .. } => vec![input],
+                PlanNode::Insert { input: Some(sub_plan), .. } => vec![sub_plan],
+                _ => vec![],
+            }
+        }
         inner(plan, "", true);
     }
 }
