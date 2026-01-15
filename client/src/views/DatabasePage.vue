@@ -1349,6 +1349,22 @@ onMounted(() => {
         }
         })
     })
+
+    // Terminal Submit Button Handler
+    const submitBtn = document.querySelector('.codeArea-submit')
+    const textArea = document.querySelector('.codeArea-text')
+    if (submitBtn && textArea) {
+        submitBtn.addEventListener('click', () => {
+            let inputText = textArea.value.trim()
+            if (!inputText) {
+                alert('请输入 SQL 语句')
+                return
+            }
+            // 移除所有换行符
+            const sqlStatement = inputText.replace(/\n/g, ' ').replace(/\r/g, ' ')
+            alert('生成的 SQL 语句：\n' + sqlStatement)
+        })
+    }
 })
 </script>
 
@@ -1458,7 +1474,7 @@ body {
 }
 
 .code-area {
-    flex: 0 0 40%; 
+    flex: 0 0 30%; 
     position: relative; 
     padding: 16px; 
     background: #f5f5f5; 
