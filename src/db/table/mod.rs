@@ -11,12 +11,16 @@ use super::data_item::DataItem;
 use super::super::config::MAX_VARCHAR_SIZE;
 use super::wal;
 use super::btree_index;
+use super::utils;
+
+mod allocator;
+use allocator::Allocator;
 
 pub enum ColType {
     Integer,
     Float,
-    Chars(usize),
-    VarChar,
+    Chars(usize), // (fixed size)
+    VarChar(usize), // (max size)
     Bool
 }
 
@@ -65,7 +69,7 @@ impl TableSchema {
                 0 => ColType::Integer,
                 1 => ColType::Float,
                 2 => ColType::Chars(extra as usize),
-                3 => ColType::VarChar,
+                3 => ColType::VarChar(extra as usize),
                 4 => ColType::Bool,
                 _ => return Err(RsqlError::StorageError("Invalid column type".to_string())),
             };
@@ -102,9 +106,9 @@ impl TableSchema {
                     buf.push(2u8);
                     buf.extend_from_slice(&(size as u64).to_le_bytes());
                 }
-                ColType::VarChar => {
+                ColType::VarChar(size) => {
                     buf.push(3u8);
-                    buf.extend_from_slice(&0u64.to_le_bytes());
+                    buf.extend_from_slice(&(size as u64).to_le_bytes());
                 }
                 ColType::Bool => {
                     buf.push(4u8);
@@ -167,11 +171,11 @@ impl TableSchema {
                     _ => return Err(RsqlError::InvalidInput(
                         format!("Expected Chars({}) for column {}, found different type", size, col.name))),
                 },
-                ColType::VarChar => match &data[i] {
+                ColType::VarChar(size) => match &data[i] {
                     DataItem::VarChar{ head: _, value } => {
-                        if value.len() > MAX_VARCHAR_SIZE {
+                        if value.len() > size {
                             return Err(RsqlError::InvalidInput(
-                                format!("Value length {} exceeds max varchar size {} for column {}", value.len(), MAX_VARCHAR_SIZE, col.name)));
+                                format!("Value length {} exceeds max varchar size {} for column {}", value.len(), size, col.name)));
                         }
                     },
                     _ => return Err(RsqlError::InvalidInput(
@@ -191,11 +195,22 @@ impl TableSchema {
         for col in &columns {
             if col.index {
                 match col.data_type {
-                    ColType::VarChar => {
+                    ColType::VarChar(_) => {
                         panic!("VarChar column {} cannot be indexed", col.name);
                     },
                     _ => {},
                 }
+            }
+        }
+        // check if varchar length exceeds max
+        for col in &columns {
+            match col.data_type {
+                ColType::VarChar(size) => {
+                    if size > MAX_VARCHAR_SIZE {
+                        panic!("VarChar column {} size {} exceeds max {}", col.name, size, MAX_VARCHAR_SIZE);
+                    }
+                },
+                _ => {},
             }
         }
         Self { columns }
@@ -208,6 +223,7 @@ impl TableSchema {
         sizes
     }
 }
+
 
 const HEADER_MAGIC: u32 = 0x4c515352; // 'RSQL' in little endian hex
 
@@ -224,10 +240,12 @@ fn get_table_guard() -> &'static Mutex<HashSet<u64>> {
 /// - version: 4 bytes
 /// - indexes count: 8 bytes
 /// - each index [column_name: 64bytes][root_page: 8bytes]
+/// - allocator metadata: rest of the page
 pub struct Table {
     id: u64,
     schema: TableSchema,
     indexes: HashMap<String, btree_index::BTreeIndex>, // column name -> index
+    allocator: Allocator,
 
     storage_manager: storage::StorageManager,
     wal: Arc<wal::WAL>,
@@ -289,16 +307,19 @@ impl Table {
         if indexes.len() != schema.columns.iter().filter(|col| col.index).count() {
             panic!("Incompatible index count between schema and table file {}", path);
         }
+        // consttruct allocator
+        let allocator = Allocator::from(&header_page, offset as u64)?;
         Ok(Table {
             id,
             schema,
             storage_manager,
             wal,
             indexes,
+            allocator,
         })
     }
     /// Create a new table with given schema
-    pub fn create(id: u64, schema: TableSchema, tnx_id: u64) -> RsqlResult<Self> {
+    pub fn create(id: u64, schema: TableSchema, tnx_id: u64) -> RsqlResult<Self> { 
         // check if table already opened
         let guard = get_table_guard();
         let mut guard = guard.lock().unwrap();
@@ -360,8 +381,20 @@ impl Table {
             page_data[offset..offset+8].copy_from_slice(&btree_index.root_page_num().to_le_bytes());
             offset += 8;
         }
+        // 3. construct allocator
+        // calculate entry size
+        let mut entry_size = 0u64;
+        for col in &schema.columns {
+            entry_size += DataItem::cal_size_from_coltype(&col.data_type) as u64;
+        }
+        let allocator = Allocator::create(entry_size, offset as u64);
+        let allocator_bytes = allocator.to_bytes();
+        offset += allocator_bytes.len();
+        page_data[offset - allocator_bytes.len()..offset]
+            .copy_from_slice(&allocator_bytes);
         // 4. write wal first
         wal.new_page(tnx_id, id, 0, page_data.clone())?;
+        wal.flush()?;
         // 5. write head to disk
         let (page_num, mut header_page) = storage_manager_cell.borrow_mut()
             .new_page()?;
@@ -375,6 +408,7 @@ impl Table {
             storage_manager: storage_manager_cell.into_inner(),
             wal,
             indexes,
+            allocator,
         })
     }
     /// Drop the table
@@ -391,6 +425,7 @@ impl Table {
                 page_idx, 
                 page.data.clone())?;
         }
+        self.wal.flush()?;
         // 2. truncate the file
         for page_idx in (0..=page_max_idx).rev() {
             let freed_page = self.storage_manager.free()?;
@@ -460,6 +495,8 @@ impl Table {
         };
         Ok(Some(row))
     }
+    /// Get rows by range on an indexed column
+    /// returns entry in [start, end]
     pub fn get_rows_by_range_indexed_col(
         &self,
         col_name: &str,
@@ -525,10 +562,13 @@ impl Table {
         });
         Ok(iter)
     }
-    pub fn get_indexed_col(&self) -> Vec<String> {
-        self.indexes.keys().cloned().collect()
-    }
     pub fn get_schema(&self) -> &TableSchema {
         &self.schema
     }
+    // pub fn insert_row(&mut self, data: Vec<DataItem>, tnx_id: u64) -> RsqlResult<()> {
+    //     // check if data satisfies schema
+    //     self.schema.satisfy(&data)?;
+    //     // write data to a new data page
+        
+    // }
 }

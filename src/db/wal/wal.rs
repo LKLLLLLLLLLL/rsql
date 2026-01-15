@@ -303,7 +303,7 @@ impl WAL {
         Ok(new_length > MAX_WAL_SIZE)
     }
 
-    fn flush(&self) -> RsqlResult<()> {
+    pub fn flush(&self) -> RsqlResult<()> {
         check_recovered();
         let mut log_file = self.log_file.lock().unwrap();
         log_file.flush()?;

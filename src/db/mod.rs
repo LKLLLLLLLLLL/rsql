@@ -7,3 +7,4 @@ mod errors;
 mod sql_parser;
 mod storage;
 mod table;
+mod utils;

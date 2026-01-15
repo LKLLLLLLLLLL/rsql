@@ -1,3 +1,4 @@
+use core::panic;
 use std::mem::size_of;
 use std::cmp::Ordering;
 
@@ -44,7 +45,7 @@ impl DataItem {
             table::ColType::Integer => 1 + 8,
             table::ColType::Float => 1 + 8,
             table::ColType::Chars(len) => 1 + *len as usize,
-            table::ColType::VarChar => 1 + size_of::<VarCharHead>(),
+            table::ColType::VarChar(_) => 1 + size_of::<VarCharHead>(),
             table::ColType::Bool => 1 + 1,
         }
     }
@@ -260,7 +261,7 @@ impl PartialOrd for DataItem {
             (DataItem::Chars{..} | DataItem::NullChars{..}, DataItem::Chars{..} | DataItem::NullChars{..}) => true,
             (DataItem::VarChar{..} | DataItem::NullVarChar, DataItem::VarChar{..} | DataItem::NullVarChar) => true,
             (DataItem::Bool(_) | DataItem::NullBool, DataItem::Bool(_) | DataItem::NullBool) => true,
-            _ => false,
+            _ => panic!("Comparing different data item types: {:?} vs {:?}", self, other),
         };
 
         if !same_group {
