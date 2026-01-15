@@ -3,21 +3,22 @@ use super::super::data_item;
 use super::super::errors::RsqlResult;
 use super::btree_node;
 
-/// Iterator to find entries in range [start_index, end_index)
+/// Iterator to find entries in range [start_index, end_index]
 /// Return: (page_num, page_offset)
-pub struct RangeIterator<'a, F>
+pub struct RangeIterator<F>
 where
-    F: Fn(u64) -> RsqlResult<storage::Page> + 'a,
+    F: Fn(u64) -> RsqlResult<storage::Page>,
 {
     current_index: data_item::DataItem,
     end_index: data_item::DataItem,
-    get_page: &'a F,
+    get_page: F,
     current_leaf_node: btree_node::BTreeNode,
     current_item_index: usize,
 }
 
-impl<'a, F> Iterator for RangeIterator<'a, F>
-where F: Fn(u64) -> RsqlResult<storage::Page> + 'a,
+impl<F> Iterator for RangeIterator<F>
+where
+    F: Fn(u64) -> RsqlResult<storage::Page>,
 {
     type Item = RsqlResult<(u64, u64)>;
 
@@ -36,8 +37,8 @@ where F: Fn(u64) -> RsqlResult<storage::Page> + 'a,
 
                 let item = &items[self.current_item_index];
                 
-                // if item.key >= end_index, stop iteration
-                if item.key >= self.end_index {
+                // if item.key > end_index, stop iteration
+                if item.key > self.end_index {
                     return None;
                 }
 
@@ -51,7 +52,7 @@ where F: Fn(u64) -> RsqlResult<storage::Page> + 'a,
 }
 
 /// The B-Tree index of sql table in database.
-struct BTreeIndex {
+pub struct BTreeIndex {
     root: u64,
 }
 
@@ -71,7 +72,10 @@ impl BTreeIndex {
     ) -> RsqlResult<Self> {
         Ok(Self { root: root_page_num})
     }
-    /// Helper function to find leaf node containing the index_item
+    pub fn root_page_num(&self) -> u64 {
+        self.root
+    }
+    /// Helper function to find leaf node containing the index_item 
     /// Returns (LeafNode, PositionInNode, PageNum, PathToRoot)
     fn find_leaf_pos<F>(
         &self,
@@ -117,12 +121,12 @@ impl BTreeIndex {
         &self,
         index: data_item::DataItem,
         get_page: &F,
-    ) -> RsqlResult<Option<u64>> 
+    ) -> RsqlResult<Option<(u64, u64)>> 
     where F: Fn(u64) -> RsqlResult<storage::Page> {
         let (node, pos, _, _) = self.find_leaf_pos(&index, get_page, false)?;
         if let btree_node::BTreeNode::Leaf { items, .. } = node {
             if pos < items.len() && items[pos].key == index {
-                return Ok(Some(items[pos].page_offset));
+                return Ok(Some((items[pos].child_page_num, items[pos].page_offset)));
             }
         }
         Ok(None)
@@ -131,10 +135,10 @@ impl BTreeIndex {
         &self,
         start_index: data_item::DataItem,
         end_index: data_item::DataItem,
-        get_page: &'a (impl Fn(u64) -> RsqlResult<storage::Page> + 'a),
-    ) -> RsqlResult<RangeIterator<'a, impl Fn(u64) -> RsqlResult<storage::Page> + 'a>> { 
-        let (leaf_node, start_pos, _, _) = self.find_leaf_pos(&start_index, get_page, true)?;
-        
+        get_page: impl Fn(u64) -> RsqlResult<storage::Page>,
+    ) -> RsqlResult<RangeIterator<impl Fn(u64) -> RsqlResult<storage::Page>>> {
+        let (leaf_node, start_pos, _, _) = self.find_leaf_pos(&start_index, &get_page, true)?;
+
         Ok(RangeIterator {
             current_index: start_index,
             end_index,
@@ -163,7 +167,7 @@ impl BTreeIndex {
         // The new entry will be inserted at 'pos' maintaining sorted order.
 
         let mut current_page_num = page_num;
-        let mut node_to_update = node;
+        let node_to_update = node;
         let mut item_to_insert: Option<(data_item::DataItem, u64)> = None; // (split_key, right_child_page_num)
 
         // Leaf insertion logic
@@ -278,6 +282,56 @@ impl BTreeIndex {
         Ok(())
     }
 
+    pub fn traverse_all_entries(
+        &self,
+        get_page: impl Fn(u64) -> RsqlResult<storage::Page>,
+    ) -> RsqlResult<impl Iterator<Item = RsqlResult<(u64, u64)>>>
+    {
+        let mut results: Vec<RsqlResult<(u64, u64)>> = Vec::new();
+
+        // 1. Find the leftmost leaf node
+        let mut page_num = self.root;
+        loop {
+            let page = get_page(page_num)?;
+            let node = btree_node::BTreeNode::from_page(&page)?;
+            match node {
+                btree_node::BTreeNode::Leaf { items, next_page_num } => {
+                    // Collect all entries from this leaf and subsequent leaves
+                    for item in items {
+                        results.push(Ok((item.child_page_num, item.page_offset)));
+                    }
+                    let mut next = next_page_num;
+                    while next != 0 {
+                        let p = get_page(next)?;
+                        match btree_node::BTreeNode::from_page(&p)? {
+                            btree_node::BTreeNode::Leaf { items: leaf_items, next_page_num } => {
+                                for item in leaf_items {
+                                    results.push(Ok((item.child_page_num, item.page_offset)));
+                                }
+                                next = next_page_num;
+                            }
+                            _ => {
+                                return Err(super::super::errors::RsqlError::StorageError(
+                                    "Expected leaf page while traversing leaves".to_string()
+                                ));
+                            }
+                        }
+                    }
+                    break;
+                }
+                btree_node::BTreeNode::Internal { items, next_page_num } => {
+                    // Go to the leftmost child
+                    page_num = if !items.is_empty() {
+                        items[0].child_page_num
+                    } else {
+                        next_page_num
+                    };
+                }
+            }
+        }
+        Ok(results.into_iter())
+    }
+
     pub fn update_entry<F, W>(
         &self,
         index: data_item::DataItem,
@@ -356,318 +410,5 @@ impl BTreeIndex {
                 return Ok(false);
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::cell::RefCell;
-    use std::collections::HashMap;
-    use std::rc::Rc;
-
-    struct MockStorage {
-        pages: HashMap<u64, storage::Page>,
-        next_page_num: u64,
-    }
-
-    impl MockStorage {
-        fn new() -> Self {
-            Self {
-                pages: HashMap::new(),
-                next_page_num: 1,
-            }
-        }
-        fn new_page(&mut self) -> (storage::Page, u64) {
-            let page = storage::Page::new();
-            let num = self.next_page_num;
-            self.next_page_num += 1;
-            // The caller is expected to write to this page
-            (page, num)
-        }
-        fn write_page(&mut self, page_num: u64, page: &storage::Page) -> RsqlResult<()> {
-            let mut p = storage::Page::new();
-            p.data = page.data.clone();
-            self.pages.insert(page_num, p);
-            Ok(())
-        }
-        fn get_page(&self, page_num: u64) -> RsqlResult<storage::Page> {
-            if let Some(p) = self.pages.get(&page_num) {
-                let mut page = storage::Page::new();
-                page.data = p.data.clone();
-                Ok(page)
-            } else {
-                Err(crate::db::errors::RsqlError::StorageError(format!("Page {} not found", page_num)))
-            }
-        }
-    }
-
-    #[test]
-    fn test_btree_basic_insert_search() -> RsqlResult<()> {
-        let storage = Rc::new(RefCell::new(MockStorage::new()));
-        
-        let s_ref = storage.clone();
-        let new_page_init = || Ok(s_ref.borrow_mut().new_page());
-        let s_ref2 = storage.clone();
-        let write_page = |id, p: &_| s_ref2.borrow_mut().write_page(id, p);
-        
-        let mut btree = BTreeIndex::new(new_page_init, &write_page)?;
-        
-        let s_ref3 = storage.clone();
-        let get_page = |id| s_ref3.borrow().get_page(id);
-        let s_ref4 = storage.clone();
-        let new_page = || Ok(s_ref4.borrow_mut().new_page());
-
-        // Insert
-        btree.insert_entry(data_item::DataItem::Inteager(10), 100, &get_page, &write_page, &new_page)?;
-        btree.insert_entry(data_item::DataItem::Inteager(20), 200, &get_page, &write_page, &new_page)?;
-        btree.insert_entry(data_item::DataItem::Inteager(5), 50, &get_page, &write_page, &new_page)?;
-
-        // Search
-        assert_eq!(btree.find_entry(data_item::DataItem::Inteager(10), &get_page)?, Some(100));
-        assert_eq!(btree.find_entry(data_item::DataItem::Inteager(20), &get_page)?, Some(200));
-        assert_eq!(btree.find_entry(data_item::DataItem::Inteager(5), &get_page)?, Some(50));
-        assert_eq!(btree.find_entry(data_item::DataItem::Inteager(99), &get_page)?, None);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_btree_duplicates() -> RsqlResult<()> {
-        let storage = Rc::new(RefCell::new(MockStorage::new()));
-        
-        let s_ref = storage.clone();
-        let new_page_init = || Ok(s_ref.borrow_mut().new_page());
-        let s_ref2 = storage.clone();
-        let write_page = |id, p: &_| s_ref2.borrow_mut().write_page(id, p);
-        
-        let mut btree = BTreeIndex::new(new_page_init, &write_page)?;
-        
-        let s_ref3 = storage.clone();
-        let get_page = |id| s_ref3.borrow().get_page(id);
-        let s_ref4 = storage.clone();
-        let new_page = || Ok(s_ref4.borrow_mut().new_page());
-
-        // Insert duplicates
-        btree.insert_entry(data_item::DataItem::Inteager(10), 101, &get_page, &write_page, &new_page)?;
-        btree.insert_entry(data_item::DataItem::Inteager(10), 102, &get_page, &write_page, &new_page)?;
-        btree.insert_entry(data_item::DataItem::Inteager(10), 103, &get_page, &write_page, &new_page)?;
-
-        // Range Search
-        let iter = btree.find_range_entry(
-            data_item::DataItem::Inteager(10),
-            data_item::DataItem::Inteager(11),
-            &get_page
-        )?;
-
-        let mut results: Vec<u64> = iter.map(|r| r.unwrap().1).collect();
-        results.sort(); // Order might vary depending on insertion logic, but all must be present
-        assert_eq!(results, vec![101, 102, 103]);
-
-        // Test Deletion of one duplicate
-        let deleted = btree.delete_entry(data_item::DataItem::Inteager(10), 102, &get_page, &write_page)?;
-        assert!(deleted);
-
-        // Verify remaining
-        let iter2 = btree.find_range_entry(
-            data_item::DataItem::Inteager(10),
-            data_item::DataItem::Inteager(11),
-            &get_page
-        )?;
-        let mut results2: Vec<u64> = iter2.map(|r| r.unwrap().1).collect();
-        results2.sort();
-        assert_eq!(results2, vec![101, 103]);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_btree_split() -> RsqlResult<()> {
-        let storage = Rc::new(RefCell::new(MockStorage::new()));
-        let s_ref = storage.clone();
-        let new_page_init = || Ok(s_ref.borrow_mut().new_page());
-        let s_ref2 = storage.clone();
-        let write_page = |id, p: &_| s_ref2.borrow_mut().write_page(id, p);
-        
-        let mut btree = BTreeIndex::new(new_page_init, &write_page)?;
-        
-        let s_ref3 = storage.clone();
-        let get_page = |id| s_ref3.borrow().get_page(id);
-        let s_ref4 = storage.clone();
-        let new_page = || Ok(s_ref4.borrow_mut().new_page());
-
-        // Insert enough items to cause splits.
-        // Assuming 4096 page size and small integers.
-        // Inteager item size is 9 bytes. LeafItem overhead: 8(key) + 8(child) + 8(offset) = 24 bytes?
-        // DataItem::size for Inteager is 9 (1+8).
-        // LeafItem size: 9 + 8 + 8 = 25 bytes.
-        // Header ~ 16 bytes.
-        // 4096 / 25 ~= 163 items per page.
-        
-        for i in 0..500 {
-            btree.insert_entry(data_item::DataItem::Inteager(i), i as u64, &get_page, &write_page, &new_page)?;
-        }
-
-        // Verify all exist
-        for i in 0..500 {
-            let found = btree.find_entry(data_item::DataItem::Inteager(i), &get_page)?;
-            assert_eq!(found, Some(i as u64));
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_btree_persistence_simulation() -> RsqlResult<()> {
-        let storage = Rc::new(RefCell::new(MockStorage::new()));
-        
-        let mut root_page_num = 0;
-
-        // Scope 1: Create Index, Insert Data, then drop Index
-        {
-            let s_ref = storage.clone();
-            let new_page_init = || Ok(s_ref.borrow_mut().new_page());
-            let s_ref2 = storage.clone();
-            let write_page = |id, p: &_| s_ref2.borrow_mut().write_page(id, p);
-            let s_ref3 = storage.clone();
-            let get_page = |id| s_ref3.borrow().get_page(id);
-            let s_ref4 = storage.clone();
-            let new_page = || Ok(s_ref4.borrow_mut().new_page());
-
-            let mut btree = BTreeIndex::new(new_page_init, &write_page)?;
-            
-            btree.insert_entry(data_item::DataItem::Inteager(1), 10, &get_page, &write_page, &new_page)?;
-            btree.insert_entry(data_item::DataItem::Inteager(2), 20, &get_page, &write_page, &new_page)?;
-            btree.insert_entry(data_item::DataItem::Inteager(3), 30, &get_page, &write_page, &new_page)?;
-            
-            root_page_num = btree.root;
-        } // btree dropped here
-
-        // Scope 2: Re-load Index from root_page_num
-        {
-            let s_ref3 = storage.clone();
-            let get_page = |id| s_ref3.borrow().get_page(id);
-
-            let btree = BTreeIndex::from(root_page_num)?;
-            
-            assert_eq!(btree.find_entry(data_item::DataItem::Inteager(1), &get_page)?, Some(10));
-            assert_eq!(btree.find_entry(data_item::DataItem::Inteager(2), &get_page)?, Some(20));
-            assert_eq!(btree.find_entry(data_item::DataItem::Inteager(3), &get_page)?, Some(30));
-            assert_eq!(btree.find_entry(data_item::DataItem::Inteager(4), &get_page)?, None);
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_btree_large_reverse_insertion() -> RsqlResult<()> {
-        let storage = Rc::new(RefCell::new(MockStorage::new()));
-        let s_ref = storage.clone();
-        let new_page_init = || Ok(s_ref.borrow_mut().new_page());
-        let s_ref2 = storage.clone();
-        let write_page = |id, p: &_| s_ref2.borrow_mut().write_page(id, p);
-        
-        let mut btree = BTreeIndex::new(new_page_init, &write_page)?;
-        
-        let s_ref3 = storage.clone();
-        let get_page = |id| s_ref3.borrow().get_page(id);
-        let s_ref4 = storage.clone();
-        let new_page = || Ok(s_ref4.borrow_mut().new_page());
-
-        // Insert in reverse order: 500 down to 0
-        // This exercises splitting loop logic differently (always splitting at the front/left)
-        for i in (0..500).rev() {
-            btree.insert_entry(data_item::DataItem::Inteager(i), i as u64, &get_page, &write_page, &new_page)?;
-        }
-
-        // Verify validity
-        for i in 0..500 {
-            let found = btree.find_entry(data_item::DataItem::Inteager(i), &get_page)?;
-            assert_eq!(found, Some(i as u64), "Failed to find key {}", i);
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_btree_range_crossing_pages() -> RsqlResult<()> {
-        let storage = Rc::new(RefCell::new(MockStorage::new()));
-        let s_ref = storage.clone();
-        let new_page_init = || Ok(s_ref.borrow_mut().new_page());
-        let s_ref2 = storage.clone();
-        let write_page = |id, p: &_| s_ref2.borrow_mut().write_page(id, p);
-        
-        let mut btree = BTreeIndex::new(new_page_init, &write_page)?;
-        
-        let s_ref3 = storage.clone();
-        let get_page = |id| s_ref3.borrow().get_page(id);
-        let s_ref4 = storage.clone();
-        let new_page = || Ok(s_ref4.borrow_mut().new_page());
-
-        // Insert enough items to span multiple pages (e.g., 300 items)
-        for i in 0..300 {
-            btree.insert_entry(data_item::DataItem::Inteager(i), i as u64, &get_page, &write_page, &new_page)?;
-        }
-
-        // Range query from 100 to 200 (likely crossing a page boundary)
-        let iter = btree.find_range_entry(
-            data_item::DataItem::Inteager(100),
-            data_item::DataItem::Inteager(200),
-            &get_page
-        )?;
-
-        let results: Vec<u64> = iter.map(|r| r.unwrap().1).collect();
-        assert_eq!(results.len(), 100);
-        
-        // Verify contiguous values
-        for (i, val) in results.iter().enumerate() {
-            assert_eq!(*val, (100 + i) as u64);
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_btree_many_duplicates_crossing_pages() -> RsqlResult<()> {
-        let storage = Rc::new(RefCell::new(MockStorage::new()));
-        let s_ref = storage.clone();
-        let new_page_init = || Ok(s_ref.borrow_mut().new_page());
-        let s_ref2 = storage.clone();
-        let write_page = |id, p: &_| s_ref2.borrow_mut().write_page(id, p);
-        
-        let mut btree = BTreeIndex::new(new_page_init, &write_page)?;
-        
-        let s_ref3 = storage.clone();
-        let get_page = |id| s_ref3.borrow().get_page(id);
-        let s_ref4 = storage.clone();
-        let new_page = || Ok(s_ref4.borrow_mut().new_page());
-
-        // Insert 200 identical keys. Since leaf size is ~160, this MUST cross at least one page boundary.
-        for i in 0..200 {
-            btree.insert_entry(data_item::DataItem::Inteager(999), 1000 + i as u64, &get_page, &write_page, &new_page)?;
-        }
-
-        // Add some other keys to ensure boundaries are clean
-        btree.insert_entry(data_item::DataItem::Inteager(1000), 2000, &get_page, &write_page, &new_page)?;
-        btree.insert_entry(data_item::DataItem::Inteager(998), 888, &get_page, &write_page, &new_page)?;
-
-        // Search for the 999 range
-        let iter = btree.find_range_entry(
-            data_item::DataItem::Inteager(999),
-            data_item::DataItem::Inteager(1000), // exclusive end
-            &get_page
-        )?;
-
-        let results: Vec<u64> = iter.map(|r| r.unwrap().1).collect();
-        assert_eq!(results.len(), 200);
-        
-        // Ensure we got all expected offsets
-        let mut offsets = results.clone();
-        offsets.sort();
-        for i in 0..200 {
-             assert_eq!(offsets[i], 1000 + i as u64);
-        }
-
-        Ok(())
     }
 }

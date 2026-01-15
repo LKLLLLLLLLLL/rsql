@@ -20,6 +20,9 @@ pub enum RsqlError {
     #[error("Storage Error: {0}")]
     StorageError(String),
 
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
+
     #[error("Unknown Error: {0}")]
     Unknown(String),
 }
