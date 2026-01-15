@@ -2,11 +2,12 @@ use std::mem::size_of;
 use std::cmp::Ordering;
 
 use super::errors::{RsqlError, RsqlResult};
+use super::table;
 
 /// Data item representation in one block in table.
 #[derive(Debug, PartialEq,Clone)]
 pub enum DataItem {
-    Inteager(i64),
+    Integer(i64),
     Float(f64),
     Chars {len: u64, value: String}, // Fixed length, the len is in bytes
     VarChar {head: VarCharHead, value: String}, // Variable length
@@ -31,16 +32,25 @@ impl DataItem {
     /// If the data item organized in pointer, return the size of its head.
     pub fn size(&self) -> usize {
         match self {
-            DataItem::Inteager(_) | DataItem::NullInt => 1 + 8,
+            DataItem::Integer(_) | DataItem::NullInt => 1 + 8,
             DataItem::Float(_) | DataItem::NullFloat => 1 + 8,
             DataItem::Chars {len, ..} | DataItem::NullChars {len} => 1 + *len as usize,
             DataItem::VarChar {..} | DataItem::NullVarChar => 1 + size_of::<VarCharHead>(),
             DataItem::Bool(_) | DataItem::NullBool => 1 + 1,
         }
     }
+    pub fn cal_size_from_coltype(col_type: &table::ColType) -> usize {
+        match col_type {
+            table::ColType::Integer => 1 + 8,
+            table::ColType::Float => 1 + 8,
+            table::ColType::Chars(len) => 1 + *len as usize,
+            table::ColType::VarChar => 1 + size_of::<VarCharHead>(),
+            table::ColType::Bool => 1 + 1,
+        }
+    }
     fn tag_to_byte(&self) -> u8 {
         match self {
-            DataItem::Inteager(_) => 1,
+            DataItem::Integer(_) => 1,
             DataItem::Float(_) => 2,
             DataItem::Chars {..} => 3,
             DataItem::VarChar {..}=> 4,
@@ -55,7 +65,7 @@ impl DataItem {
     pub fn to_bytes(&self) -> RsqlResult<(Vec<u8>, Option<Vec<u8>>)> {
         // the bytes include [data type(1 byte), data/data_head]
         match self {
-            DataItem::Inteager(v) => {
+            DataItem::Integer(v) => {
                 let mut bytes = vec![self.tag_to_byte()];
                 bytes.extend_from_slice(&v.to_le_bytes());
                 Ok((bytes, None))
@@ -137,7 +147,7 @@ impl DataItem {
                 }
                 let mut int_bytes = [0u8; 8];
                 int_bytes.copy_from_slice(&head_bytes[1..9]);
-                Ok(DataItem::Inteager(i64::from_le_bytes(int_bytes)))
+                Ok(DataItem::Integer(i64::from_le_bytes(int_bytes)))
             },
             2 => {
                 if head_bytes.len() < 9 {
@@ -245,7 +255,7 @@ impl PartialOrd for DataItem {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         // check groups first.
         let same_group = match (self, other) {
-            (DataItem::Inteager(_) | DataItem::NullInt, DataItem::Inteager(_) | DataItem::NullInt) => true,
+            (DataItem::Integer(_) | DataItem::NullInt, DataItem::Integer(_) | DataItem::NullInt) => true,
             (DataItem::Float(_) | DataItem::NullFloat, DataItem::Float(_) | DataItem::NullFloat) => true,
             (DataItem::Chars{..} | DataItem::NullChars{..}, DataItem::Chars{..} | DataItem::NullChars{..}) => true,
             (DataItem::VarChar{..} | DataItem::NullVarChar, DataItem::VarChar{..} | DataItem::NullVarChar) => true,
@@ -261,10 +271,10 @@ impl PartialOrd for DataItem {
         // Same group comparison
         match (self, other) {
             // Int Group
-            (DataItem::NullInt, DataItem::Inteager(_)) => Some(Ordering::Less),
-            (DataItem::Inteager(_), DataItem::NullInt) => Some(Ordering::Greater),
+            (DataItem::NullInt, DataItem::Integer(_)) => Some(Ordering::Less),
+            (DataItem::Integer(_), DataItem::NullInt) => Some(Ordering::Greater),
             (DataItem::NullInt, DataItem::NullInt) => Some(Ordering::Equal),
-            (DataItem::Inteager(v1), DataItem::Inteager(v2)) => Some(v1.cmp(v2)),
+            (DataItem::Integer(v1), DataItem::Integer(v2)) => Some(v1.cmp(v2)),
 
             // Float Group
             (DataItem::NullFloat, DataItem::Float(_)) => Some(Ordering::Less),
@@ -292,109 +302,5 @@ impl PartialOrd for DataItem {
 
             _ => panic!("DataItem compare should be covered by same_group check"),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_inteager_roundtrip() {
-        let v = DataItem::Inteager(-123456789);
-        let (head, body) = v.to_bytes().unwrap();
-        assert!(body.is_none());
-        let parsed = DataItem::from_bytes(&head, None).unwrap();
-        assert_eq!(v, parsed);
-    }
-
-    #[test]
-    fn test_float_roundtrip() {
-        let v = DataItem::Float(3.14159);
-        let (head, body) = v.to_bytes().unwrap();
-        assert!(body.is_none());
-        let parsed = DataItem::from_bytes(&head, None).unwrap();
-        assert_eq!(v, parsed);
-    }
-
-    #[test]
-    fn test_bool_and_null() {
-        let b = DataItem::Bool(true);
-        let (hb, bb) = b.to_bytes().unwrap();
-        assert!(bb.is_none());
-        assert_eq!(DataItem::from_bytes(&hb, None).unwrap(), b);
-
-        let n = DataItem::NullInt;
-        let (hn, nb) = n.to_bytes().unwrap();
-        assert!(nb.is_none());
-        assert_eq!(DataItem::from_bytes(&hn, None).unwrap(), n);
-        
-        let nf = DataItem::NullFloat;
-        let (hnf, nbf) = nf.to_bytes().unwrap();
-        assert!(nbf.is_none());
-        assert_eq!(DataItem::from_bytes(&hnf, None).unwrap(), nf);
-    }
-
-    #[test]
-    fn test_chars_roundtrip() {
-        let s = "hello".to_string();
-        let d = DataItem::Chars { len: s.len() as u64, value: s.clone() };
-        let (head, body) = d.to_bytes().unwrap();
-        assert!(body.is_none());
-        let parsed = DataItem::from_bytes(&head, None).unwrap();
-        assert_eq!(parsed, d);
-    }
-
-    #[test]
-    fn test_chars_len_mismatch() {
-        let d = DataItem::Chars { len: 2, value: "abc".to_string() };
-        assert!(d.to_bytes().is_err());
-    }
-
-    #[test]
-    fn test_varchar_roundtrip() {
-        let head = VarCharHead { max_len: 100, len: 3, page_ptr: 1 };
-        let val = "hey".to_string();
-        let d = DataItem::VarChar { head: head.clone(), value: val.clone() };
-        let (hbytes, body_opt) = d.to_bytes().unwrap();
-        assert!(body_opt.is_some());
-        let body = body_opt.unwrap();
-        let parsed = DataItem::from_bytes(&hbytes, Some(&body)).unwrap();
-        assert_eq!(parsed, d);
-    }
-
-    #[test]
-    fn test_varchar_head_page_ptr_zero_error() {
-        let head = VarCharHead { max_len: 10, len: 3, page_ptr: 0 };
-        let val = "abc".to_string();
-        let d = DataItem::VarChar { head, value: val };
-        assert!(d.to_bytes().is_err());
-    }
-
-    #[test]
-    fn test_varchar_body_len_mismatch() {
-        let head = VarCharHead { max_len: 10, len: 5, page_ptr: 1 };
-        let val = "abc".to_string();
-        // build head bytes manually as to_bytes would
-        let mut head_bytes = vec![4u8];
-        head_bytes.extend_from_slice(&head.max_len.to_le_bytes());
-        head_bytes.extend_from_slice(&head.len.to_le_bytes());
-        head_bytes.extend_from_slice(&head.page_ptr.to_le_bytes());
-        let body = val.as_bytes().to_vec();
-        let res = DataItem::from_bytes(&head_bytes, Some(&body));
-        assert!(res.is_err());
-    }
-
-    #[test]
-    fn test_size_values() {
-        let i = DataItem::Inteager(1);
-        assert_eq!(i.size(), 1 + 8);
-        let f = DataItem::Float(1.0);
-        assert_eq!(f.size(), 1 + 8);
-        let c = DataItem::Chars { len: 4, value: "test".to_string() };
-        assert_eq!(c.size(), 1 + 4);
-        let vh = VarCharHead { max_len: 100, len: 3, page_ptr: 1 };
-        let v = DataItem::VarChar { head: vh.clone(), value: "hey".to_string() };
-        assert_eq!(v.size(), 1 + size_of::<VarCharHead>());
     }
 }

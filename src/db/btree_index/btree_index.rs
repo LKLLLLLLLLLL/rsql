@@ -1,25 +1,24 @@
-use std::sync::{Arc, RwLock};
-
 use super::super::storage;
 use super::super::data_item;
 use super::super::errors::RsqlResult;
 use super::btree_node;
 
-/// Iterator to find entries in range [start_index, end_index)
+/// Iterator to find entries in range [start_index, end_index]
 /// Return: (page_num, page_offset)
-pub struct RangeIterator<'a, F>
+pub struct RangeIterator<F>
 where
-    F: Fn(u64) -> RsqlResult<storage::Page> + 'a,
+    F: Fn(u64) -> RsqlResult<storage::Page>,
 {
     current_index: data_item::DataItem,
     end_index: data_item::DataItem,
-    get_page: &'a F,
+    get_page: F,
     current_leaf_node: btree_node::BTreeNode,
     current_item_index: usize,
 }
 
-impl<'a, F> Iterator for RangeIterator<'a, F>
-where F: Fn(u64) -> RsqlResult<storage::Page> + 'a,
+impl<F> Iterator for RangeIterator<F>
+where
+    F: Fn(u64) -> RsqlResult<storage::Page>,
 {
     type Item = RsqlResult<(u64, u64)>;
 
@@ -38,8 +37,8 @@ where F: Fn(u64) -> RsqlResult<storage::Page> + 'a,
 
                 let item = &items[self.current_item_index];
                 
-                // if item.key >= end_index, stop iteration
-                if item.key >= self.end_index {
+                // if item.key > end_index, stop iteration
+                if item.key > self.end_index {
                     return None;
                 }
 
@@ -76,7 +75,7 @@ impl BTreeIndex {
     pub fn root_page_num(&self) -> u64 {
         self.root
     }
-    /// Helper function to find leaf node containing the index_item
+    /// Helper function to find leaf node containing the index_item 
     /// Returns (LeafNode, PositionInNode, PageNum, PathToRoot)
     fn find_leaf_pos<F>(
         &self,
@@ -122,12 +121,12 @@ impl BTreeIndex {
         &self,
         index: data_item::DataItem,
         get_page: &F,
-    ) -> RsqlResult<Option<u64>> 
+    ) -> RsqlResult<Option<(u64, u64)>> 
     where F: Fn(u64) -> RsqlResult<storage::Page> {
         let (node, pos, _, _) = self.find_leaf_pos(&index, get_page, false)?;
         if let btree_node::BTreeNode::Leaf { items, .. } = node {
             if pos < items.len() && items[pos].key == index {
-                return Ok(Some(items[pos].page_offset));
+                return Ok(Some((items[pos].child_page_num, items[pos].page_offset)));
             }
         }
         Ok(None)
@@ -136,10 +135,10 @@ impl BTreeIndex {
         &self,
         start_index: data_item::DataItem,
         end_index: data_item::DataItem,
-        get_page: &'a (impl Fn(u64) -> RsqlResult<storage::Page> + 'a),
-    ) -> RsqlResult<RangeIterator<'a, impl Fn(u64) -> RsqlResult<storage::Page> + 'a>> { 
-        let (leaf_node, start_pos, _, _) = self.find_leaf_pos(&start_index, get_page, true)?;
-        
+        get_page: impl Fn(u64) -> RsqlResult<storage::Page>,
+    ) -> RsqlResult<RangeIterator<impl Fn(u64) -> RsqlResult<storage::Page>>> {
+        let (leaf_node, start_pos, _, _) = self.find_leaf_pos(&start_index, &get_page, true)?;
+
         Ok(RangeIterator {
             current_index: start_index,
             end_index,
@@ -168,7 +167,7 @@ impl BTreeIndex {
         // The new entry will be inserted at 'pos' maintaining sorted order.
 
         let mut current_page_num = page_num;
-        let mut node_to_update = node;
+        let node_to_update = node;
         let mut item_to_insert: Option<(data_item::DataItem, u64)> = None; // (split_key, right_child_page_num)
 
         // Leaf insertion logic
@@ -281,6 +280,56 @@ impl BTreeIndex {
             }
         }
         Ok(())
+    }
+
+    pub fn traverse_all_entries(
+        &self,
+        get_page: impl Fn(u64) -> RsqlResult<storage::Page>,
+    ) -> RsqlResult<impl Iterator<Item = RsqlResult<(u64, u64)>>>
+    {
+        let mut results: Vec<RsqlResult<(u64, u64)>> = Vec::new();
+
+        // 1. Find the leftmost leaf node
+        let mut page_num = self.root;
+        loop {
+            let page = get_page(page_num)?;
+            let node = btree_node::BTreeNode::from_page(&page)?;
+            match node {
+                btree_node::BTreeNode::Leaf { items, next_page_num } => {
+                    // Collect all entries from this leaf and subsequent leaves
+                    for item in items {
+                        results.push(Ok((item.child_page_num, item.page_offset)));
+                    }
+                    let mut next = next_page_num;
+                    while next != 0 {
+                        let p = get_page(next)?;
+                        match btree_node::BTreeNode::from_page(&p)? {
+                            btree_node::BTreeNode::Leaf { items: leaf_items, next_page_num } => {
+                                for item in leaf_items {
+                                    results.push(Ok((item.child_page_num, item.page_offset)));
+                                }
+                                next = next_page_num;
+                            }
+                            _ => {
+                                return Err(super::super::errors::RsqlError::StorageError(
+                                    "Expected leaf page while traversing leaves".to_string()
+                                ));
+                            }
+                        }
+                    }
+                    break;
+                }
+                btree_node::BTreeNode::Internal { items, next_page_num } => {
+                    // Go to the leftmost child
+                    page_num = if !items.is_empty() {
+                        items[0].child_page_num
+                    } else {
+                        next_page_num
+                    };
+                }
+            }
+        }
+        Ok(results.into_iter())
     }
 
     pub fn update_entry<F, W>(

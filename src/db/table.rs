@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::Mutex;
 use std::collections::{HashMap, HashSet};
+use std::cell::RefCell;
 
 use super::storage;
 use super::super::config;
@@ -11,11 +12,11 @@ use super::super::config::MAX_VARCHAR_SIZE;
 use super::wal;
 use super::btree_index;
 
-enum ColType {
-    Inteager,
+pub enum ColType {
+    Integer,
     Float,
     Chars(usize),
-    Varchar,
+    VarChar,
     Bool
 }
 
@@ -61,10 +62,10 @@ impl TableSchema {
             let index = bytes[offset] != 0;
             offset += 1;
             let data_type = match col_type_byte {
-                0 => ColType::Inteager,
+                0 => ColType::Integer,
                 1 => ColType::Float,
                 2 => ColType::Chars(extra as usize),
-                3 => ColType::Varchar,
+                3 => ColType::VarChar,
                 4 => ColType::Bool,
                 _ => return Err(RsqlError::StorageError("Invalid column type".to_string())),
             };
@@ -89,7 +90,7 @@ impl TableSchema {
             name_bytes[..col.name.len()].copy_from_slice(col.name.as_bytes());
             buf.extend_from_slice(&name_bytes);
             match col.data_type {
-                ColType::Inteager => {
+                ColType::Integer => {
                     buf.push(0u8);
                     buf.extend_from_slice(&0u64.to_le_bytes());
                 }
@@ -101,7 +102,7 @@ impl TableSchema {
                     buf.push(2u8);
                     buf.extend_from_slice(&(size as u64).to_le_bytes());
                 }
-                ColType::Varchar => {
+                ColType::VarChar => {
                     buf.push(3u8);
                     buf.extend_from_slice(&0u64.to_le_bytes());
                 }
@@ -142,8 +143,8 @@ impl TableSchema {
         // 3. check data type
         for (i, col) in self.columns.iter().enumerate() {
             match col.data_type {
-                ColType::Inteager => match data[i] {
-                    DataItem::Inteager(_) => {},
+                ColType::Integer => match data[i] {
+                    DataItem::Integer(_) => {},
                     _ => return Err(RsqlError::InvalidInput(
                         format!("Expected Integer for column {}, found different type", col.name))),
                 },
@@ -166,7 +167,7 @@ impl TableSchema {
                     _ => return Err(RsqlError::InvalidInput(
                         format!("Expected Chars({}) for column {}, found different type", size, col.name))),
                 },
-                ColType::Varchar => match &data[i] {
+                ColType::VarChar => match &data[i] {
                     DataItem::VarChar{ head: _, value } => {
                         if value.len() > MAX_VARCHAR_SIZE {
                             return Err(RsqlError::InvalidInput(
@@ -184,6 +185,27 @@ impl TableSchema {
             }
         }
         Ok(())
+    }
+    pub fn new(columns: Vec<TableColumn>) -> Self {
+        // check if the varchar columns is indexed
+        for col in &columns {
+            if col.index {
+                match col.data_type {
+                    ColType::VarChar => {
+                        panic!("VarChar column {} cannot be indexed", col.name);
+                    },
+                    _ => {},
+                }
+            }
+        }
+        Self { columns }
+    }
+    pub fn get_sizes(&self) -> Vec<usize> {
+        let mut sizes = vec![];
+        for col in &self.columns {
+            sizes.push(DataItem::cal_size_from_coltype(&col.data_type));
+        };
+        sizes
     }
 }
 
@@ -230,7 +252,7 @@ impl Table {
         guard.insert(id);
         // open table file
         let path = config::DB_DIR.to_string() + "/" + &id.to_string() + ".dbt"; // .dbt for database table
-        let mut storage_manager = storage::StorageManager::new(&path)?;
+        let storage_manager = storage::StorageManager::new(&path)?;
         let wal = wal::WAL::global();
         if let None = storage_manager.max_page_index() {
             return Err(RsqlError::StorageError(format!("Table {id} file is empty, maybe corrupted")));
@@ -275,6 +297,7 @@ impl Table {
             indexes,
         })
     }
+    /// Create a new table with given schema
     pub fn create(id: u64, schema: TableSchema, tnx_id: u64) -> RsqlResult<Self> {
         // check if table already opened
         let guard = get_table_guard();
@@ -296,7 +319,7 @@ impl Table {
         }
         // 2. new indexes
         let mut indexes = HashMap::new();
-        let storage_manager_cell = std::cell::RefCell::new(storage_manager);
+        let storage_manager_cell = RefCell::new(storage_manager);
         for col_name in &index_cols {
             let btree_index = btree_index::BTreeIndex::new(
                 || {
@@ -354,9 +377,156 @@ impl Table {
             indexes,
         })
     }
+    /// Drop the table
+    /// This implements will only set the table file length to 0
+    /// TODO: support deleting the table file
     pub fn drop(mut self, tnx_id: u64) -> RsqlResult<()> {
-        
+        let page_max_idx = self.storage_manager.max_page_index().unwrap_or(0);
+        // 1. log drop table in wal
+        for page_idx in 0..=page_max_idx {
+            let page = self.storage_manager.read_page(page_idx)?;
+            self.wal.delete_page(
+                tnx_id, 
+                self.id, 
+                page_idx, 
+                page.data.clone())?;
+        }
+        // 2. truncate the file
+        for page_idx in (0..=page_max_idx).rev() {
+            let freed_page = self.storage_manager.free()?;
+            if freed_page != page_idx {
+                panic!("Free page index mismatch when dropping table");
+            }
+        }
         Ok(())
+    }
+    pub fn get_row_by_pk(&self, pk: &DataItem) -> RsqlResult<Option<Vec<DataItem>>> {
+        // find the primary key column
+        let pk_col = self.schema.columns.iter().find(|col| col.pk);
+        if pk_col.is_none() {
+            return Err(RsqlError::InvalidInput("Table has no primary key".to_string()));
+        }
+        let pk_col = pk_col.unwrap();
+        // find the index for primary key column
+        let index = self.indexes.get(&pk_col.name);
+        if index.is_none() {
+            return Err(RsqlError::InvalidInput("Primary key column has no index".to_string()));
+        }
+        let index = index.unwrap();
+        // search the index
+        let pair_opt = index.find_entry(pk.clone(), &|page_idx| {
+            self.storage_manager.read_page(page_idx)
+        })?;
+        let (match_page, match_offset) = match pair_opt {
+            Some(pair) => pair,
+            None => return Ok(None),
+        };
+        // read the row from data page
+        let data_page = self.storage_manager.read_page(match_page)?;
+        let sizes = self.schema.get_sizes();
+        let mut offset = match_offset as usize;
+        let mut row = vec![];
+        for size in sizes {
+            let data_item = DataItem::from_bytes(&data_page.data[offset..offset+size], None)?;
+            row.push(data_item);
+            offset += size;
+        };
+        Ok(Some(row))
+    }
+    pub fn get_row_by_indexed_col(&self, col_name: &str, value: &DataItem) -> RsqlResult<Option<Vec<DataItem>>> {
+        // get index
+        let index = self.indexes.get(col_name);
+        if index.is_none() {
+            panic!("Column {} is not indexed, cannot search", col_name);
+        };
+        let index = index.unwrap();
+        // search the index
+        let pair_opt = index.find_entry(value.clone(), &|page_idx| {
+            self.storage_manager.read_page(page_idx)
+        })?;
+        let (match_page, match_offset) = match pair_opt {
+            Some(pair) => pair,
+            None => return Ok(None),
+        };
+        // read the row from data page
+        let data_page = self.storage_manager.read_page(match_page)?;
+        let sizes = self.schema.get_sizes();
+        let mut offset = match_offset as usize;
+        let mut row = vec![];
+        for size in sizes {
+            let data_item = DataItem::from_bytes(&data_page.data[offset..offset+size], None)?;
+            row.push(data_item);
+            offset += size;
+        };
+        Ok(Some(row))
+    }
+    pub fn get_rows_by_range_indexed_col(
+        &self,
+        col_name: &str,
+        start: &DataItem,
+        end: &DataItem,
+    ) -> RsqlResult<impl Iterator<Item = RsqlResult<Vec<DataItem>>>> {
+        // get index
+        let index = self.indexes.get(col_name).ok_or(RsqlError::InvalidInput(
+            format!("Column {} is not indexed, cannot search", col_name)
+        ))?;
+        // get iterator from index (注意 unwrap Result)
+        let entry_iter = index.find_range_entry(start.clone(), end.clone(), |page_idx| {
+            self.storage_manager.read_page(page_idx)
+        })?;
+
+        // map to row iterator
+        let iter = entry_iter.map(move |pair_res| {
+            let (match_page, match_offset) = pair_res?;
+            // read the row from data page
+            let data_page = self.storage_manager.read_page(match_page)?;
+            let sizes = self.schema.get_sizes();
+            let mut offset = match_offset as usize;
+            let mut row = vec![];
+            for size in sizes {
+                let data_item = DataItem::from_bytes(&data_page.data[offset..offset+size], None)?;
+                row.push(data_item);
+                offset += size;
+            };
+            Ok(row)
+        });
+        Ok(iter)
+    }
+    pub fn get_all_rows(&self) -> RsqlResult<impl Iterator<Item = RsqlResult<Vec<DataItem>>>> {
+        // find primary key column
+        let pk_col = self.schema.columns.iter().find(|col| col.pk);
+        if pk_col.is_none() {
+            panic!("Table has no primary key column, cannot get all rows");
+        }
+        let pk_col = pk_col.unwrap();
+        // find index for primary key column
+        let index = self.indexes.get(&pk_col.name);
+        if index.is_none() {
+            panic!("Primary key column has no index, cannot get all rows");
+        }
+        let index = index.unwrap();
+        // get all entries iterator
+        let iter = index.traverse_all_entries(|page_idx| {
+            self.storage_manager.read_page(page_idx)
+        })?;
+        let iter = iter.map(move |pair_res| {
+            let (match_page, match_offset) = pair_res?;
+            // read the row from data page
+            let data_page = self.storage_manager.read_page(match_page)?;
+            let sizes = self.schema.get_sizes();
+            let mut offset = match_offset as usize;
+            let mut row = vec![];
+            for size in sizes {
+                let data_item = DataItem::from_bytes(&data_page.data[offset..offset+size], None)?;
+                row.push(data_item);
+                offset += size;
+            };
+            Ok(row)
+        });
+        Ok(iter)
+    }
+    pub fn get_indexed_col(&self) -> Vec<String> {
+        self.indexes.keys().cloned().collect()
     }
     pub fn get_schema(&self) -> &TableSchema {
         &self.schema

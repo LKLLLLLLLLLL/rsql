@@ -1,7 +1,7 @@
 use crate::config::{PAGE_SIZE_BYTES, MAX_PAGE_CACHE_BYTES};
 use super::super::errors::{RsqlError, RsqlResult};
 use super::cache::LRUCache;
-use std::sync::{RwLock, Arc, OnceLock};
+use std::sync::{RwLock, Mutex, Arc, OnceLock};
 use std::fs::{self, OpenOptions, File};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
@@ -27,10 +27,10 @@ impl Page {
 }
 
 pub struct StorageManager {
-    file: File, // file handle
+    file: Mutex<File>, // file handle
     file_path: String,
-    file_page_num: u64, // number of pages in file
-    pages: LRUCache,  // cache of pages which has the latest data
+    file_page_num: Mutex<u64>, // number of pages in file
+    pages: Mutex<LRUCache>,  // cache of pages which has the latest data
 }
 
 static STORAGE_MANAGERS: OnceLock<RwLock<HashSet<String>>> = OnceLock::new(); // global single instance registry
@@ -76,8 +76,8 @@ impl StorageManager {
     }
 
     pub fn max_page_index(&self) -> Option<u64> {
-        let max_file_page_index = if self.file_page_num >= 1 {Some(self.file_page_num - 1)} else {None};
-        let max_cached_page_index = self.pages.max_key();
+        let max_file_page_index = if self.file_page_num.lock().unwrap().clone() >= 1 {Some(self.file_page_num.lock().unwrap().clone() - 1)} else {None};
+        let max_cached_page_index = self.pages.lock().unwrap().max_key();
 
         match (max_file_page_index, max_cached_page_index) {
             (None, None) => None,
@@ -97,25 +97,25 @@ impl StorageManager {
         }
     }
 
-    fn write_back_evicted_page(&mut self, evicted: Option<(u64, Arc<RwLock<Page>>)>) -> RsqlResult<()> {
+    fn write_back_evicted_page(&self, evicted: Option<(u64, Arc<RwLock<Page>>)>) -> RsqlResult<()> {
         if let Some((evicted_page_index, evicted_page)) = evicted {
             // write the evicted_page to the file
             let evicted_page = evicted_page.read().map_err(|_| RsqlError::StorageError(
                 "Poisoned RwLock in page cache".to_string()
             ))?;
             if evicted_page.need_flush {
-                let mut file_page_num = self.file_page_num;
-                if evicted_page_index >= self.file_page_num {
+                let mut file_page_num = self.file_page_num.lock().unwrap();
+                if evicted_page_index >= *file_page_num {
                     let required_file_size = (evicted_page_index + 1) * PAGE_SIZE_BYTES as u64;
-                    self.file.set_len(required_file_size)?; // extend file (fills with zeros)
-                    file_page_num = evicted_page_index + 1;
+                    self.file.lock().unwrap().set_len(required_file_size)?; // extend file (fills with zeros)
+                    *file_page_num = evicted_page_index + 1;
                 }
                 let page_data = &evicted_page.data;
                 let offset = evicted_page_index * PAGE_SIZE_BYTES as u64;
-                self.file.seek(SeekFrom::Start(offset))?;
-                self.file.write_all(page_data)?; // write page data to the file
-                self.file.sync_data()?; // ensure data is written to the disk
-                self.file_page_num = file_page_num; // update pages number in the file
+                self.file.lock().unwrap().seek(SeekFrom::Start(offset))?;
+                self.file.lock().unwrap().write_all(page_data)?; // write page data to the file
+                self.file.lock().unwrap().sync_data()?; // ensure data is written to the disk
+                *self.file_page_num.lock().unwrap() = file_page_num.clone(); // update pages number in the file
             }
         }
         Ok(())
@@ -140,10 +140,10 @@ impl StorageManager {
         }
         let file_page_num = file_size / PAGE_SIZE_BYTES as u64;
         Ok(Self {
-            file,
+            file: Mutex::new(file),
             file_path: file_path.to_string(),
-            file_page_num,
-            pages: LRUCache::new(MAX_PAGE_CACHE_BYTES / PAGE_SIZE_BYTES), // cache of pages which has the latest data
+            file_page_num: Mutex::new(file_page_num),
+            pages: Mutex::new(LRUCache::new(MAX_PAGE_CACHE_BYTES / PAGE_SIZE_BYTES)), // cache of pages which has the latest data
         })
     }
 
@@ -154,31 +154,31 @@ impl StorageManager {
             None => return Err(RsqlError::StorageError("No pages to free".to_string())),
         };
         // 1. delete from cache
-        if let Some(_) = self.pages.get(&page_idx) {
-            self.pages.remove(&page_idx);
+        if let Some(_) = self.pages.lock().unwrap().get(&page_idx) {
+            self.pages.lock().unwrap().remove(&page_idx);
         }
         // 2. truncate file
         let new_file_size = (page_idx) * PAGE_SIZE_BYTES as u64;
-        self.file.set_len(new_file_size)?;
-        self.file_page_num = page_idx;
+        self.file.lock().unwrap().set_len(new_file_size)?;
+        *self.file_page_num.lock().unwrap() = page_idx;
         Ok(page_idx)
     }
 
-    pub fn read_page(&mut self, page_index: u64) -> RsqlResult<Page> {
+    pub fn read_page(&self, page_index: u64) -> RsqlResult<Page> {
         self.is_page_index_valid(page_index)?;
 
-        if let Some(page_arc) = self.pages.get(&page_index) {
+        if let Some(page_arc) = self.pages.lock().unwrap().get(&page_index) {
             let page = page_arc.read().unwrap().clone();
             Ok(page)
         } else {
-            self.file.seek(SeekFrom::Start(page_index * PAGE_SIZE_BYTES as u64))?; // go to the start position of the page with page_index
+            self.file.lock().unwrap().seek(SeekFrom::Start(page_index * PAGE_SIZE_BYTES as u64))?; // go to the start position of the page with page_index
             let mut buffer = vec![0u8; PAGE_SIZE_BYTES];
-            self.file.read_exact(&mut buffer)?;
+            self.file.lock().unwrap().read_exact(&mut buffer)?;
             let page = Page {
                 data: buffer,
                 need_flush: false,
             };
-            let evicted = self.pages.insert(page_index, Arc::new(RwLock::new(page.clone()))); // insert the page into cache
+            let evicted = self.pages.lock().unwrap().insert(page_index, Arc::new(RwLock::new(page.clone()))); // insert the page into cache
             self.write_back_evicted_page(evicted)?;
             Ok(page)
         }
@@ -189,7 +189,7 @@ impl StorageManager {
         let mut page = page.clone();
         page.need_flush = true;
         let page_arc = Arc::new(RwLock::new(page));
-        let evicted = self.pages.insert(page_index, Arc::clone(&page_arc)); // write the page into cache
+        let evicted = self.pages.lock().unwrap().insert(page_index, Arc::clone(&page_arc)); // write the page into cache
         self.write_back_evicted_page(evicted)?;
         Ok(())
     }
@@ -200,13 +200,13 @@ impl StorageManager {
             None => 0,
         };
         let new_page = Page::new();
-        let evicted = self.pages.insert(new_page_index, Arc::new(RwLock::new(new_page.clone())));
+        let evicted = self.pages.lock().unwrap().insert(new_page_index, Arc::new(RwLock::new(new_page.clone())));
         self.write_back_evicted_page(evicted)?;
         Ok((new_page_index, new_page))
     }
 
     pub fn flush(&mut self) -> RsqlResult<()> {
-        if self.pages.is_empty() {
+        if self.pages.lock().unwrap().is_empty() {
             return Ok(());
         };
 
@@ -217,12 +217,12 @@ impl StorageManager {
 
         let required_file_size = (max_page_index + 1) * PAGE_SIZE_BYTES as u64;
         let file_page_num = max_page_index + 1;
-        
-        let current_file_size = self.file_page_num * PAGE_SIZE_BYTES as u64;
+
+        let current_file_size = *self.file_page_num.lock().unwrap() * PAGE_SIZE_BYTES as u64;
         if current_file_size < required_file_size {
-            self.file.set_len(required_file_size)?; // extend file (fills with zeros)
+            self.file.lock().unwrap().set_len(required_file_size)?; // extend file (fills with zeros)
         }
-        for (page_index, page_arc) in &self.pages.map {
+        for (page_index, page_arc) in &self.pages.lock().unwrap().map {
             let page = page_arc.read().map_err(|_| RsqlError::StorageError(
                 "Poisoned RwLock in page cache".to_string()
             ))?;
@@ -231,12 +231,12 @@ impl StorageManager {
             }
             let page_data = &page.data;
             let offset = page_index * PAGE_SIZE_BYTES as u64;
-            self.file.seek(SeekFrom::Start(offset))?;
-            self.file.write_all(page_data)?; // write page data to the file
+            self.file.lock().unwrap().seek(SeekFrom::Start(offset))?;
+            self.file.lock().unwrap().write_all(page_data)?; // write page data to the file
         }
-        self.file.flush()?;
-        self.file.sync_data()?; // ensure data is written to the disk
-        self.file_page_num = file_page_num; // update pages number in the file
+        self.file.lock().unwrap().flush()?;
+        self.file.lock().unwrap().sync_data()?; // ensure data is written to the disk
+        *self.file_page_num.lock().unwrap() = file_page_num; // update pages number in the file
         Ok(())
     }
 }
