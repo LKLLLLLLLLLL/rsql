@@ -477,6 +477,9 @@ impl Plan {
                     left_sub.or(right_sub),
                 ))
             }
+            Expr::Function(func) if is_aggregate_expr(expr) => {
+                Ok((expr.clone(), None))
+            }
             Expr::Identifier(_)
             | Expr::CompoundIdentifier(_)
             | Expr::Value(_)
