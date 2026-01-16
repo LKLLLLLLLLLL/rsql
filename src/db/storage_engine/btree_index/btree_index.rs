@@ -1,6 +1,6 @@
+use crate::db::data_item;
+use crate::db::errors::{RsqlResult, RsqlError};
 use super::super::storage;
-use super::super::data_item;
-use super::super::errors::RsqlResult;
 use super::btree_node;
 
 /// Iterator to find entries in range [start_index, end_index]
@@ -150,6 +150,7 @@ impl BTreeIndex {
     pub fn insert_entry<F, W, N>(
         &mut self,
         index: data_item::DataItem,
+        page_num: u64,
         page_offset: u64,
         get_page: &F,
         write_page: &W,
@@ -161,12 +162,10 @@ impl BTreeIndex {
         N: Fn() -> RsqlResult<(storage::Page, u64)>
     {
         // 1. find leaf node and path from root
-        let (node, pos, page_num, mut path) = self.find_leaf_pos(&index, get_page, false)?;
+        let (node, pos, mut current_page_num, mut path) = self.find_leaf_pos(&index, get_page, false)?;
 
         // 2. support duplicate keys: removed the "Index already exists" check.
         // The new entry will be inserted at 'pos' maintaining sorted order.
-
-        let mut current_page_num = page_num;
         let node_to_update = node;
         let mut item_to_insert: Option<(data_item::DataItem, u64)> = None; // (split_key, right_child_page_num)
 
@@ -174,7 +173,7 @@ impl BTreeIndex {
         if let btree_node::BTreeNode::Leaf { mut items, next_page_num } = node_to_update {
             items.insert(pos, btree_node::LeafItem { 
                 key: index, 
-                child_page_num: 0, 
+                child_page_num: page_num, 
                 page_offset 
             });
             let new_leaf = btree_node::BTreeNode::Leaf { items, next_page_num };
@@ -311,7 +310,7 @@ impl BTreeIndex {
                                 next = next_page_num;
                             }
                             _ => {
-                                return Err(super::super::errors::RsqlError::StorageError(
+                                return Err(RsqlError::StorageError(
                                     "Expected leaf page while traversing leaves".to_string()
                                 ));
                             }

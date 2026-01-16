@@ -1,3 +1,4 @@
+use core::panic;
 use std::collections::HashSet;
 use std::fs;
 use std::io::Seek;
@@ -7,7 +8,7 @@ use std::sync::{Arc, Mutex, OnceLock, atomic::{AtomicU64, Ordering}};
 use tracing::{warn, info};
 
 use crate::config::{DB_DIR, MAX_WAL_SIZE};
-use super::super::errors::{RsqlError, RsqlResult};
+use crate::db::errors::{RsqlError, RsqlResult};
 
 use super::wal_entry::WALEntry;
 
@@ -103,11 +104,20 @@ impl WAL {
         let wal = WAL::global();
         let mut file = wal.log_file.lock().unwrap();
         // 1. read all entries
+        // seek to start
+        file.seek(std::io::SeekFrom::Start(0))?;
         let mut entrys = Vec::new();
         let mut buf = Vec::new();
         file.read_to_end(&mut buf)?;
+        if buf.len() < 4 {
+            panic!("WAL recovery: log file too short to contain header");
+        }
         for entry in WALEntry::from_bytes(&buf[4..]) {
             entrys.push(entry);
+        }
+        if entrys.is_empty() {
+            info!("WAL recovery: no entries to process");
+            return Ok(());
         }
         drop(file);
         // 2. find nearest checkpoint
@@ -317,19 +327,22 @@ impl WAL {
         table_id: u64,
         page_id: u64,
         offset: u64,
-        len: u64,
-        old_data: Vec<u8>,
-        new_data: Vec<u8>,
+        old_data: &[u8],
+        new_data: &[u8],
     ) -> RsqlResult<bool> {
         check_recovered();
+        if old_data.len() != new_data.len() {
+            panic!("WAL::update_page: old_data and new_data length mismatch");
+        }
+        let len = old_data.len() as u64;
         let entry = WALEntry::UpdatePage {
             tnx_id,
             table_id,
             page_id,
             offset,
             len,
-            old_data,
-            new_data,
+            old_data: old_data.to_vec(),
+            new_data: new_data.to_vec(),
         };
         self.append_entry(&entry)
     }
@@ -338,14 +351,14 @@ impl WAL {
         tnx_id: u64,
         table_id: u64,
         page_id: u64,
-        data: Vec<u8>,
+        data: &[u8],
     ) -> RsqlResult<bool> {
         check_recovered();
         let entry = WALEntry::NewPage {
             tnx_id,
             table_id,
             page_id,
-            data,
+            data: data.to_vec(),
         };
         self.append_entry(&entry)
     }
@@ -354,14 +367,14 @@ impl WAL {
         tnx_id: u64,
         table_id: u64,
         page_id: u64,
-        old_data: Vec<u8>,
+        old_data: &[u8],
     ) -> RsqlResult<bool> {
         check_recovered();
         let entry = WALEntry::DeletePage {
             tnx_id,
             table_id,
             page_id,
-            old_data,
+            old_data: old_data.to_vec(),
         };
         self.append_entry(&entry)
     }
@@ -455,5 +468,90 @@ impl WAL {
         let need_checkpoint = self.append_entry(&entry)?;
         self.flush()?;
         Ok(need_checkpoint)
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::DB_DIR;
+    use std::fs;
+    use std::path::Path;
+
+    #[test]
+    fn test_wal_recovery_redo_undo() {
+        // mark recovered so test can call WAL methods without panic
+        HAS_RECOVERED.get_or_init(|| ());
+
+        // backup existing wal.log if any
+        let wal_path = Path::new(DB_DIR).join("wal.log");
+        let backup_path = Path::new(DB_DIR).join("wal.log.bak");
+        if wal_path.exists() {
+            // remove any pre-existing bak
+            let _ = fs::remove_file(&backup_path);
+            fs::create_dir_all(DB_DIR).unwrap();
+            fs::rename(&wal_path, &backup_path).unwrap();
+        } else {
+            fs::create_dir_all(DB_DIR).unwrap();
+        }
+
+        // ensure WAL is initialized (this will create wal.log with header)
+        let wal = WAL::global();
+
+        // start a committed transaction t1 that creates a new page
+        wal.open_tnx(1).unwrap();
+        let data1 = vec![1u8,2,3];
+        wal.new_page(1, 42, 0, &data1).unwrap();
+        wal.commit_tnx(1).unwrap();
+
+        // start an uncommitted transaction t2 that updates the same page
+        wal.open_tnx(2).unwrap();
+        let old = vec![1u8,2,3];
+        let new = vec![9u8,9,9];
+        wal.update_page(2, 42, 0, 0, &old, &new).unwrap();
+        // do not commit t2
+
+        // Now perform recovery into collectors
+        let mut wrote_pages = Vec::new();
+        let mut updated_pages = Vec::new();
+        let mut appended = Vec::new();
+        let mut truncated = Vec::new();
+
+        // closures for recovery
+        let mut write_page = |table_id: u64, page_id: u64, data: Vec<u8>| -> RsqlResult<()> {
+            wrote_pages.push((table_id, page_id, data));
+            Ok(())
+        };
+        let mut update_page = |table_id: u64, page_id: u64, offset: u64, len: u64, data: Vec<u8>| -> RsqlResult<()> {
+            updated_pages.push((table_id, page_id, offset, len, data));
+            Ok(())
+        };
+        let mut append_page = |_: u64| -> RsqlResult<u64> { appended.push(()); Ok(0) };
+        let mut trunc_page = |_: u64| -> RsqlResult<()> { truncated.push(()); Ok(()) };
+        let mut max_page_idx = |_: u64| -> RsqlResult<u64> { Ok(0) };
+
+        // ensure the WAL file cursor is at start so read_to_end reads full content
+        {
+            use std::io::Seek;
+            let mut file = wal.log_file.lock().unwrap();
+            file.seek(std::io::SeekFrom::Start(0)).unwrap();
+        }
+        WAL::recovery(&mut write_page, &mut update_page, &mut append_page, &mut trunc_page, &mut max_page_idx).unwrap();
+
+        // After recovery: new_page from committed t1 should be redone
+        assert!(wrote_pages.iter().any(|(t, p, d)| *t == 42 && *p == 0 && *d == data1));
+
+        // update from uncommitted t2 should be undone (i.e., undo phase will apply old data)
+        // undo applies old_data via update_page; ensure updated_pages contains an update restoring old
+        assert!(updated_pages.iter().any(|(t, p, _off, _len, d)| *t == 42 && *p == 0 && *d == old));
+
+        // cleanup: try to restore backup if existed
+        if backup_path.exists() {
+            // overwrite current wal.log with backup content
+            let bak_bytes = fs::read(&backup_path).unwrap_or_default();
+            let _ = fs::write(&wal_path, &bak_bytes);
+            let _ = fs::remove_file(&backup_path);
+        }
     }
 }

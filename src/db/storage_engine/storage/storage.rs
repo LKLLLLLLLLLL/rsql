@@ -1,5 +1,5 @@
 use crate::config::{PAGE_SIZE_BYTES, MAX_PAGE_CACHE_BYTES};
-use super::super::errors::{RsqlError, RsqlResult};
+use crate::db::errors::{RsqlError, RsqlResult};
 use super::cache::LRUCache;
 use std::sync::{RwLock, Mutex, Arc, OnceLock};
 use std::fs::{self, OpenOptions, File};
@@ -154,9 +154,7 @@ impl StorageManager {
             None => return Err(RsqlError::StorageError("No pages to free".to_string())),
         };
         // 1. delete from cache
-        if let Some(_) = self.pages.lock().unwrap().get(&page_idx) {
-            self.pages.lock().unwrap().remove(&page_idx);
-        }
+        self.pages.lock().unwrap().remove(&page_idx);
         // 2. truncate file
         let new_file_size = (page_idx) * PAGE_SIZE_BYTES as u64;
         self.file.lock().unwrap().set_len(new_file_size)?;
