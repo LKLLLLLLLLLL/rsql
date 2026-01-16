@@ -1,24 +1,23 @@
 use crate::db::data_item;
 use crate::db::errors::{RsqlResult, RsqlError};
+use super::super::consist_storage::ConsistStorageEngine;
 use super::super::storage;
 use super::btree_node;
+// use super::consist_storage::ConsistStorageEngine;
 
 /// Iterator to find entries in range [start_index, end_index]
+/// 
 /// Return: (page_num, page_offset)
-pub struct RangeIterator<F>
-where
-    F: Fn(u64) -> RsqlResult<storage::Page>,
+pub struct RangeIterator<'a>
 {
     current_index: data_item::DataItem,
     end_index: data_item::DataItem,
-    get_page: F,
+    storage: &'a mut ConsistStorageEngine,
     current_leaf_node: btree_node::BTreeNode,
     current_item_index: usize,
 }
 
-impl<F> Iterator for RangeIterator<F>
-where
-    F: Fn(u64) -> RsqlResult<storage::Page>,
+impl<'a> Iterator for RangeIterator<'a>
 {
     type Item = RsqlResult<(u64, u64)>;
 
@@ -29,7 +28,7 @@ where
                 if self.current_item_index >= items.len() {
                     if *next_page_num == 0 { return None; }
                     
-                    let next_page = (self.get_page)(*next_page_num).ok()?;
+                    let next_page = self.storage.read(*next_page_num).ok()?;
                     self.current_leaf_node = btree_node::BTreeNode::from_page(&next_page).ok()?;
                     self.current_item_index = 0;
                     return self.next(); // recursive call to get next item
@@ -58,13 +57,13 @@ pub struct BTreeIndex {
 
 impl BTreeIndex {
     pub fn new(
-        new_page: impl FnOnce() -> RsqlResult<(storage::Page, u64)>,
-        write_page: impl Fn(u64, &storage::Page) -> RsqlResult<()>,
+        storage: &mut ConsistStorageEngine,
+        tnx_id: u64,
     ) -> RsqlResult<Self> {
-        let (mut page, page_num) = new_page()?;
+        let (page_num, mut page) = storage.new_page(tnx_id)?;
         let root_node = btree_node::BTreeNode::Leaf { items: vec![], next_page_num: 0 };
         root_node.to_page(&mut page)?;
-        write_page(page_num, &page)?;
+        storage.write(tnx_id, page_num, &page)?;
         Ok(Self { root: page_num})
     }
     pub fn from(
@@ -77,17 +76,16 @@ impl BTreeIndex {
     }
     /// Helper function to find leaf node containing the index_item 
     /// Returns (LeafNode, PositionInNode, PageNum, PathToRoot)
-    fn find_leaf_pos<F>(
+    fn find_leaf_pos(
         &self,
         index: &data_item::DataItem,
-        get_page: &F,
+        storage: &ConsistStorageEngine,
         find_first: bool,
-    ) -> RsqlResult<(btree_node::BTreeNode, usize, u64, Vec<u64>)> 
-    where F: Fn(u64) -> RsqlResult<storage::Page> {
+    ) -> RsqlResult<(btree_node::BTreeNode, usize, u64, Vec<u64>)> {
         let mut current_page_num = self.root;
         let mut path = vec![];
         let mut current_node = {
-            let root_page = get_page(self.root)?;
+            let root_page = storage.read(self.root)?;
             btree_node::BTreeNode::from_page(&root_page)?
         };
         loop {
@@ -110,20 +108,19 @@ impl BTreeIndex {
                             break;
                         }
                     }
-                    let child_page = get_page(page_num)?;
+                    let child_page = storage.read(page_num)?;
                     current_node = btree_node::BTreeNode::from_page(&child_page)?;
                     current_page_num = page_num;
                 }
             }
         }
     }
-    pub fn find_entry<F>(
+    pub fn find_entry(
         &self,
         index: data_item::DataItem,
-        get_page: &F,
-    ) -> RsqlResult<Option<(u64, u64)>> 
-    where F: Fn(u64) -> RsqlResult<storage::Page> {
-        let (node, pos, _, _) = self.find_leaf_pos(&index, get_page, false)?;
+        storage: &ConsistStorageEngine,
+    ) -> RsqlResult<Option<(u64, u64)>> {
+        let (node, pos, _, _) = self.find_leaf_pos(&index, storage, false)?;
         if let btree_node::BTreeNode::Leaf { items, .. } = node {
             if pos < items.len() && items[pos].key == index {
                 return Ok(Some((items[pos].child_page_num, items[pos].page_offset)));
@@ -135,34 +132,27 @@ impl BTreeIndex {
         &self,
         start_index: data_item::DataItem,
         end_index: data_item::DataItem,
-        get_page: impl Fn(u64) -> RsqlResult<storage::Page>,
-    ) -> RsqlResult<RangeIterator<impl Fn(u64) -> RsqlResult<storage::Page>>> {
-        let (leaf_node, start_pos, _, _) = self.find_leaf_pos(&start_index, &get_page, true)?;
-
+        storage: &'a mut ConsistStorageEngine,
+    ) -> RsqlResult<RangeIterator<'a>> {
+        let (leaf_node, start_pos, _, _) = self.find_leaf_pos(&start_index, storage, true)?;
         Ok(RangeIterator {
             current_index: start_index,
             end_index,
-            get_page,
+            storage,
             current_leaf_node: leaf_node,
             current_item_index: start_pos,
         })
     }
-    pub fn insert_entry<F, W, N>(
+    pub fn insert_entry<'a>(
         &mut self,
+        tnx_id: u64,
         index: data_item::DataItem,
         page_num: u64,
         page_offset: u64,
-        get_page: &F,
-        write_page: &W,
-        new_page: &N,
-    ) -> RsqlResult<()> 
-    where 
-        F: Fn(u64) -> RsqlResult<storage::Page>,
-        W: Fn(u64, &storage::Page) -> RsqlResult<()>,
-        N: Fn() -> RsqlResult<(storage::Page, u64)>
-    {
+        storage: &'a mut ConsistStorageEngine,
+    ) -> RsqlResult<()> {
         // 1. find leaf node and path from root
-        let (node, pos, mut current_page_num, mut path) = self.find_leaf_pos(&index, get_page, false)?;
+        let (node, pos, mut current_page_num, mut path) = self.find_leaf_pos(&index, storage, false)?;
 
         // 2. support duplicate keys: removed the "Index already exists" check.
         // The new entry will be inserted at 'pos' maintaining sorted order.
@@ -179,9 +169,9 @@ impl BTreeIndex {
             let new_leaf = btree_node::BTreeNode::Leaf { items, next_page_num };
             
             if new_leaf.has_space_for(0) {
-                let mut page = get_page(current_page_num)?;
+                let mut page = storage.read(current_page_num)?;
                 new_leaf.to_page(&mut page)?;
-                write_page(current_page_num, &page)?;
+                storage.write(tnx_id, current_page_num, &page)?;
                 return Ok(());
             } else {
                 // Leaf needs splitting
@@ -191,16 +181,16 @@ impl BTreeIndex {
                     let split_key = right_items[0].key.clone();
                     
                     // Create and write right node
-                    let (mut page_right, right_page_num) = new_page()?;
+                    let (right_page_num, mut right_page) = storage.new_page(tnx_id)?;
                     let node_right = btree_node::BTreeNode::Leaf { items: right_items, next_page_num };
-                    node_right.to_page(&mut page_right)?;
-                    write_page(right_page_num, &page_right)?;
+                    node_right.to_page(&mut right_page)?;
+                    storage.write(tnx_id, right_page_num, &right_page)?;
                     
                     // Update and write left node (original page)
                     let node_left = btree_node::BTreeNode::Leaf { items, next_page_num: right_page_num };
-                    let mut page_left = get_page(current_page_num)?;
+                    let mut page_left = storage.read(current_page_num)?;
                     node_left.to_page(&mut page_left)?;
-                    write_page(current_page_num, &page_left)?;
+                    storage.write(tnx_id, current_page_num, &page_left)?;
                     
                     item_to_insert = Some((split_key, right_page_num));
                 }
@@ -210,7 +200,7 @@ impl BTreeIndex {
         // Propagate split to internal nodes
         while let Some((key, right_child)) = item_to_insert.clone() {
             if let Some(parent_page_num) = path.pop() {
-                let parent_page = get_page(parent_page_num)?;
+                let parent_page = storage.read(parent_page_num)?;
                 let mut parent_node = btree_node::BTreeNode::from_page(&parent_page)?;
                 
                 if let btree_node::BTreeNode::Internal { ref mut items, ref mut next_page_num } = parent_node {
@@ -234,9 +224,9 @@ impl BTreeIndex {
                 }
                 
                 if parent_node.has_space_for(0) {
-                    let mut page = get_page(parent_page_num)?;
+                    let mut page = storage.read(parent_page_num)?;
                     parent_node.to_page(&mut page)?;
-                    write_page(parent_page_num, &page)?;
+                    storage.write(tnx_id, parent_page_num, &page)?;
                     item_to_insert = None;
                 } else {
                     // Parent internal node also needs splitting
@@ -247,19 +237,19 @@ impl BTreeIndex {
                         let split_key = mid_item.key;
                         
                         // New right internal node
-                        let (mut page_right, right_page_num) = new_page()?;
+                        let (right_page_num, mut right_page) = storage.new_page(tnx_id)?;
                         let node_right = btree_node::BTreeNode::Internal { items: right_items, next_page_num };
-                        node_right.to_page(&mut page_right)?;
-                        write_page(right_page_num, &page_right)?;
+                        node_right.to_page(&mut right_page)?;
+                        storage.write(tnx_id, right_page_num, &right_page)?;
                         
                         // Update left internal node (original page)
                         let node_left = btree_node::BTreeNode::Internal { 
                             items, 
                             next_page_num: mid_item.child_page_num 
                         };
-                        let mut page_left = get_page(parent_page_num)?;
+                        let mut page_left = storage.read(parent_page_num)?;
                         node_left.to_page(&mut page_left)?;
-                        write_page(parent_page_num, &page_left)?;
+                        storage.write(tnx_id, parent_page_num, &page_left)?;
                         
                         item_to_insert = Some((split_key, right_page_num));
                         current_page_num = parent_page_num;
@@ -267,13 +257,13 @@ impl BTreeIndex {
                 }
             } else {
                 // Split reached the root - create a new root level
-                let (mut page, new_root_page_num) = new_page()?;
+                let (new_root_page_num, mut new_root_page) = storage.new_page(tnx_id)?;
                 let new_root = btree_node::BTreeNode::Internal {
                     items: vec![btree_node::IndexItem { key: key.clone(), child_page_num: current_page_num }],
                     next_page_num: right_child,
                 };
-                new_root.to_page(&mut page)?;
-                write_page(new_root_page_num, &page)?;
+                new_root.to_page(&mut new_root_page)?;
+                storage.write(tnx_id, new_root_page_num, &new_root_page)?;
                 self.root = new_root_page_num;
                 item_to_insert = None;
             }
@@ -331,27 +321,23 @@ impl BTreeIndex {
         Ok(results.into_iter())
     }
 
-    pub fn update_entry<F, W>(
+    pub fn update_entry(
         &self,
+        tnx_id: u64,
         index: data_item::DataItem,
         old_offset: u64,
         new_offset: u64,
-        get_page: &F,
-        write_page: &W,
-    ) -> RsqlResult<bool>
-    where 
-        F: Fn(u64) -> RsqlResult<storage::Page>,
-        W: Fn(u64, &storage::Page) -> RsqlResult<()> 
-    {
-        let (mut node, _, mut page_num, _) = self.find_leaf_pos(&index, get_page, true)?;
+        storage: &mut ConsistStorageEngine,
+    ) -> RsqlResult<bool> {
+        let (mut node, _, mut page_num, _) = self.find_leaf_pos(&index, storage, true)?;
         loop {
             if let btree_node::BTreeNode::Leaf { ref mut items, next_page_num } = node {
                 for item in items.iter_mut() {
                     if item.key == index && item.page_offset == old_offset {
                         item.page_offset = new_offset;
-                        let mut page = get_page(page_num)?;
+                        let mut page = storage.read(page_num)?;
                         node.to_page(&mut page)?;
-                        write_page(page_num, &page)?;
+                        storage.write(tnx_id, page_num, &page)?;
                         return Ok(true);
                     }
                     if item.key > index {
@@ -360,7 +346,7 @@ impl BTreeIndex {
                 }
                 if next_page_num == 0 { return Ok(false); }
                 page_num = next_page_num;
-                let next_page = get_page(page_num)?;
+                let next_page = storage.read(page_num)?;
                 node = btree_node::BTreeNode::from_page(&next_page)?;
             } else {
                 return Ok(false);
@@ -370,16 +356,12 @@ impl BTreeIndex {
 
     pub fn delete_entry<F, W>(
         &self,
+        tnx_id: u64,
         index: data_item::DataItem,
         page_offset: u64,
-        get_page: &F,
-        write_page: &W,
-    ) -> RsqlResult<bool>
-    where 
-        F: Fn(u64) -> RsqlResult<storage::Page>,
-        W: Fn(u64, &storage::Page) -> RsqlResult<()> 
-    {
-        let (mut node, _, mut page_num, _) = self.find_leaf_pos(&index, get_page, true)?;
+        storage: &mut ConsistStorageEngine,
+    ) -> RsqlResult<bool> {
+        let (mut node, _, mut page_num, _) = self.find_leaf_pos(&index, storage, true)?;
         loop {
             if let btree_node::BTreeNode::Leaf { ref mut items, next_page_num } = node {
                 let mut found_pos = None;
@@ -395,15 +377,15 @@ impl BTreeIndex {
 
                 if let Some(pos) = found_pos {
                     items.remove(pos);
-                    let mut page = get_page(page_num)?;
+                    let mut page = storage.read(page_num)?;
                     node.to_page(&mut page)?;
-                    write_page(page_num, &page)?;
+                    storage.write(tnx_id, page_num, &page)?;
                     return Ok(true);
                 }
 
                 if next_page_num == 0 { return Ok(false); }
                 page_num = next_page_num;
-                let next_page = get_page(page_num)?;
+                let next_page = storage.read(page_num)?;
                 node = btree_node::BTreeNode::from_page(&next_page)?;
             } else {
                 return Ok(false);

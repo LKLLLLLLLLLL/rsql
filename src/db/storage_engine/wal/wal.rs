@@ -77,6 +77,7 @@ impl WAL {
                 .read(true)
                 .append(true)
                 .open(&log_path)?;
+            log_file.seek(std::io::SeekFrom::End(0))?; 
         }
         let length = log_file.metadata()?.len();
         Ok(WAL {
@@ -85,41 +86,36 @@ impl WAL {
             length: AtomicU64::new(length),
         })
     }
-    /// Recovery the database to a consistent state using the WAL log.w
-    /// args:
-    /// - write_page(table_id, page_id, data): write a new page to the database
-    /// - update_page(table_id, page_id, offset, len, data): update an existing page in the database
-    /// - append_page(table_id): append a new page to the database, return the new page id
-    /// - trunc_page(table_id): truncate the last page in the table file
-    /// - max_page_idx(table_id): get the current max page index in the table file
-    pub fn recovery(
+    /// Recovery the database to a consistent state using the WAL log.
+    /// Helper function for testing with custom WAL instance.
+    pub fn recovery_with_instance(
+        wal: Arc<WAL>,
         write_page: &mut dyn FnMut(u64, u64, Vec<u8>) -> RsqlResult<()>,
         update_page: &mut dyn FnMut(u64, u64, u64, u64, Vec<u8>) -> RsqlResult<()>,
         append_page: &mut dyn FnMut(u64) -> RsqlResult<u64>,
         trunc_page: &mut dyn FnMut(u64) -> RsqlResult<()>,
         max_page_idx: &mut dyn FnMut(u64) -> RsqlResult<u64>,
     ) -> RsqlResult<()> {
-        HAS_RECOVERED.get_or_init(|| ());
         info!("Starting WAL recovery");
-        let wal = WAL::global();
-        let mut file = wal.log_file.lock().unwrap();
-        // 1. read all entries
-        // seek to start
-        file.seek(std::io::SeekFrom::Start(0))?;
-        let mut entrys = Vec::new();
-        let mut buf = Vec::new();
-        file.read_to_end(&mut buf)?;
+        let buf = {
+            let mut file = wal.log_file.lock().unwrap();
+            file.seek(std::io::SeekFrom::Start(0))?;
+            let mut buf = Vec::new();
+            file.read_to_end(&mut buf)?;
+            file.seek(std::io::SeekFrom::End(0))?;
+            buf
+        };
+
         if buf.len() < 4 {
             panic!("WAL recovery: log file too short to contain header");
         }
-        for entry in WALEntry::from_bytes(&buf[4..]) {
-            entrys.push(entry);
-        }
+        let entrys: Vec<_> = WALEntry::from_bytes(&buf[4..]).collect();
+
         if entrys.is_empty() {
+            HAS_RECOVERED.get_or_init(|| ());
             info!("WAL recovery: no entries to process");
             return Ok(());
         }
-        drop(file);
         // 2. find nearest checkpoint
         let mut checkpoint_index = None;
         for (i, entry) in entrys.iter().enumerate().rev() {
@@ -196,7 +192,7 @@ impl WAL {
             }
         }
         // 5. undo operations
-        for entry in entrys.iter().rev().take(entrys.len() - checkpoint_index) {
+        for entry in entrys.iter().rev() {
             match entry {
                 WALEntry::UpdatePage { tnx_id, table_id, page_id, offset, len, old_data, .. } => {
                     if undo_tnx_ids.contains(tnx_id) {
@@ -235,7 +231,18 @@ impl WAL {
             }
         }
         info!("WAL recovery completed, {} operations applied", recover_num);
+        HAS_RECOVERED.get_or_init(|| ());
         Ok(())
+    }
+
+    pub fn recovery(
+        write_page: &mut dyn FnMut(u64, u64, Vec<u8>) -> RsqlResult<()>,
+        update_page: &mut dyn FnMut(u64, u64, u64, u64, Vec<u8>) -> RsqlResult<()>,
+        append_page: &mut dyn FnMut(u64) -> RsqlResult<u64>,
+        trunc_page: &mut dyn FnMut(u64) -> RsqlResult<()>,
+        max_page_idx: &mut dyn FnMut(u64) -> RsqlResult<u64>,
+    ) -> RsqlResult<()> {
+        Self::recovery_with_instance(WAL::global(), write_page, update_page, append_page, trunc_page, max_page_idx)
     }
 
     pub fn checkpoint(
@@ -246,10 +253,19 @@ impl WAL {
         info!("Starting WAL checkpoint");
         // 1. flush all dirty pages to storage
         flush_page()?;
+        
+        // Hold both locks for the entire duration to ensure atomicity and consistency
         let active_tnx_ids = self.active_tnx_ids.lock().unwrap();
-        let mut file = self.log_file.lock().unwrap();
+        let mut log_file = self.log_file.lock().unwrap();
+
+        let old_bytes = {
+            let mut buf = Vec::new();
+            log_file.seek(std::io::SeekFrom::Start(0))?;
+            log_file.read_to_end(&mut buf)?;
+            buf
+        };
+
         // 2. construct simplified wal log
-        let old_bytes = fs::read(std::path::Path::new(DB_DIR).join("wal.log"))?;
         let mut new_entrys = Vec::new();
         for entry in WALEntry::from_bytes(&old_bytes[4..]) {
             match entry {
@@ -278,6 +294,9 @@ impl WAL {
                 },
             }
         };
+        // 2.5 append checkpoint entry
+        new_entrys.push(WALEntry::Checkpoint { active_tnx_ids: active_tnx_ids.clone() });
+
         // 3. write new wal log
         {
             let mut new_log_file = fs::File::create(std::path::Path::new(DB_DIR).join("wal.log.tmp"))?;
@@ -292,12 +311,14 @@ impl WAL {
         // 4. rename new log file to current log file
         // THIS MUST BE ATOMIC OPERATION
         fs::rename(std::path::Path::new(DB_DIR).join("wal.log.tmp"), std::path::Path::new(DB_DIR).join("wal.log"))?;
-        // 5. update self
-        *file = fs::OpenOptions::new()
+        // 5. update self handle
+        *log_file = fs::OpenOptions::new()
             .read(true)
             .append(true)
             .open(std::path::Path::new(DB_DIR).join("wal.log"))?;
-        self.length.store(file.metadata()?.len(), Ordering::SeqCst); // only header left
+        log_file.seek(std::io::SeekFrom::End(0))?; 
+        self.length.store(log_file.metadata()?.len(), Ordering::SeqCst); 
+        
         info!("WAL checkpoint completed");
         Ok(())
     }
@@ -410,26 +431,25 @@ impl WAL {
         max_page_idx: &mut dyn FnMut(u64) -> RsqlResult<u64>,
     ) -> RsqlResult<bool> {
         check_recovered();
-        // 1. undo everything related to this transaction
-        let mut file = self.log_file.lock().unwrap();
-        let mut undo_entries = Vec::new();
-        // find all entries related to this transaction
-        let mut buf = Vec::new();
-        file.seek(std::io::SeekFrom::Start(0))?;
-        file.read_to_end(&mut buf)?;
-        for entry in WALEntry::from_bytes(&buf[4..]) {
-            match &entry {
-                WALEntry::UpdatePage { tnx_id: eid, .. }
-                | WALEntry::NewPage { tnx_id: eid, .. }
-                | WALEntry::DeletePage { tnx_id: eid, .. } => {
-                    if *eid == tnx_id {
-                        undo_entries.push(entry);
-                    }
-                },
-                _ => {},
-            }
-        }
-        // undo them all
+        // 1. find all entries related to this transaction
+        let undo_entries = {
+            let mut file = self.log_file.lock().unwrap();
+            let mut buf = Vec::new();
+            file.seek(std::io::SeekFrom::Start(0))?;
+            file.read_to_end(&mut buf)?;
+            file.seek(std::io::SeekFrom::End(0))?; // Reset cursor
+            
+            WALEntry::from_bytes(&buf[4..])
+                .filter(|e| match e {
+                    WALEntry::UpdatePage { tnx_id: eid, .. }
+                    | WALEntry::NewPage { tnx_id: eid, .. }
+                    | WALEntry::DeletePage { tnx_id: eid, .. } => *eid == tnx_id,
+                    _ => false,
+                })
+                .collect::<Vec<_>>()
+        }; // Lock dropped before callbacks to avoid deadlock
+
+        // 2. undo them all in reverse order
         for entry in undo_entries.iter().rev() {
             match entry {
                 WALEntry::UpdatePage { table_id, page_id, offset, len, old_data, .. } => {
@@ -459,12 +479,12 @@ impl WAL {
                 _ => {},
             }
         }
-        drop(file);
-        // 2. write rollback entry
+        
+        // 3. write rollback entry
+        self.active_tnx_ids.lock().unwrap().retain(|&id| id != tnx_id);
         let entry = WALEntry::RollbackTnx {
             tnx_id
         };
-        self.active_tnx_ids.lock().unwrap().retain(|&id| id != tnx_id);
         let need_checkpoint = self.append_entry(&entry)?;
         self.flush()?;
         Ok(need_checkpoint)
@@ -481,23 +501,12 @@ mod tests {
 
     #[test]
     fn test_wal_recovery_redo_undo() {
-        // mark recovered so test can call WAL methods without panic
-        HAS_RECOVERED.get_or_init(|| ());
-
-        // backup existing wal.log if any
+        // cleanup
         let wal_path = Path::new(DB_DIR).join("wal.log");
-        let backup_path = Path::new(DB_DIR).join("wal.log.bak");
-        if wal_path.exists() {
-            // remove any pre-existing bak
-            let _ = fs::remove_file(&backup_path);
-            fs::create_dir_all(DB_DIR).unwrap();
-            fs::rename(&wal_path, &backup_path).unwrap();
-        } else {
-            fs::create_dir_all(DB_DIR).unwrap();
-        }
+        let _ = fs::remove_file(&wal_path);
 
-        // ensure WAL is initialized (this will create wal.log with header)
-        let wal = WAL::global();
+        // create a fresh WAL instance
+        let wal = Arc::new(WAL::new().expect("Failed to init WAL"));
 
         // start a committed transaction t1 that creates a new page
         wal.open_tnx(1).unwrap();
@@ -531,27 +540,109 @@ mod tests {
         let mut trunc_page = |_: u64| -> RsqlResult<()> { truncated.push(()); Ok(()) };
         let mut max_page_idx = |_: u64| -> RsqlResult<u64> { Ok(0) };
 
-        // ensure the WAL file cursor is at start so read_to_end reads full content
-        {
-            use std::io::Seek;
-            let mut file = wal.log_file.lock().unwrap();
-            file.seek(std::io::SeekFrom::Start(0)).unwrap();
-        }
-        WAL::recovery(&mut write_page, &mut update_page, &mut append_page, &mut trunc_page, &mut max_page_idx).unwrap();
+        WAL::recovery_with_instance(wal, &mut write_page, &mut update_page, &mut append_page, &mut trunc_page, &mut max_page_idx).unwrap();
 
         // After recovery: new_page from committed t1 should be redone
         assert!(wrote_pages.iter().any(|(t, p, d)| *t == 42 && *p == 0 && *d == data1));
 
         // update from uncommitted t2 should be undone (i.e., undo phase will apply old data)
-        // undo applies old_data via update_page; ensure updated_pages contains an update restoring old
         assert!(updated_pages.iter().any(|(t, p, _off, _len, d)| *t == 42 && *p == 0 && *d == old));
+    }
 
-        // cleanup: try to restore backup if existed
-        if backup_path.exists() {
-            // overwrite current wal.log with backup content
-            let bak_bytes = fs::read(&backup_path).unwrap_or_default();
-            let _ = fs::write(&wal_path, &bak_bytes);
-            let _ = fs::remove_file(&backup_path);
-        }
+    #[test]
+    fn test_wal_rollback_deadlock() {
+        // mark recovered so test can call WAL methods
+        HAS_RECOVERED.get_or_init(|| ());
+
+        let wal = WAL::global();
+        wal.open_tnx(100).unwrap();
+        wal.update_page(100, 1, 1, 0, &[1], &[2]).unwrap();
+        
+        // This should NOT deadlock even if callback calls WAL
+        wal.rollback_tnx(100, 
+            &mut |_, _, _| Ok(()),
+            &mut |_, _, _, _, _| {
+                let wal2 = WAL::global();
+                // different tnx id to avoid any other logic issues
+                wal2.open_tnx(101).unwrap();
+                wal2.update_page(101, 1, 1, 0, &[3], &[4]).unwrap();
+                Ok(())
+            },
+            &mut |_| Ok(0),
+            &mut |_| Ok(()),
+            &mut |_| Ok(0)
+        ).unwrap();
+    }
+
+    #[test]
+    fn test_wal_checkpoint() {
+        // cleanup
+        let wal_path = Path::new(DB_DIR).join("wal.log");
+        let _ = fs::remove_file(&wal_path);
+
+        // mark recovered
+        let _ = HAS_RECOVERED.get_or_init(|| ());
+
+        let wal = Arc::new(WAL::new().expect("Failed to init WAL"));
+
+        // 1. Committed transaction t1
+        wal.open_tnx(1).unwrap();
+        wal.update_page(1, 10, 0, 0, &[0u8], &[1u8]).unwrap();
+        wal.commit_tnx(1).unwrap();
+
+        // 2. Active transaction t2
+        wal.open_tnx(2).unwrap();
+        wal.update_page(2, 10, 0, 1, &[0u8], &[2u8]).unwrap();
+
+        // 3. Checkpoint
+        let flushed = Arc::new(Mutex::new(false));
+        let flushed_clone = flushed.clone();
+        wal.checkpoint(&|| {
+            *flushed_clone.lock().unwrap() = true;
+            Ok(())
+        }).unwrap();
+
+        assert!(*flushed.lock().unwrap());
+
+        // 4. Verify log content - should only contain t2 and Checkpoint
+        let bytes = fs::read(&wal_path).unwrap();
+        let entries: Vec<_> = WALEntry::from_bytes(&bytes[4..]).collect();
+        
+        // Should have OpenTnx(2), UpdatePage(2, ...), and Checkpoint
+        assert!(entries.iter().any(|e| match e {
+            WALEntry::OpenTnx { tnx_id } => *tnx_id == 2,
+            _ => false,
+        }));
+        assert!(entries.iter().any(|e| matches!(e, WALEntry::Checkpoint { .. })));
+        // Should NOT have t1 entries
+        assert!(!entries.iter().any(|e| match e {
+            WALEntry::OpenTnx { tnx_id } => *tnx_id == 1,
+            WALEntry::CommitTnx { tnx_id } => *tnx_id == 1,
+            _ => false,
+        }));
+
+        // 5. Recovery test
+        let mut updated = Vec::new();
+        let mut update_fn = |_: u64, _: u64, _: u64, _: u64, data: Vec<u8>| {
+            updated.push(data);
+            Ok(())
+        };
+        
+        // Reset recovery state for testing
+        // (This is tricky because HAS_RECOVERED is a OnceLock and can't be reset easily)
+        // But recovery_with_instance doesn't check HAS_RECOVERED, it SETS it.
+
+        WAL::recovery_with_instance(
+            wal.clone(),
+            &mut |_, _, _| Ok(()),
+            &mut update_fn,
+            &mut |_| Ok(0),
+            &mut |_| Ok(()),
+            &mut |_| Ok(0),
+        ).unwrap();
+
+        // Since t2 was active during checkpoint, it should be in undo_tnx_ids
+        // and its update should be undone (reverting to old data [0u8])
+        assert!(updated.contains(&vec![0u8]));
     }
 }

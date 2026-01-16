@@ -1,6 +1,508 @@
 use super::storage;
 use crate::db::errors::RsqlResult;
-use crate::db::utils;
+use super::super::consist_storage::ConsistStorageEngine;
+
+/// Helper function set for bitmap
+struct Bitmap;
+impl Bitmap {
+    pub fn is_full(bytes: &[u8], num_bits: usize) -> bool {
+        for i in 0..num_bits {
+            let byte_idx = i / 8;
+            let bit_idx = i % 8;
+            if (bytes[byte_idx] & (1u8 << bit_idx)) == 0 {
+                return false;
+            }
+        }
+        true
+    }
+    pub fn is_all_empty(bytes: &[u8], num_bits: usize) -> bool {
+        for i in 0..num_bits {
+            let byte_idx = i / 8;
+            let bit_idx = i % 8;
+            if (bytes[byte_idx] & (1u8 << bit_idx)) != 0 {
+                return false;
+            }
+        }
+        true
+    }
+    pub fn empty_bitmap(num_bits: usize) -> Vec<u8> {
+        let num_bytes = (num_bits + 7) / 8;
+        vec![0u8; num_bytes]
+    }
+    pub fn find_empty_bit(bytes: &[u8], num_bits: usize) -> Option<usize> {
+        for (byte_idx, byte) in bytes.iter().enumerate() {
+            if *byte != 0xFF {
+                let inv = !byte;
+                let tz = inv.trailing_zeros() as usize;
+                if byte_idx * 8 + tz >= num_bits {
+                    return None;
+                }
+                return Some(byte_idx * 8 + tz);
+            }
+        }
+        None
+    }
+    pub fn set_bit_true(bytes: &mut [u8], bit_idx: usize) {
+        let byte_idx = bit_idx / 8;
+        let bit_in_byte = bit_idx % 8;
+        bytes[byte_idx] |= 1u8 << bit_in_byte;
+    }   
+    pub fn set_bit_false(bytes: &mut [u8], bit_idx: usize) {
+        let byte_idx = bit_idx / 8;
+        let bit_in_byte = bit_idx % 8;
+        bytes[byte_idx] &= !(1u8 << bit_in_byte);
+    }
+}
+
+
+/// Helper function set for entry page
+/// entry page sturcture:
+/// - header: [next_free_page: 8bytes][prev_free_page: 8bytes][bitmap: var size]
+/// - body:   [entries...]
+struct EntryPage;
+impl EntryPage {
+    pub fn next_free_page(page: &storage::Page) -> u64 {
+        let bytes = &page.data;
+        let next_bytes = &bytes[0..8];
+        u64::from_le_bytes(next_bytes.try_into().unwrap())
+    }
+    pub fn set_next_free_page(page: &mut storage::Page, next: u64) {
+        let bytes = &mut page.data;
+        bytes[0..8].copy_from_slice(&next.to_le_bytes());
+    }
+    pub fn prev_free_page(page: &storage::Page) -> u64 {
+        let bytes = &page.data;
+        let prev_bytes = &bytes[8..16];
+        u64::from_le_bytes(prev_bytes.try_into().unwrap())
+    }
+    pub fn set_prev_free_page(page: &mut storage::Page, prev: u64) {
+        let bytes = &mut page.data;
+        bytes[8..16].copy_from_slice(&prev.to_le_bytes());
+    }
+    pub fn bitmap_size(entries_per_page: u64) -> usize {
+        ((entries_per_page + 7) / 8) as usize
+    }
+    pub fn bitmap(page: &storage::Page, entries_per_page: u64) -> &[u8] {
+        let bytes = &page.data;
+        let bitmap_size = Self::bitmap_size(entries_per_page);
+        &bytes[16..16 + bitmap_size]
+    }
+    pub fn set_bitmap(page: &mut storage::Page, entries_per_page: u64, bitmap: &[u8]) {
+        let bytes = &mut page.data;
+        let bitmap_size = Self::bitmap_size(entries_per_page);
+        bytes[16..16 + bitmap_size].copy_from_slice(&bitmap[0..bitmap_size]);
+    }
+    pub fn entries_begin(entries_per_page: u64) -> u64 {
+        let bitmap_size = Self::bitmap_size(entries_per_page) as u64;
+        16 + bitmap_size
+    }
+    pub fn entries_offset(entry_index: u64, entry_size: u64, entries_per_page: u64) -> u64 {
+        Self::entries_begin(entries_per_page) + entry_index * entry_size
+    }
+    pub fn entries_index(entry_offset: u64, entry_size: u64, entries_per_page: u64) -> u64 {
+        (entry_offset - Self::entries_begin(entries_per_page)) / entry_size
+    }
+    pub fn new_page(
+        entries_per_page: u64,
+        next_free_page: Option<u64>,
+        prev_free_page: Option<u64>,
+    ) -> storage::Page {
+        let mut page = storage::Page::new();
+        // initialize next_free_chunk
+        let next = match next_free_page {
+            Some(n) => n,
+            None => 0,
+        };
+        Self::set_next_free_page(&mut page, next);
+        // initialize prev_free_page
+        let prev = match prev_free_page {
+            Some(p) => p,
+            None => 0,
+        };
+        Self::set_prev_free_page(&mut page, prev);
+        // initialize bitmap
+        let bitmap_bytes = Bitmap::empty_bitmap(entries_per_page as usize);
+        Self::set_bitmap(&mut page, entries_per_page, &bitmap_bytes);
+        page
+    }
+}
+
+/// Helper function set for heap page
+/// The heap free space is managed by:
+/// [first_free_heap_page_ptr] -> [free_heap_page] -> [free_heap_page] -> ...
+/// Each free heap page:
+/// - [next_free_page: 8bytes][prev_free_page: 8bytes]
+/// - [first_free_chunk_offset: 8bytes]: >= 24
+/// - [data...]
+struct HeapPage;
+impl HeapPage {
+    /// Create and initialize a new free heap page
+    /// Will initialize both header and first free chunk(include entire page)
+    pub fn new_free_page(
+        prev_free_page: Option<u64>,
+        next_free_page: Option<u64>,
+    ) -> storage::Page {
+        let mut page = storage::Page::new();
+        // initialize next_free_page
+        let next = match next_free_page {
+            Some(n) => n,
+            None => 0,
+        };
+        Self::set_next_free_page(&mut page, next);
+        // initialize prev_free_page
+        let prev = match prev_free_page {
+            Some(p) => p,
+            None => 0,
+        };
+        Self::set_prev_free_page(&mut page, prev);
+        // initialize first free chunk offset
+        let first_chunk_offset = 24u64; // right after the header
+        Self::set_first_free_chunk_offset(&mut page, first_chunk_offset);
+        // initialize the only free chunk in this page
+        HeapChunk::set_next_free_chunk(&mut page, first_chunk_offset, 0);
+        HeapChunk::set_prev_free_chunk(&mut page, first_chunk_offset, 0);
+        let chunk_size = (storage::Page::max_size() as u64) - first_chunk_offset;
+        HeapChunk::set_chunk_size(&mut page, first_chunk_offset, chunk_size);
+        page
+    }
+    pub fn next_free_page(page: &storage::Page) -> u64 {
+        let bytes = &page.data;
+        let next_bytes = &bytes[0..8];
+        u64::from_le_bytes(next_bytes.try_into().unwrap())
+    }
+    pub fn set_next_free_page(page: &mut storage::Page, next: u64) {
+        let bytes = &mut page.data;
+        bytes[0..8].copy_from_slice(&next.to_le_bytes());
+    }
+    pub fn prev_free_page(page: &storage::Page) -> u64 {
+        let bytes = &page.data;
+        let prev_bytes = &bytes[8..16];
+        u64::from_le_bytes(prev_bytes.try_into().unwrap())
+    }
+    pub fn set_prev_free_page(page: &mut storage::Page, prev: u64) {
+        let bytes = &mut page.data;
+        bytes[8..16].copy_from_slice(&prev.to_le_bytes());
+    }
+    pub fn first_free_chunk_offset(page: &storage::Page) -> u64 {
+        let bytes = &page.data;
+        let offset_bytes = &bytes[16..24];
+        u64::from_le_bytes(offset_bytes.try_into().unwrap())
+    }
+    pub fn set_first_free_chunk_offset(page: &mut storage::Page, offset: u64) {
+        let bytes = &mut page.data;
+        bytes[16..24].copy_from_slice(&offset.to_le_bytes());
+    }
+    pub fn check_page_empty(page: &storage::Page) -> bool {
+        // check if first free chunk offset == 0
+        let first_chunk_offset = Self::first_free_chunk_offset(page);
+        if first_chunk_offset != 24 {
+            return false;
+        };
+        // check if if chunk size == page size - header
+        let chunk_size = HeapChunk::chunk_size(page, first_chunk_offset);
+        if chunk_size != (storage::Page::max_size() as u64) - first_chunk_offset {
+            panic!("Heap page corruption detected: first chunk size mismatch");
+        };
+        true
+    }
+}
+
+/// Helper function set for heap chunk
+/// - Each free chunk:
+///     - [next_free_chunk_offset: 8bytes][prev_free_chunk_offset: 8bytes]
+///     - [chunk_size(exclude header): 8bytes(exclude header)]
+///     - [data...]
+/// - Each used chunk(has same header size as free chunk):
+///     - [padding: 12bytes]: must be all zero
+///     - [chunk_size: 8bytes(exclude header)][magic_number:4bytes]
+///     - [data...]
+/// CAUTION: the free chunk list must sorted by offset in ascending order
+struct HeapChunk;
+impl HeapChunk {
+    pub fn header_size() -> u64 {
+        24u64
+    }
+    /// If the padding bytes are not all zero, then the chunk is free
+    pub fn is_free(page: &storage::Page, offset: u64) -> bool {
+        let bytes = &page.data;
+        let offset = offset as usize;
+        let padding_bytes = &bytes[offset..offset + 12];
+        for b in padding_bytes {
+            if *b != 0u8 {
+                // is free, check corruption
+                Self::check_corruption(page, offset as u64);
+                return true;
+            }
+        }
+        false
+    }
+    pub fn check_corruption(page: &storage::Page, offset: u64) -> bool {
+        let bytes = &page.data;
+        let offset = offset as usize;
+        // check padding bytes
+        let padding_bytes = &bytes[offset..offset + 12];
+        for b in padding_bytes {
+            if *b != 0u8 {
+                return false;
+            }
+        }
+        // check magic number
+        let magic_bytes = &bytes[offset + 20..offset+24];
+        let magic_number = u32::from_le_bytes(magic_bytes.try_into().unwrap());
+        magic_number != MAGIC_NUMBER
+    }
+    pub fn next_free_chunk(page: &storage::Page, offset: u64) -> u64 {
+        if Self::is_free(page, offset) {
+            panic!("Trying to get next free chunk of a used chunk at offset {}", offset);
+        }
+        let bytes = &page.data;
+        let offset = offset as usize;
+        let chunk_header = &bytes[offset..offset + 8];
+        u64::from_le_bytes(chunk_header.try_into().unwrap())
+    }
+    pub fn set_next_free_chunk(page: &mut storage::Page, offset: u64, next: u64) {
+        if Self::is_free(page, offset) {
+            panic!("Trying to set next free chunk of a used chunk at offset {}", offset);
+        }
+        let bytes = &mut page.data;
+        let offset = offset as usize;
+        bytes[offset..offset + 8].copy_from_slice(&next.to_le_bytes());
+    }
+    pub fn prev_free_chunk(page: &storage::Page, offset: u64) -> u64 {
+        if Self::is_free(page, offset) {
+            panic!("Trying to get prev free chunk of a used chunk at offset {}", offset);
+        }
+        let bytes = &page.data;
+        let offset = offset as usize;
+        let chunk_header = &bytes[offset + 8..offset + 16];
+        u64::from_le_bytes(chunk_header.try_into().unwrap())
+    }
+    pub fn set_prev_free_chunk(page: &mut storage::Page, offset: u64, prev: u64) {
+        if Self::is_free(page, offset) {
+            panic!("Trying to set prev free chunk of a used chunk at offset {}", offset);
+        }
+        let bytes = &mut page.data;
+        let offset = offset as usize;
+        bytes[offset + 8..offset + 16].copy_from_slice(&prev.to_le_bytes());
+    }
+    pub fn chunk_size(page: &storage::Page, offset: u64) -> u64 {
+        if Self::is_free(page, offset) {
+            // chunk_size is at offset + 16
+                let bytes = &page.data;
+            let offset = offset as usize;
+            let chunk_size_bytes = &bytes[offset + 16..offset + 24];
+            u64::from_le_bytes(chunk_size_bytes.try_into().unwrap())
+        } else {
+            // chunk_size is at offset + 12
+            let bytes = &page.data;
+            let offset = offset as usize;
+            let chunk_size_bytes = &bytes[offset + 12..offset + 20];
+            u64::from_le_bytes(chunk_size_bytes.try_into().unwrap())
+        }
+    }
+    pub fn set_chunk_size(page: &mut storage::Page, offset: u64, size: u64) {
+        let bytes = &mut page.data;
+        let offset = offset as usize;
+        bytes[offset + 16..offset + 24].copy_from_slice(&size.to_le_bytes());
+    }
+    /// Ptr is the pointer to user, which point to the data part of the chunk
+    pub fn ptr_to_offset(ptr: u64) -> u64 {
+        ptr - Self::header_size()
+    }
+    /// Offset is the pointer to chunk header
+    pub fn offset_to_ptr(offset: u64) -> u64 {
+        offset + Self::header_size()
+    }
+    
+    /// Set the padding bytes to all zero
+    /// And the magic number to avoid corruption
+    fn set_used(page: &mut storage::Page, offset: u64) {
+        let chunk_size = Self::chunk_size(page, offset);
+        let chunk_size_bytes = chunk_size.to_le_bytes();
+        let magic_bytes = MAGIC_NUMBER.to_le_bytes();
+        let zero_bytes = [0u8; 12];
+        page.data[offset as usize..(offset + 12) as usize].copy_from_slice(&zero_bytes);
+        page.data[(offset + 12) as usize..(offset + 20) as usize].copy_from_slice(&chunk_size_bytes);
+        page.data[(offset + 20) as usize..(offset + 24) as usize].copy_from_slice(&magic_bytes);
+    }
+    /// Set the chunk as free chunk
+    /// This will not update free list links
+    fn set_free(
+        page: &mut storage::Page,
+        offset: u64,
+        next_free: u64,
+        prev_free: u64,
+    ) {
+        let chunk_size = Self::chunk_size(page, offset);
+        // set next free chunk
+        Self::set_next_free_chunk(page, offset, next_free);
+        // set prev free chunk
+        Self::set_prev_free_chunk(page, offset, prev_free);
+        // set chunk size
+        Self::set_chunk_size(page, offset, chunk_size);
+    }
+    /// If you found this chunk suitable,
+    /// you can call this function to allocate it
+    /// This function will split the chunk, 
+    /// repaire the freelist links, 
+    /// and initialize the used chunk header
+    /// Return: ptr to the data part of the allocated chunk
+    pub fn alloc_chunk(
+        page: &mut storage::Page,
+        offset: u64,
+        size: u64,
+    ) -> RsqlResult<u64> {
+        let chunk_size = Self::chunk_size(page, offset);
+        if chunk_size < size {
+            panic!("Trying to allocate chunk of size {} from chunk of size {}", size, chunk_size);
+        }
+        let next_free = Self::next_free_chunk(page, offset);
+        let prev_free = Self::prev_free_chunk(page, offset);
+        // 1. try split the chunk and update freelist links
+        let remaining_size = chunk_size - size;
+        if remaining_size >= Self::header_size() + 8 { // make sure the remaining chunk's size >= 8bytes
+            // split the chunk
+            let new_free_chunk_offset = offset + Self::header_size() + size;
+            // update current chunk size
+            Self::set_chunk_size(page, offset, size);
+            // initialize new free chunk
+            Self::set_chunk_size(page, new_free_chunk_offset, remaining_size);
+            Self::set_next_free_chunk(page, new_free_chunk_offset, next_free);
+            Self::set_prev_free_chunk(page, new_free_chunk_offset, prev_free);
+            // update prev next pointer
+            if prev_free != 0 {
+                HeapChunk::set_next_free_chunk(page, prev_free, new_free_chunk_offset);
+            } else {
+                // update first free chunk pointer in page header
+                HeapPage::set_first_free_chunk_offset(page, new_free_chunk_offset);
+            }
+            // update next prev pointer
+            if next_free != 0 {
+                HeapChunk::set_prev_free_chunk(page, next_free, new_free_chunk_offset);
+            }
+        } else {
+            // only update freelist links
+            // update prev next pointer
+            if prev_free != 0 {
+                HeapChunk::set_next_free_chunk(page, prev_free, next_free);
+            } else {
+                // update first free chunk pointer in page header
+                HeapPage::set_first_free_chunk_offset(page, next_free);
+            }
+            // update next prev pointer
+            if next_free != 0 {
+                HeapChunk::set_prev_free_chunk(page, next_free, prev_free);
+            }
+        };
+        // 2. initialize used chunk header
+        Self::set_used(page, offset);
+        Ok(Self::offset_to_ptr(offset))
+    }
+    pub fn dealloc_chunk(
+        page: &mut storage::Page,
+        offset: u64,
+    ) -> RsqlResult<()> {
+        if Self::is_free(page, offset) {
+            panic!("Trying to dealloc a free chunk at offset {}", offset);
+        };
+        // set chunk as free
+        Self::set_free(page, offset, 0, 0);
+        // traverse the free chunk list to find the proper position
+        let mut current_chunk_offset = HeapPage::first_free_chunk_offset(page);
+        let mut prev_free_chunk_offset = 0u64;
+        loop {
+            if current_chunk_offset == 0 || prev_free_chunk_offset > offset {
+                break;
+            }
+            prev_free_chunk_offset = current_chunk_offset;
+            current_chunk_offset = Self::next_free_chunk(page, current_chunk_offset);
+        };
+        // find if the adjacent chunks are free
+        let mut merge_prev = false;
+        if prev_free_chunk_offset != 0 {
+            let prev_chunk_size = Self::chunk_size(page, prev_free_chunk_offset);
+            if prev_free_chunk_offset + Self::header_size() + prev_chunk_size == offset {
+                merge_prev = true;
+            };
+        };
+        let mut merge_next = false;
+        if current_chunk_offset != 0 {
+            if offset + Self::header_size() + Self::chunk_size(page, offset) == current_chunk_offset {
+                merge_next = true;
+            };
+        };
+        // merge prev and next if possible
+        if merge_prev {
+            let next_free_chunk = Self::next_free_chunk(page, prev_free_chunk_offset);
+            let prev_free_chunk = Self::prev_free_chunk(page, prev_free_chunk_offset);
+            let new_chunk_offset = prev_free_chunk_offset;
+            let new_chunk_size = 
+                Self::chunk_size(page, prev_free_chunk_offset) +
+                Self::header_size() +
+                Self::chunk_size(page, offset);
+            Self::set_chunk_size(page, new_chunk_offset, new_chunk_size);
+            Self::set_next_free_chunk(page, new_chunk_offset, next_free_chunk);
+            Self::set_prev_free_chunk(page, offset, prev_free_chunk);
+            // update prev next pointer
+            if prev_free_chunk != 0 {
+                HeapChunk::set_next_free_chunk(page, prev_free_chunk, new_chunk_offset);
+            } else {
+                // update first free chunk pointer in page header
+                HeapPage::set_first_free_chunk_offset(page, new_chunk_offset);
+            }
+            // update next prev pointer
+            if next_free_chunk != 0 {
+                HeapChunk::set_prev_free_chunk(page, next_free_chunk, new_chunk_offset);
+            }
+        };
+        // Because the merge operation is idempotent,
+        // So whatever merge_prev is true or false,
+        // we can just check merge_next here
+        if merge_next {
+            let next_free_chunk = Self::next_free_chunk(page, current_chunk_offset);
+            let prev_free_chunk = Self::prev_free_chunk(page, current_chunk_offset);
+            let new_chunk_offset = offset;
+            let new_chunk_size = 
+                Self::chunk_size(page, offset) +
+                Self::header_size() +
+                Self::chunk_size(page, current_chunk_offset);
+            Self::set_chunk_size(page, new_chunk_offset, new_chunk_size);
+            Self::set_next_free_chunk(page, new_chunk_offset, next_free_chunk);
+            Self::set_prev_free_chunk(page, new_chunk_offset, prev_free_chunk);
+            // update prev next pointer
+            if prev_free_chunk != 0 {
+                HeapChunk::set_next_free_chunk(page, prev_free_chunk, new_chunk_offset);
+            } else {
+                // update first free chunk pointer in page header
+                HeapPage::set_first_free_chunk_offset(page, new_chunk_offset);
+            }
+            // update next prev pointer
+            if next_free_chunk != 0 {
+                HeapChunk::set_prev_free_chunk(page, next_free_chunk, new_chunk_offset);
+            }
+        };
+        // if no merge happened, just insert into the free list
+        if !merge_prev && !merge_next {
+            // insert between prev_free_chunk_offset and current_chunk_offset
+            let new_chunk_offset = offset;
+            Self::set_next_free_chunk(page, new_chunk_offset, current_chunk_offset);
+            Self::set_prev_free_chunk(page, new_chunk_offset, prev_free_chunk_offset);
+            // update prev next pointer
+            if prev_free_chunk_offset != 0 {
+                HeapChunk::set_next_free_chunk(page, prev_free_chunk_offset, new_chunk_offset);
+            } else {
+                // update first free chunk pointer in page header
+                HeapPage::set_first_free_chunk_offset(page, new_chunk_offset);
+            }
+            // update next prev pointer
+            if current_chunk_offset != 0 {
+                HeapChunk::set_prev_free_chunk(page, current_chunk_offset, new_chunk_offset);
+            }
+        };
+        Ok(())
+    }
+}
+
 
 const MAGIC_NUMBER: u32 = 0x4c515352; // 'RSQL' in little endian hex
 
@@ -18,20 +520,11 @@ pub struct Allocator {
     first_free_heap_page: u64, // ptr to first heap chunk has free space
 }
 
+/// Serilization and deserialization util functions
+/// Byte layout:
+/// [entry_size: 8bytes][entries_per_page: 8bytes][first_free_entry_page: 8bytes][first_free_heap_page: 8bytes]
 impl Allocator {
-    pub fn create(entry_size: u64, begin_with: u64) -> Self {
-        let entries_per_page = storage::Page::max_size() as u64 / entry_size;
-        Allocator {
-            begin_with,
-            entry_size,
-            entries_per_page,
-            first_free_entry_page: 0, // 0 means no free entry page (page 0 is never used for entry pages)
-            first_free_heap_page: 0, // 0 means no free heap chunk
-        }
-    }
-    /// Serialize allocator metadata to bytes
-    /// [entry_size: 8bytes][entries_per_page: 8bytes][first_free_entry_page: 8bytes][first_free_heap_page: 8bytes]
-    pub fn to_bytes(&self) -> Vec<u8> {
+    fn _to_bytes(&self) -> Vec<u8> {
         let mut buf = vec![];
         buf.extend_from_slice(&self.entry_size.to_le_bytes());
         buf.extend_from_slice(&self.entries_per_page.to_le_bytes());
@@ -39,8 +532,7 @@ impl Allocator {
         buf.extend_from_slice(&self.first_free_heap_page.to_le_bytes());
         buf
     }
-    pub fn from(page: &storage::Page, begin_with: u64) -> RsqlResult<Self> {
-        let bytes = &page.data;
+    fn from_bytes(bytes: &[u8], begin_with: u64) -> RsqlResult<Self> {
         let mut offset = begin_with as usize;
         let entry_size_bytes = &bytes[offset..offset+8];
         let entry_size = u64::from_le_bytes(entry_size_bytes.try_into().unwrap());
@@ -61,205 +553,217 @@ impl Allocator {
             first_free_heap_page,
         })
     }
+    fn set_first_free_entry_page(
+        &mut self, 
+        free_entry_page: u64,
+        storage: &mut ConsistStorageEngine,
+        tnx_id: u64,
+    ) -> RsqlResult<()> {
+        self.first_free_entry_page = free_entry_page;
+        // write to page 0
+        let offset = self.begin_with + 8 + 8;
+        let bytes = free_entry_page.to_le_bytes();
+        storage.write_bytes(tnx_id, 0, offset as usize, &bytes)
+    }
+    fn set_first_free_heap_page(
+        &mut self, 
+        free_heap_page: u64,
+        storage: &mut ConsistStorageEngine,
+        tnx_id: u64,
+    ) -> RsqlResult<()> {
+        self.first_free_heap_page = free_heap_page;
+        // write to page 0
+        let offset = self.begin_with + 8 + 8 + 8;
+        let bytes = free_heap_page.to_le_bytes();
+        storage.write_bytes(tnx_id, 0, offset as usize, &bytes)
+    }
+}
+
+impl Allocator {
+    pub fn create(entry_size: u64, begin_with: u64) -> Self {
+        let entries_per_page = storage::Page::max_size() as u64 / entry_size;
+        Allocator {
+            begin_with,
+            entry_size,
+            entries_per_page,
+            first_free_entry_page: 0, // 0 means no free entry page (page 0 is never used for entry pages)
+            first_free_heap_page: 0, // 0 means no free heap chunk
+        }
+    }
+    /// Serialize allocator metadata to bytes
+    /// [entry_size: 8bytes][entries_per_page: 8bytes][first_free_entry_page: 8bytes][first_free_heap_page: 8bytes]
+    pub fn to_bytes(&self) -> Vec<u8> {
+        self._to_bytes()
+    }
+    pub fn from(page: &storage::Page, begin_with: u64) -> RsqlResult<Self> {
+        let bytes = &page.data;
+        Self::from_bytes(bytes, begin_with)
+    }
     /// find the tail of entry page linked list
     /// 0 indicates no entry pages
-    /// Args:
-    /// - read(page_idx) -> page
     fn entry_page_list_tail(
         &self,
-        read: &impl Fn(u64) -> RsqlResult<storage::Page>,
+        storage: &ConsistStorageEngine,
     ) -> RsqlResult<u64> {
         let mut current_page = self.first_free_entry_page;
         let mut prev_page = 0;
         while current_page != 0 {
-            let page = read(current_page)?;
-            let next_free_chunk_bytes = &page.data[8..16];
-            let next_free_chunk = u64::from_le_bytes(next_free_chunk_bytes.try_into().unwrap());
-            if next_free_chunk == 0 {
+            let page = storage.read(current_page)?;
+            let next_free_page = EntryPage::next_free_page(&page);
+            if next_free_page == 0 {
                 return Ok(current_page);
             }
             prev_page = current_page;
-            current_page = next_free_chunk;
+            current_page = next_free_page;
         }
         Ok(prev_page)
     }
     /// allocate and initialize a new entry page
-    /// entry page sturcture:
-    /// [entries begin: 8bytes][next_free_chunk: 8bytes][bitmap: var size][entries...]
-    /// Args:
-    /// - allocate() -> (new_page, page_idx)
-    /// - write(page_idx, offset, data)
-    /// - read(page_idx) -> page
+    /// The new entry page will always in the tail of the linked list
     fn new_entry_page(
         &mut self,
-        allocate: &impl Fn() -> RsqlResult<(storage::Page, u64)>,
-        write: &impl Fn(u64, u64, &[u8]) -> RsqlResult<()>,
-        read: &impl Fn(u64) -> RsqlResult<storage::Page>,
+        tnx_id: u64,
+        storage: &mut ConsistStorageEngine,
     ) -> RsqlResult<u64> {
-        let (_, page_idx) = allocate()?;
+        let (page_idx, _) = storage.new_page(tnx_id)?;
+        // find previous tail
+        let tail = match self.entry_page_list_tail(storage)?{
+            0 => None,
+            n => Some(n),
+        };
         // initialize page header
-        let mut buf = vec![];
-        buf.extend_from_slice(0u64.to_le_bytes().as_ref()); // entries begin
-        buf.extend_from_slice(0u64.to_le_bytes().as_ref()); // next free chunk
-        let bitmap_size = ((self.entries_per_page + 7) / 8) as usize;
-        let bitmap_bytes = vec![0u8; bitmap_size];
-        buf.extend_from_slice(&bitmap_bytes);
-        let entries_begin = buf.len() as u64;
-        buf[..8].copy_from_slice(&entries_begin.to_le_bytes()); // entries begin
-        // update previous pointer
-        let previous_page = self.entry_page_list_tail(&read)?;
-        let update_page;
-        let update_offset;
+        let page = EntryPage::new_page(self.entries_per_page, None, tail);
+        // update previous next pointer
+        let previous_page = self.entry_page_list_tail(storage)?;
         if previous_page == 0 {
-            self.first_free_entry_page = page_idx;
-            update_page = 0;
-            update_offset = self.begin_with + 16; 
+            // first entry page
+            self.set_first_free_entry_page(page_idx, storage, 0)?; // tnx_id 0 for system operations
         } else {
-            update_page = previous_page;
-            update_offset = 8; // next_free_chunk offset
+            let mut prev_page_data = storage.read(previous_page)?;
+            EntryPage::set_next_free_page(&mut prev_page_data, page_idx);
+            storage.write(0, previous_page, &prev_page_data)?; // tnx_id 0 for system operations
         }
         // write new page to disk
-        write(page_idx, 0, &buf)?;
-        // update previous page's next pointer
-        let mut prev_page_data = read(update_page)?;
-        prev_page_data.data[update_offset as usize..(update_offset as usize + 8)]
-            .copy_from_slice(&page_idx.to_le_bytes());
-        write(update_page, update_offset, &prev_page_data.data[update_offset as usize..(update_offset as usize + 8)])?;
+        storage.write(tnx_id, page_idx, &page)?;
         Ok(page_idx)
     }
     /// Free an entry page
-    /// Args:
-    /// - write(page_idx, offset, data)
-    /// - read(page_idx) -> page
-    /// - free(page_idx)
     fn del_entry_page(
         &mut self,
+        tnx_id: u64,
         page_idx: u64,
-        write: impl Fn(u64, u64, &[u8]) -> RsqlResult<()>,
-        read: impl Fn(u64) -> RsqlResult<storage::Page>,
-        free: impl Fn(u64) -> RsqlResult<()>,
+        storage: &mut ConsistStorageEngine,
     ) -> RsqlResult<()> {
         // read page
-        let page = read(page_idx)?;
-        let next_free_chunk_bytes = &page.data[8..16];
-        let next_free_chunk = u64::from_le_bytes(next_free_chunk_bytes.try_into().unwrap());
-        // find previous page
-        let mut current_page = self.first_free_entry_page;
-        let mut prev_page = 0;
-        while current_page != 0 && current_page != page_idx {
-            let current_page_data = read(current_page)?;
-            let next_free_chunk_bytes = &current_page_data.data[8..16];
-            let next_free_chunk_ptr = u64::from_le_bytes(next_free_chunk_bytes.try_into().unwrap());
-            if next_free_chunk_ptr == page_idx {
-                prev_page = current_page;
-                break;
-            }
-            current_page = next_free_chunk_ptr;
-        }
-        // update previous page's next pointer
-        if prev_page == 0 {
-            self.first_free_entry_page = next_free_chunk;
+        let page = storage.read(page_idx)?;
+        let next_free_page = EntryPage::next_free_page(&page);
+        let prev_free_page = EntryPage::prev_free_page(&page);
+        // update previous next
+        if prev_free_page == 0 {
+            self.first_free_entry_page = next_free_page;
         } else {
-            let mut prev_page_data = read(prev_page)?;
-            prev_page_data.data[8..16].copy_from_slice(&next_free_chunk.to_le_bytes());
-            write(prev_page, 8, &prev_page_data.data[8..16])?;
+            let mut prev_page_data = storage.read(prev_free_page)?;
+            EntryPage::set_next_free_page(&mut prev_page_data, next_free_page);
+            storage.write(tnx_id, prev_free_page, &prev_page_data)?;
+        }
+        // update next prev
+        if next_free_page != 0 {
+            let mut next_page_data = storage.read(next_free_page)?;
+            EntryPage::set_prev_free_page(&mut next_page_data, prev_free_page);
+            storage.write(tnx_id, next_free_page, &next_page_data)?;
         }
         // free the page
-        free(page_idx)?;
+        storage.free_page(tnx_id, page_idx)?;
         Ok(())
     }
     /// Allocate an empty entry
-    /// Args:
-    /// - write(page_idx, page)
-    /// - read(page_idx) -> page
-    /// - allocate() -> (new_page, page_idx)
     /// Return: (page_idx, page_offset)
     pub fn alloc_entry(
         &mut self,
-        write: impl Fn(u64, u64, &[u8]) -> RsqlResult<()>,
-        read: impl Fn(u64) -> RsqlResult<storage::Page>,
-        allocate: impl Fn() -> RsqlResult<(storage::Page, u64)>,
+        tnx_id: u64,
+        storage: &mut ConsistStorageEngine,
     ) -> RsqlResult<(u64, u64)> {
         // 1. find a page with free entry
         // Traverse the linked list of entry pages to find one with an empty slot
-        let mut free_page = 0;
-        let mut current_search = self.first_free_entry_page;
-        let bitmap_size = ((self.entries_per_page + 7) / 8) as usize;
-
-        while current_search != 0 {
-            let page = read(current_search)?;
-            if utils::find_first_0_bit(&page.data[16..16+bitmap_size], self.entries_per_page as usize).is_some() {
-                free_page = current_search;
-                break;
-            }
-            let next_page_bytes = &page.data[8..16];
-            current_search = u64::from_le_bytes(next_page_bytes.try_into().unwrap());
-        }
-
+        // because the linked list only contains pages with free slots, we can stop at the first one
+        let mut free_page = self.first_free_entry_page;
         if free_page == 0 {
-            free_page = self.new_entry_page(&allocate, &write, &read)?;
+            free_page = self.new_entry_page(tnx_id, storage)?;
         }
-        
+        // double check the page has free entry
+        let mut page = storage.read(free_page)?;
+        let mut bitmap = EntryPage::bitmap(&page, self.entries_per_page).to_vec();
+        assert!(!Bitmap::is_full(&bitmap, self.entries_per_page as usize), 
+                "Entry page {} should have free entries", free_page
+        );
         // 2. find free entry in the page
-        let page = read(free_page)?;
-        let mut bitmap_bytes = page.data[16..16+bitmap_size].to_vec();
-        
-        let entry_index = utils::find_first_0_bit(&bitmap_bytes, self.entries_per_page as usize).expect("Should have space now") as u64;
-
+        let entries_per_page = self.entries_per_page as usize;
+        let entry_index = Bitmap::find_empty_bit(&bitmap, entries_per_page).unwrap();
 
         // 3. mark entry as used
-        let byte_idx = (entry_index / 8) as usize;
-        let bit_idx = (entry_index % 8) as u8;
-        bitmap_bytes[byte_idx] |= 1u8 << bit_idx;
-        write(free_page, 16 + byte_idx as u64, &bitmap_bytes[byte_idx..byte_idx+1])?;
-        
-        // 4. calculate entry offset
-        // We must re-read or use correct buffer for calculating begin, because 'page' is valid
-        let entry_begin_bytes = &page.data[0..8];
-        let entry_begin = u64::from_le_bytes(entry_begin_bytes.try_into().unwrap());
-        let entry_offset = entry_index * self.entry_size + entry_begin;
-        
+        Bitmap::set_bit_true(&mut bitmap, entry_index as usize);
+        EntryPage::set_bitmap(&mut page, entries_per_page as u64, &bitmap);
+
+        // 4. if page is full now, remove it from free list
+        if Bitmap::is_full(&bitmap, entries_per_page) {
+            let next_free_page = EntryPage::next_free_page(&page);
+            let prev_free_page = EntryPage::prev_free_page(&page);
+            // update previous next
+            if prev_free_page == 0 {
+                self.set_first_free_entry_page(next_free_page, storage, tnx_id)?;
+            } else {
+                let mut prev_page_data = storage.read(prev_free_page)?;
+                EntryPage::set_next_free_page(&mut prev_page_data, next_free_page);
+                storage.write(tnx_id, prev_free_page, &prev_page_data)?;
+            }
+            // update next prev
+            if next_free_page != 0 {
+                let mut next_page_data = storage.read(next_free_page)?;
+                EntryPage::set_prev_free_page(&mut next_page_data, prev_free_page);
+                storage.write(tnx_id, next_free_page, &next_page_data)?;
+            }
+            // update this page pointer to 0
+            EntryPage::set_next_free_page(&mut page, 0);
+            EntryPage::set_prev_free_page(&mut page, 0);
+        }
+        storage.write(tnx_id, free_page, &page)?;
+
+        // 5. calculate entry offset
+        let entry_offset = EntryPage::entries_offset(entry_index as u64, self.entry_size, self.entries_per_page);
         Ok((free_page, entry_offset))
     }
     /// Free an entry
     pub fn free_entry(
         &mut self,
+        tnx_id: u64,
         page_idx: u64,
         entry_offset: u64,
-        write: impl Fn(u64, u64, &[u8]) -> RsqlResult<()>,
-        read: impl Fn(u64) -> RsqlResult<storage::Page>,
-        free: impl Fn(u64) -> RsqlResult<()>,
+        storage: &mut ConsistStorageEngine,
     ) -> RsqlResult<()> {
         // 1. read page
-        let page = read(page_idx)?;
-        let entry_begin_bytes = &page.data[0..8];
-        let entry_begin = u64::from_le_bytes(entry_begin_bytes.try_into().unwrap());
-        let relative_offset = entry_offset - entry_begin;
-        let entry_index = relative_offset / self.entry_size;
+        let mut page = storage.read(page_idx)?;
+        let entry_index = EntryPage::entries_index(entry_offset, self.entry_size, self.entries_per_page);
         // 2. mark entry as free
-        let bitmap_size = ((self.entries_per_page + 7) / 8) as usize;
-        let mut bitmap_bytes = page.data[16..16+bitmap_size].to_vec();
-        let byte_idx = (entry_index / 8) as usize;
-        let bit_idx = (entry_index % 8) as u8;
-        bitmap_bytes[byte_idx] &= !(1u8 << bit_idx);
-        write(page_idx, 16 + byte_idx as u64, &bitmap_bytes[byte_idx..byte_idx+1])?;
+        let mut bitmap = EntryPage::bitmap(&page, self.entries_per_page).to_vec();
+        Bitmap::set_bit_false(&mut bitmap, entry_index as usize);
+        EntryPage::set_bitmap(&mut page, self.entries_per_page, &bitmap);
+        storage.write(tnx_id, page_idx, &page)?;
         // 3. check if the page is now completely free
-        let all_free = bitmap_bytes.iter().all(|&b| b == 0u8);
+        let all_free = Bitmap::is_all_empty(&bitmap, self.entries_per_page as usize);
         if all_free {
-            self.del_entry_page(page_idx, write, read, free)?;
+            self.del_entry_page(tnx_id, page_idx, storage)?;
         }
         Ok(())
     }
     fn heap_page_list_tail(
         &self,
-        read: &impl Fn(u64) -> RsqlResult<storage::Page>,
+        storage: &ConsistStorageEngine,
     ) -> RsqlResult<u64> {
         let mut current_page = self.first_free_heap_page;
         let mut prev_page = 0;
         while current_page != 0 {
-            let page = read(current_page)?;
-            let next_free_chunk_bytes = &page.data[0..8];
-            let next_free_chunk = u64::from_le_bytes(next_free_chunk_bytes.try_into().unwrap());
+            let page = storage.read(current_page)?;
+            let next_free_chunk = HeapPage::next_free_page(&page);
             if next_free_chunk == 0 {
                 return Ok(current_page);
             }
@@ -269,549 +773,125 @@ impl Allocator {
         Ok(prev_page)
     }
     /// Allocate and initialize a new heap page
-    /// The heap page structure:
-    /// [next_free_chunk: 8bytes][prev_free_chunk: 8bytes][free_list_begin_in_this_page: 8bytes][data...]
-    /// Each free chunk structure:
-    /// [next_free_chunk: 8bytes][prev_free_chunk: 8bytes][chunk_size: 8bytes(exclude header)][data...]
-    /// Each non-free chunk structure:
-    /// [chunk_size: 8bytes(exclude header)][magic_number: 16bytes][data...]
     fn new_heap_page (
         &mut self,
-        allocate: impl Fn() -> RsqlResult<(storage::Page, u64)>,
-        write: impl Fn(u64, u64, &[u8]) -> RsqlResult<()>,
-        read: impl Fn(u64) -> RsqlResult<storage::Page>,
+        tnx_id: u64,
+        storage: &mut ConsistStorageEngine,
     ) -> RsqlResult<u64> {
-        let prev_page = self.heap_page_list_tail(&read)?;
-        let (_, page_idx) = allocate()?;
-        // initialize page header
-        let mut buf = vec![];
-        buf.extend_from_slice(0u64.to_le_bytes().as_ref()); // next free chunk
-        buf.extend_from_slice(prev_page.to_le_bytes().as_ref()); // prev free chunk
-        let first_free_chunk_offset: u64 = 8 + 8 + 8; // after page header
-        buf.extend_from_slice(first_free_chunk_offset.to_le_bytes().as_ref()); // free list begin in this page
-        write(page_idx, 0, &buf)?;
-        // initialize first free chunk
-        let max_size = storage::Page::max_size() as u64;
-        
-        // chunk_size represents payload size.
-        // Chunk Header is 24 bytes (next:8, prev:8, size:8).
-        // Total available space = PageSize - PageHeader(24)
-        // Data Size = Total Available - ChunkHeader(24)
-        let chunk_size = max_size - first_free_chunk_offset - 24; 
-        
-        let mut free_chunk_data = vec![];
-        free_chunk_data.extend_from_slice(0u64.to_le_bytes().as_ref()); // next
-        free_chunk_data.extend_from_slice(0u64.to_le_bytes().as_ref()); // prev
-        free_chunk_data.extend_from_slice(chunk_size.to_le_bytes().as_ref()); // size
-        write(page_idx, first_free_chunk_offset, &free_chunk_data)?;
-        // update previous pointer
-        if prev_page == 0 {
-            self.first_free_heap_page = page_idx;
-            // write to page 0
-            let offset = self.begin_with + 8 + 8 + 8; // after entry page ptrs
-            let bytes = page_idx.to_le_bytes();
-            write(0, offset, &bytes)?;
+        let (page_idx, _) = storage.new_page(tnx_id)?;
+        // find previous tail
+        let prev_page = self.heap_page_list_tail(storage)?;
+        let prev_page_opt = if prev_page == 0 {
+            None
         } else {
-            let mut prev_page_data = read(prev_page)?;
-            prev_page_data.data[0..8].copy_from_slice(&page_idx.to_le_bytes());
-            write(prev_page, 0, &prev_page_data.data[0..8])?;
+            Some(prev_page)
+        };
+        // initialize page
+        let page = HeapPage::new_free_page(prev_page_opt, None);
+        // update previous page's next pointer
+        if prev_page == 0 {
+            // first heap page
+            self.set_first_free_heap_page(page_idx, storage, tnx_id)?;
+        } else {
+            let mut prev_page_data = storage.read(prev_page)?;
+            HeapPage::set_next_free_page(&mut prev_page_data, page_idx);
+            storage.write(tnx_id, prev_page, &prev_page_data)?;
         }
+        // write new page to disk
+        storage.write(tnx_id, page_idx, &page)?;
         Ok(page_idx)
     }
     /// Deallocate a heap page NOT CHUNK
     fn del_heap_page(
         &mut self,
+        tnx_id: u64,
         page_idx: u64,
-        write: impl Fn(u64, u64, &[u8]) -> RsqlResult<()>,
-        read: impl Fn(u64) -> RsqlResult<storage::Page>,
-        free: impl Fn(u64) -> RsqlResult<()>,
+        storage: &mut ConsistStorageEngine,
     ) -> RsqlResult<()> {
-        let current_page = read(page_idx)?;
-        // check if the page is empty
-        let free_list_begin_bytes = &current_page.data[16..24];
-        let free_list_begin = u64::from_le_bytes(free_list_begin_bytes.try_into().unwrap());
-        if free_list_begin != 8 + 8 + 8 {
+        let page = storage.read(page_idx)?;
+        // 1. check if the page is empty
+        if !HeapPage::check_page_empty(&page) {
             panic!("Trying to delete a non-empty heap page {}", page_idx);
-        }
-        let first_chunk_size_bytes = &current_page.data[24..32];
-        let first_chunk_size = u64::from_le_bytes(first_chunk_size_bytes.try_into().unwrap());
-        let max_size = storage::Page::max_size() as u64;
-        
-        // CORRECTION: first_chunk_size is payload size. 
-        // We verify that PayloadSize + ChunkHeader(24) + PageHeader(24) == PageSize
-        if first_chunk_size + 24 + 24 != max_size {
-            panic!("Trying to delete a non-empty heap page {}", page_idx);
-        }
-        // read next and prev pointers
-        let next_free_page_bytes = &current_page.data[0..8];
-        let next_free_page = u64::from_le_bytes(next_free_page_bytes.try_into().unwrap());
-        let prev_free_page_bytes = &current_page.data[8..16];
-        let prev_free_page = u64::from_le_bytes(prev_free_page_bytes.try_into().unwrap());
-        // update previous page's next pointer
-        if prev_free_page == 0 {
-            self.first_free_heap_page = next_free_page;
-            // write to page 0
-            let offset = self.begin_with + 8 + 8 + 8; // after entry page ptrs
-            let bytes = next_free_page.to_le_bytes();
-            write(0, offset, &bytes)?;
-        } else {
-            let mut prev_page_data = read(prev_free_page)?;
-            prev_page_data.data[0..8].copy_from_slice(&next_free_page.to_le_bytes());
-            write(prev_free_page, 0, &prev_page_data.data[0..8])?;
         };
-        // update next page's prev pointer
-        if next_free_page != 0 {
-            let mut next_page_data = read(next_free_page)?;
-            next_page_data.data[8..16].copy_from_slice(&prev_free_page.to_le_bytes());
-            write(next_free_page, 8, &next_page_data.data[8..16])?;
+        // 2. update prev next pointer to this next pointer
+        let prev_free_page = HeapPage::prev_free_page(&page);
+        let next_free_page = HeapPage::next_free_page(&page);
+        if prev_free_page == 0 {
+            self.set_first_free_heap_page(next_free_page, storage, tnx_id)?;
+        } else {
+            let mut prev_page_data = storage.read(prev_free_page)?;
+            HeapPage::set_next_free_page(&mut prev_page_data, next_free_page);
+            storage.write(tnx_id, prev_free_page, &prev_page_data)?;
         }
-        free(page_idx)?;
+        // 3. update next prev pointer to this prev pointer
+        if next_free_page != 0 {
+            let mut next_page_data = storage.read(next_free_page)?;
+            HeapPage::set_prev_free_page(&mut next_page_data, prev_free_page);
+            storage.write(tnx_id, next_free_page, &next_page_data)?;
+        }
+        // 4. free the page
+        storage.free_page(tnx_id, page_idx)?;
         Ok(())
     }
+    
     /// Allocate heap space of given size
-    /// Args:
-    /// - allocate() -> (new_page, page_idx)
-    /// - write(page_idx, offset, data)
-    /// - read(page_idx) -> page
     /// Return: (page_idx, offset)
     pub fn alloc_heap(
         &mut self, 
+        tnx_id: u64,
         size:u64,
-        allocate: impl Fn() -> RsqlResult<(storage::Page, u64)>,
-        write: impl Fn(u64, u64, &[u8]) -> RsqlResult<()>,
-        read: impl Fn(u64) -> RsqlResult<storage::Page>,
+        storage: &mut ConsistStorageEngine,
     ) -> RsqlResult<(u64, u64)> {
         let mut current_page;
         if self.first_free_heap_page == 0 {
-            current_page = self.new_heap_page(&allocate, &write, &read)?;
+            current_page = self.new_heap_page(tnx_id, storage)?;
         } else {
             current_page = self.first_free_heap_page;
         };
         // traverse heap pages and chunks to find **first-fit**
-        let (page_idx, offset) = 'outer: loop {
-            let page = read(current_page)?;
-            let free_list_begin_bytes = &page.data[16..24];
-            let chunk_header_size = 8 + 16; // chunk_size + magic_number + padding(actually 24 bytes total header)
-            let free_chunk_ptr = u64::from_le_bytes(free_list_begin_bytes.try_into().unwrap());
-            let mut cursor = free_chunk_ptr;
-            while cursor != 0 {
-                // Verify bounds or assume valid. Read from `page.data` directly.
-                let cursor_idx = cursor as usize;
-                
-                // Chunk structure: [next: 8][prev: 8][size: 8]
-                let chunk_size_bytes = &page.data[cursor_idx + 16 .. cursor_idx + 24];
-                let chunk_size = u64::from_le_bytes(chunk_size_bytes.try_into().unwrap());
-                
-                if chunk_size >= size { // no need to plus header size, chunk_size only counts data size
+        'found: 
+        loop { // traverse pages
+            let mut page = storage.read(current_page)?;
+            let mut current_chunk = HeapPage::first_free_chunk_offset(&page);
+            while current_chunk != 0 { // traverse chunks
+                let chunk_size = HeapChunk::chunk_size(&page, current_chunk);
+                if chunk_size >= size {
                     // found a suitable chunk
-                    // 1. remove chunk from free list
-                    let next_free_chunk_bytes = &page.data[cursor_idx..cursor_idx+8];
-                    let next_free_chunk = u64::from_le_bytes(next_free_chunk_bytes.try_into().unwrap());
-                    let prev_free_chunk_bytes = &page.data[cursor_idx+8..cursor_idx+16];
-                    let prev_free_chunk = u64::from_le_bytes(prev_free_chunk_bytes.try_into().unwrap());
-                    
-                    // update previous chunk's next pointer
-                    if prev_free_chunk == 0 {
-                        // update page header
-                        let mut page_data = read(current_page)?;
-                        page_data.data[16..24].copy_from_slice(&next_free_chunk.to_le_bytes());
-                        write(current_page, 16, &page_data.data[16..24])?;
-                    } else {
-                        // Write to current_page at prev_free_chunk offset
-                        let mut prev_chunk_page = read(current_page)?;
-                        let prev_offset = prev_free_chunk as usize;
-                        prev_chunk_page.data[prev_offset..prev_offset+8].copy_from_slice(&next_free_chunk.to_le_bytes());
-                        write(current_page, prev_free_chunk, &prev_chunk_page.data[prev_offset..prev_offset+8])?;
-                    }
-                    // update next chunk's prev pointer
-                    if next_free_chunk != 0 {
-                        // Write to current_page at next_free_chunk offset
-                        let mut next_chunk_page = read(current_page)?;
-                        let next_offset = next_free_chunk as usize;
-                        next_chunk_page.data[next_offset+8..next_offset+16].copy_from_slice(&prev_free_chunk.to_le_bytes());
-                        write(current_page, next_free_chunk + 8, &next_chunk_page.data[next_offset+8..next_offset+16])?;
-                    }
-                    // 2. check if we need to split the chunk
-                    if chunk_size > size + chunk_header_size {
-                        // split the chunk
-                        let new_free_chunk_ptr = cursor + 8 + 16 + size;
-                        let new_free_chunk_size = chunk_size - size - 8 - 16;
-                        if new_free_chunk_size > 0 { // if size too small, do not split
-                            // split and insert new free chunk into free list
-                            let mut new_free_chunk_data = vec![];
-                            new_free_chunk_data.extend_from_slice(0u64.to_le_bytes().as_ref()); // next free chunk
-                            new_free_chunk_data.extend_from_slice(0u64.to_le_bytes().as_ref()); // prev free chunk
-                            new_free_chunk_data.extend_from_slice(new_free_chunk_size.to_le_bytes().as_ref()); // chunk size
-                            write(current_page, new_free_chunk_ptr, &new_free_chunk_data)?;
-                            // insert new free chunk into free list (at the beginning)
-                            let mut page_data = read(current_page)?;
-                            let old_free_list_begin_bytes = &page_data.data[16..24];
-                            let old_free_list_begin = u64::from_le_bytes(old_free_list_begin_bytes.try_into().unwrap());
-                            // update new free chunk's next and prev pointers
-                            // new_free_chunk_ptr is in `current_page`.
-                            // We construct the header data then write it.
-                            let mut new_free_chunk_header = vec![];
-                            new_free_chunk_header.extend_from_slice(&old_free_list_begin.to_le_bytes());
-                            new_free_chunk_header.extend_from_slice(&0u64.to_le_bytes());
-                            // Size is already written
-                            write(current_page, new_free_chunk_ptr, &new_free_chunk_header)?;
-
-                            // update old free list begin's prev pointer
-                            if old_free_list_begin != 0 {
-                                // Write to current_page at old_free_list_begin offset
-                                let mut old_free_chunk_page = read(current_page)?;
-                                let old_offset = old_free_list_begin as usize;
-                                old_free_chunk_page.data[old_offset+8..old_offset+16].copy_from_slice(&new_free_chunk_ptr.to_le_bytes());
-                                write(current_page, old_free_list_begin + 8, &old_free_chunk_page.data[old_offset+8..old_offset+16])?;
-                            }
-                            // update page header
-                            page_data.data[16..24].copy_from_slice(&new_free_chunk_ptr.to_le_bytes());
-                            write(current_page, 16, &page_data.data[16..24])?;
-                        }
-                    }
-                    // 3. initialize allocated chunk
-                    let mut allocated_chunk_data = vec![];
-                    allocated_chunk_data.extend_from_slice(size.to_le_bytes().as_ref()); // chunk size
-                    allocated_chunk_data.extend_from_slice(MAGIC_NUMBER.to_le_bytes().as_ref()); // magic number
-                    allocated_chunk_data.extend_from_slice(&vec![0u8; 16 - 4]); // padding
-                    write(current_page, cursor, &allocated_chunk_data)?;
-                    // return allocated chunk ptr
-                    break 'outer (current_page, cursor);
+                    let ptr = HeapChunk::alloc_chunk(&mut page, current_chunk, size)?;
+                    storage.write(tnx_id, current_page, &page)?;
+                    break 'found Ok((current_page, HeapChunk::ptr_to_offset(ptr)))
                 }
-                let next_free_chunk_bytes = &page.data[cursor_idx..cursor_idx+8];
-                cursor = u64::from_le_bytes(next_free_chunk_bytes.try_into().unwrap());
+                // move to next chunk
+                current_chunk = HeapChunk::next_free_chunk(&page, current_chunk);
             }
-            // move to next heap page
-            let next_page_bytes = &page.data[0..8];
-            let next_page = u64::from_le_bytes(next_page_bytes.try_into().unwrap());
+            // move to next page
+            let next_page = HeapPage::next_free_page(&page);
             if next_page == 0 {
-                // allocate new heap page
-                let new_page = self.new_heap_page(&allocate, &write, &read)?;
-                current_page = new_page;
+                // no more pages, create a new one
+                current_page = self.new_heap_page(tnx_id, storage)?;
             } else {
                 current_page = next_page;
             }
-        };
-        Ok((page_idx, offset))
+        }
     }
     /// Free a heap chunk
-    /// Args:
-    /// - write(page_idx, offset, data)
-    /// - read(page_idx) -> page
     pub fn free_heap(
         &mut self,
+        tnx_id: u64,
         page_idx: u64,
         offset: u64,
-        write: impl Fn(u64, u64, &[u8]) -> RsqlResult<()>,
-        read: impl Fn(u64) -> RsqlResult<storage::Page>,
+        storage: &mut ConsistStorageEngine,
     ) -> RsqlResult<()> {
-        // read chunk header
-        let page = read(page_idx)?;
-        let chunk_size_bytes = &page.data[offset as usize..(offset as usize + 8)];
-        let chunk_size = u64::from_le_bytes(chunk_size_bytes.try_into().unwrap());
-        // initialize free chunk
-        let mut free_chunk_data = vec![];
-        free_chunk_data.extend_from_slice(0u64.to_le_bytes().as_ref()); // next free chunk
-        free_chunk_data.extend_from_slice(0u64.to_le_bytes().as_ref()); // prev free chunk
-        free_chunk_data.extend_from_slice(chunk_size.to_le_bytes().as_ref()); // chunk size
-        write(page_idx, offset, &free_chunk_data)?;
-        // insert free chunk into free list (at the beginning)
-        let mut page_data = read(page_idx)?;
-        let old_free_list_begin_bytes = &page_data.data[16..24];
-        let old_free_list_begin = u64::from_le_bytes(old_free_list_begin_bytes.try_into().unwrap());
-        // update new free chunk's next and prev pointers
-        let mut new_free_chunk_page = read(page_idx)?;
-        let offset_idx = offset as usize;
-        new_free_chunk_page.data[offset_idx..offset_idx+8].copy_from_slice(&old_free_list_begin.to_le_bytes());
-        new_free_chunk_page.data[offset_idx+8..offset_idx+16].copy_from_slice(&0u64.to_le_bytes());
-        write(page_idx, offset, &new_free_chunk_page.data[offset_idx..offset_idx+16])?;
-        
-        // update old free list begin's prev pointer
-        if old_free_list_begin != 0 {
-            // Update current page (page_idx) at `old_free_list_begin`
-            let mut old_free_chunk_page = read(page_idx)?;
-            let old_offset = old_free_list_begin as usize;
-            old_free_chunk_page.data[old_offset+8..old_offset+16].copy_from_slice(&offset.to_le_bytes());
-            write(page_idx, old_free_list_begin + 8, &old_free_chunk_page.data[old_offset+8..old_offset+16])?;
+        let mut page = storage.read(page_idx)?;
+        // dealloc chunk
+        HeapChunk::dealloc_chunk(&mut page, offset)?;
+        storage.write(tnx_id, page_idx, &page)?;
+        // check if the page is now empty
+        let page = storage.read(page_idx)?;
+        if HeapPage::check_page_empty(&page) {
+            // delete the page
+            self.del_heap_page(tnx_id, page_idx, storage)?;
         }
-        // update page header
-        page_data.data[16..24].copy_from_slice(&offset.to_le_bytes());
-        write(page_idx, 16, &page_data.data[16..24])?;
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::cell::RefCell;
-    use std::collections::{HashMap, HashSet};
-
-    // Enhanced MockEnv to track allocations and frees
-    struct MockEnv {
-        pages: RefCell<HashMap<u64, storage::Page>>,
-        next_page_id: RefCell<u64>,
-        freed_pages: RefCell<Vec<u64>>, 
-    }
-
-    impl MockEnv {
-        fn new() -> Self {
-            MockEnv {
-                pages: RefCell::new(HashMap::new()),
-                next_page_id: RefCell::new(1), // start from 1, 0 is reserved
-                freed_pages: RefCell::new(Vec::new()),
-            }
-        }
-        
-        fn init_page_0(&self) {
-             self.pages.borrow_mut().insert(0, storage::Page::new());
-        }
-
-        fn read(&self, page_idx: u64) -> RsqlResult<storage::Page> {
-            let pages = self.pages.borrow();
-            // Simulate reading from disk; if page exists return it, else panic or return empty
-            // In a real FS, reading beyond EOF or unallocated blocks might error or return 0s.
-            if let Some(p) = pages.get(&page_idx) {
-                Ok(p.clone())
-            } else {
-                // Return empty new page if not found (simulating sparse file)
-                Ok(storage::Page::new())
-            }
-        }
-
-        fn write(&self, page_idx: u64, offset: u64, data: &[u8]) -> RsqlResult<()> {
-            let mut pages = self.pages.borrow_mut();
-            let page = pages.entry(page_idx).or_insert(storage::Page::new());
-             if offset as usize + data.len() > page.data.len() {
-                panic!("Write out of bounds: page {} offset {} len {}", page_idx, offset, data.len());
-            }
-            page.data[offset as usize..offset as usize + data.len()].copy_from_slice(data);
-            Ok(())
-        }
-
-        fn allocate(&self) -> RsqlResult<(storage::Page, u64)> {
-            let mut id = self.next_page_id.borrow_mut();
-            let page_idx = *id;
-            *id += 1;
-            let page = storage::Page::new();
-            self.pages.borrow_mut().insert(page_idx, page.clone());
-            Ok((page, page_idx))
-        }
-        
-        fn free(&self, page_idx: u64) -> RsqlResult<()> {
-            self.pages.borrow_mut().remove(&page_idx);
-            self.freed_pages.borrow_mut().push(page_idx);
-            Ok(())
-        }
-
-        // Helper to check if a page is currently allocated
-        fn is_allocated(&self, page_idx: u64) -> bool {
-            self.pages.borrow().contains_key(&page_idx)
-        }
-    }
-
-    // --- Helpers to reduce boilerplate in tests ---
-    fn get_closures<'a>(env: &'a MockEnv) -> (
-        impl Fn() -> RsqlResult<(storage::Page, u64)> + 'a,
-        impl Fn(u64, u64, &[u8]) -> RsqlResult<()> + 'a,
-        impl Fn(u64) -> RsqlResult<storage::Page> + 'a,
-        impl Fn(u64) -> RsqlResult<()> + 'a
-    ) {
-        (
-            || env.allocate(),
-            |p, o, d| env.write(p, o, d),
-            |p| env.read(p),
-            |p| env.free(p)
-        )
-    }
-
-    #[test]
-    fn test_allocator_entry_basic() {
-        let env = MockEnv::new();
-        env.init_page_0();
-        let mut alloc = Allocator::create(100, 0);
-        let (alloc_fn, write_fn, read_fn, _) = get_closures(&env);
-
-        let (page1, offset1) = alloc.alloc_entry(&write_fn, &read_fn, &alloc_fn).unwrap();
-        assert!(page1 > 0);
-        let (page2, offset2) = alloc.alloc_entry(&write_fn, &read_fn, &alloc_fn).unwrap();
-        
-        // Assertions
-        assert_eq!(page1, page2, "Small entries should fit in same page");
-        assert_ne!(offset1, offset2, "Offsets should differ");
-        // Verify offsets are aligned
-        assert_eq!((offset2 - offset1), 100);
-    }
-
-    #[test]
-    fn test_allocator_entry_free_and_reuse() {
-        let env = MockEnv::new();
-        env.init_page_0();
-        let mut alloc = Allocator::create(100, 0);
-        let (alloc_fn, write_fn, read_fn, free_fn) = get_closures(&env);
-
-        let (p1, o1) = alloc.alloc_entry(&write_fn, &read_fn, &alloc_fn).unwrap();
-        let (p2, o2) = alloc.alloc_entry(&write_fn, &read_fn, &alloc_fn).unwrap();
-
-        // Free the first entry
-        alloc.free_entry(p1, o1, &write_fn, &read_fn, &free_fn).unwrap();
-
-        // Next allocation should reuse the freed slot (since it's the first 0 bit)
-        let (p3, o3) = alloc.alloc_entry(&write_fn, &read_fn, &alloc_fn).unwrap();
-        
-        assert_eq!(p1, p3);
-        assert_eq!(o1, o3, "Should reuse the freed entry slot");
-
-        // Allocating again should give a new slot
-        let (p4, o4) = alloc.alloc_entry(&write_fn, &read_fn, &alloc_fn).unwrap();
-        assert_ne!(o4, o3);
-        assert_ne!(o4, o2);
-    }
-
-    #[test]
-    fn test_allocator_entry_page_cleanup() {
-        let env = MockEnv::new();
-        env.init_page_0();
-        // Use large entries to fill a page quickly. 
-        // Page size 4096. Entry size 2000. 
-        // Approx 2 entries per page.
-        let mut alloc = Allocator::create(2000, 0);
-        let (alloc_fn, write_fn, read_fn, free_fn) = get_closures(&env);
-
-        // Fill Page 1
-        let (p1, o1) = alloc.alloc_entry(&write_fn, &read_fn, &alloc_fn).unwrap();
-        let (p2, o2) = alloc.alloc_entry(&write_fn, &read_fn, &alloc_fn).unwrap();
-        assert_eq!(p1, p2);
-
-        // Trigger Page 2 allocation
-        let (p3, o3) = alloc.alloc_entry(&write_fn, &read_fn, &alloc_fn).unwrap();
-        assert_ne!(p3, p1);
-
-        // Free all entries in Page 2
-        alloc.free_entry(p3, o3, &write_fn, &read_fn, &free_fn).unwrap();
-
-        // Assert Page 2 is freed in environment
-        assert!(env.freed_pages.borrow().contains(&p3), "Page should be freed when empty");
-        assert!(!env.is_allocated(p3));
-
-        // Allocating again should create a NEW page (ID will increment)
-        // or reuse Page 2 id if mocked allocator reused ids (but ours flat increases).
-        let (p4, _) = alloc.alloc_entry(&write_fn, &read_fn, &alloc_fn).unwrap();
-        assert!(p4 > p3, "Should allocate new page ID");
-    }
-
-    #[test]
-    fn test_allocator_heap_basic_and_reuse() {
-        let env = MockEnv::new();
-        env.init_page_0();
-        let mut alloc = Allocator::create(100, 0);
-        let (alloc_fn, write_fn, read_fn, _) = get_closures(&env);
-
-        let size = 120;
-        let (p1, o1) = alloc.alloc_heap(size, &alloc_fn, &write_fn, &read_fn).unwrap();
-        
-        // Free it
-        alloc.free_heap(p1, o1, &write_fn, &read_fn).unwrap();
-
-        // Alloc same size again, should reuse exact spot
-        let (p2, o2) = alloc.alloc_heap(size, &alloc_fn, &write_fn, &read_fn).unwrap();
-        
-        assert_eq!(p1, p2);
-        assert_eq!(o1, o2, "Should reuse heap chunk");
-    }
-
-    #[test]
-    fn test_allocator_heap_split() {
-        let env = MockEnv::new();
-        env.init_page_0();
-        let mut alloc = Allocator::create(100, 0);
-        let (alloc_fn, write_fn, read_fn, _) = get_closures(&env);
-
-        // 1. Allocate big chunk (e.g. 1000 bytes)
-        let (p1, o1) = alloc.alloc_heap(1000, &alloc_fn, &write_fn, &read_fn).unwrap();
-
-        // 2. Free it
-        alloc.free_heap(p1, o1, &write_fn, &read_fn).unwrap();
-
-        // 3. Allocate small chunk (e.g. 100 bytes)
-        // Should reuse the 1000 byte hole, splitting it.
-        let (p2, o2) = alloc.alloc_heap(100, &alloc_fn, &write_fn, &read_fn).unwrap();
-
-        assert_eq!(p1, p2);
-        assert_eq!(o1, o2);
-
-        // 4. Allocate another small chunk
-        // Should be right after the previous one (plus header overhead)
-        let (p3, o3) = alloc.alloc_heap(100, &alloc_fn, &write_fn, &read_fn).unwrap();
-        
-        assert_eq!(p1, p3);
-        // Header is 24 bytes (next, prev, size) -> see new_heap_page logic
-        // But alloc_heap logic: returns pointer to MAGIC_NUMBER/Data start? 
-        // Looking at code: `break 'outer (current_page, cursor);` where cursor is the start of Chunk Header.
-        // Wait, normally allocator returns data pointer.
-        // Your code returns `cursor`, which is the start of the Chunk (Header included).
-        // Let's verify offset logic:
-        // Chunk1: [Header 24][Data 100][Padding? if aligned]
-        // Chunk2: Starts at Offset1 + 24 + 100 approx.
-        assert!(o3 > o2 + 100); 
-    }
-
-    #[test]
-    fn test_allocator_heap_multi_page() {
-        let env = MockEnv::new();
-        env.init_page_0();
-        let mut alloc = Allocator::create(64, 0);
-        let (alloc_fn, write_fn, read_fn, _) = get_closures(&env);
-
-        // Page size 4096. 
-        // Alloc 3000 bytes -> Page 1
-        let (p1, _) = alloc.alloc_heap(3000, &alloc_fn, &write_fn, &read_fn).unwrap();
-        
-        // Alloc 3000 bytes -> Wont fit in Page 1, should go to Page 2
-        let (p2, _) = alloc.alloc_heap(3000, &alloc_fn, &write_fn, &read_fn).unwrap();
-
-        assert_ne!(p1, p2);
-        
-        // Alloc 500 bytes -> Should fit in remaining space of Page 1 or Page 2?
-        // Current logic: traverse pages. Page 1 has ~1000 free. Page 2 has ~1000 free.
-        // If it starts search from `first_free_heap_page`, it should fill Page 1 first.
-        let (p3, _) = alloc.alloc_heap(500, &alloc_fn, &write_fn, &read_fn).unwrap();
-        
-        // This depends on whether Page 1 was removed from free list when full? 
-        // Your logic keeps pages linked. 
-        // Page structure: [NextPage]...
-        // So it should iterate Page 1 -> Page 2.
-        // 3000 + 24 header = 3024. 4096 - 3024 = 1072 free.
-        // 500 should fit in Page 1.
-        assert_eq!(p3, p1, "Should fill holes in first pages");
-    }
-
-    #[test]
-    fn test_persistence() {
-        let env = MockEnv::new();
-        env.init_page_0();
-        
-        // 1. Setup Allocator and make some changes
-        let mut alloc = Allocator::create(128, 100); // begin_with 100
-        let (alloc_fn, write_fn, read_fn, _) = get_closures(&env);
-        
-        let (p_entry, _) = alloc.alloc_entry(&write_fn, &read_fn, &alloc_fn).unwrap();
-        let (_p_heap, _) = alloc.alloc_heap(50, &alloc_fn, &write_fn, &read_fn).unwrap();
-        
-        // 2. Serialize to Page 0
-        let bytes = alloc.to_bytes();
-        env.write(0, 100, &bytes).unwrap();
-        
-        // 3. New Allocator instance from Page 0
-        let page0 = env.read(0).unwrap();
-        let alloc_restored = Allocator::from(&page0, 100).unwrap();
-
-        // 4. Verify state
-        assert_eq!(alloc.entry_size, alloc_restored.entry_size);
-        assert_eq!(alloc.entries_per_page, alloc_restored.entries_per_page);
-        // Pointers should point to valid pages we allocated
-        assert_eq!(alloc_restored.first_free_entry_page, p_entry); 
-        // For heap, `first_free_heap_page` might be p_heap or something earlier
-        assert!(alloc_restored.first_free_heap_page > 0);
     }
 }

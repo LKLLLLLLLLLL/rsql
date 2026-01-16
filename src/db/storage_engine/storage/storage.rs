@@ -100,7 +100,7 @@ impl StorageManager {
     fn write_back_evicted_page(&self, evicted: Option<(u64, Arc<RwLock<Page>>)>) -> RsqlResult<()> {
         if let Some((evicted_page_index, evicted_page)) = evicted {
             // write the evicted_page to the file
-            let evicted_page = evicted_page.read().map_err(|_| RsqlError::StorageError(
+            let mut evicted_page = evicted_page.write().map_err(|_| RsqlError::StorageError(
                 "Poisoned RwLock in page cache".to_string()
             ))?;
             if evicted_page.need_flush {
@@ -115,7 +115,7 @@ impl StorageManager {
                 self.file.lock().unwrap().seek(SeekFrom::Start(offset))?;
                 self.file.lock().unwrap().write_all(page_data)?; // write page data to the file
                 self.file.lock().unwrap().sync_data()?; // ensure data is written to the disk
-                *self.file_page_num.lock().unwrap() = file_page_num.clone(); // update pages number in the file
+                evicted_page.need_flush = false;
             }
         }
         Ok(())
@@ -221,7 +221,7 @@ impl StorageManager {
             self.file.lock().unwrap().set_len(required_file_size)?; // extend file (fills with zeros)
         }
         for (page_index, page_arc) in &self.pages.lock().unwrap().map {
-            let page = page_arc.read().map_err(|_| RsqlError::StorageError(
+            let mut page = page_arc.write().map_err(|_| RsqlError::StorageError(
                 "Poisoned RwLock in page cache".to_string()
             ))?;
             if !page.need_flush {
@@ -231,6 +231,7 @@ impl StorageManager {
             let offset = page_index * PAGE_SIZE_BYTES as u64;
             self.file.lock().unwrap().seek(SeekFrom::Start(offset))?;
             self.file.lock().unwrap().write_all(page_data)?; // write page data to the file
+            page.need_flush = false;
         }
         self.file.lock().unwrap().flush()?;
         self.file.lock().unwrap().sync_data()?; // ensure data is written to the disk
@@ -244,5 +245,93 @@ impl Drop for StorageManager {
     fn drop(&mut self) {
         self.flush();
         Self::unregister_file_path(&self.file_path);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn test_storage_basic_write_read() {
+        let file_path = "test_storage_basic.db";
+        if Path::new(file_path).exists() {
+            fs::remove_file(file_path).unwrap();
+        }
+
+        {
+            let mut storage = StorageManager::new(file_path).unwrap();
+            let (page_idx, mut page) = storage.new_page().unwrap();
+            assert_eq!(page_idx, 0);
+            
+            page.data[0] = 42;
+            storage.write_page(&page, page_idx).unwrap();
+            
+            let read_page = storage.read_page(page_idx).unwrap();
+            assert_eq!(read_page.data[0], 42);
+        }
+
+        // persistence check
+        {
+            let storage = StorageManager::new(file_path).unwrap();
+            let read_page = storage.read_page(0).unwrap();
+            assert_eq!(read_page.data[0], 42);
+        }
+
+        fs::remove_file(file_path).unwrap();
+    }
+
+    #[test]
+    fn test_storage_multi_pages() {
+        let file_path = "test_storage_multi.db";
+        if Path::new(file_path).exists() {
+            fs::remove_file(file_path).unwrap();
+        }
+
+        {
+            let mut storage = StorageManager::new(file_path).unwrap();
+            for i in 0..5 {
+                let (idx, mut page) = storage.new_page().unwrap();
+                assert_eq!(idx, i);
+                page.data[0] = i as u8;
+                storage.write_page(&page, idx).unwrap();
+            }
+            
+            for i in 0..5 {
+                let page = storage.read_page(i).unwrap();
+                assert_eq!(page.data[0], i as u8);
+            }
+        }
+
+        fs::remove_file(file_path).unwrap();
+    }
+
+    #[test]
+    fn test_storage_free_page() {
+        let file_path = "test_storage_free.db";
+        if Path::new(file_path).exists() {
+            fs::remove_file(file_path).unwrap();
+        }
+
+        {
+            let mut storage = StorageManager::new(file_path).unwrap();
+            storage.new_page().unwrap(); // 0
+            storage.new_page().unwrap(); // 1
+            storage.new_page().unwrap(); // 2
+            
+            assert_eq!(storage.max_page_index(), Some(2));
+            
+            storage.free().unwrap();
+            assert_eq!(storage.max_page_index(), Some(1));
+            
+            storage.free().unwrap();
+            assert_eq!(storage.max_page_index(), Some(0));
+            
+            storage.free().unwrap();
+            assert_eq!(storage.max_page_index(), None);
+        }
+
+        fs::remove_file(file_path).unwrap();
     }
 }
