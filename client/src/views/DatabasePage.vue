@@ -298,6 +298,20 @@
             <div class="export-operation"></div>
         </div>
         </div>
+    <!-- 删除确认弹窗 -->
+    <div v-if="dropModalVisible" class="modal-overlay">
+        <div class="modal-dialog">
+            <h3><Icon :path="mdiAlertOctagonOutline" size="18" /> 确认删除</h3>
+            <p>确定删除表 <strong>{{ pendingDropTable }}</strong>？此操作不可撤销。</p>
+            <div class="modal-actions">
+                <button class="modal-cancel" @click="dropModalVisible = false">取消</button>
+                <button class="modal-confirm" @click="confirmDropTable">
+                    <Icon :path="mdiCheckCircleOutline" size="16" /> 确认删除
+                </button>
+            </div>
+        </div>
+    </div>
+
     <Toast ref="toastRef" :message="toastMessage" :duration="toastDuration" />
     </div>
 </template>
@@ -319,6 +333,8 @@ import {
     mdiTable,
     mdiTableColumnPlusAfter,
     mdiCheckCircleOutline,
+    mdiTrashCanOutline,
+    mdiAlertOctagonOutline,
 } from '@mdi/js'
 
 const Icon = defineComponent({
@@ -358,6 +374,10 @@ const toastDuration = 2500
 let currentTableHeaders = []
 let currentTableRows = []
 let currentDisplayHeaders = []
+// Drop 模式与弹窗
+const dropMode = ref(false)
+const dropModalVisible = ref(false)
+const pendingDropTable = ref('')
 
 // WebSocket 相关状态
 const wsUrl = 'ws://127.0.0.1:4455/ws'
@@ -544,6 +564,21 @@ function triggerToast(msg) {
     if (toastRef.value && typeof toastRef.value.show === 'function') {
         toastRef.value.show()
     }
+}
+
+function confirmDropTable() {
+    const name = (pendingDropTable.value || '').trim()
+    if (!name) {
+        dropModalVisible.value = false
+        return
+    }
+    const sql = `DROP TABLE ${name};`
+    sendSqlStatement(sql, '删除表')
+    dropModalVisible.value = false
+    // 重新获取并渲染表列表
+    setTimeout(() => {
+        loadTablesList()
+    }, 100)
 }
 
 function headerPlaceholder(headerName) {
@@ -954,7 +989,17 @@ onMounted(() => {
         const sorted = Array.isArray(names)
             ? names.slice().map(n => String(n)).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
             : []
-        const items = sorted.map((n) => `<div class="table-item"><span>${n}</span></div>`).join('')
+        const items = sorted.map((n) => {
+            const delBtn = dropMode.value
+                ? `<button class="table-delete-btn" data-table="${n}">
+                        <svg class="table-delete-svg" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="${mdiTrashCanOutline}" fill="currentColor" />
+                        </svg>
+                        删除
+                   </button>`
+                : ''
+            return `<div class="table-item"><span>${n}</span>${delBtn}</div>`
+        }).join('')
         tablesListEl.innerHTML = header + items
         const countEl = document.getElementById('tables-counts')
         if (countEl) countEl.textContent = String(sorted.length)
@@ -1118,11 +1163,22 @@ onMounted(() => {
         })
     }
 
-    function attachTableItemClickHandlers() { // 绑定左侧导航栏表项点击事件
+    function attachTableItemClickHandlers() { // 绑定左侧导航栏表项点击事件及删除按钮
         document.querySelectorAll('.table-item').forEach((item) => {
         const newItem = item.cloneNode(true)
         if (item.parentNode) item.parentNode.replaceChild(newItem, item)
-        newItem.addEventListener('click', async function () {
+        newItem.addEventListener('click', async function (e) {
+            // 点击删除按钮时，不触发表项切换
+            if (e && e.target && e.target.classList && e.target.classList.contains('table-delete-btn')) {
+                return
+            }
+            // 点击任意表项时，将顶部四个按钮恢复为未选中（蓝色）
+            document.querySelectorAll('.tables-btn').forEach((el) => el.classList.remove('active'))
+            // 退出删除模式并刷新列表隐藏删除按钮
+            const clickedSpan = newItem.querySelector('span')
+            const clickedName = clickedSpan && clickedSpan.textContent ? clickedSpan.textContent.split(' ')[0] : ''
+            dropMode.value = false
+            loadTablesList()
             document.querySelectorAll('.table-item').forEach((el) => {
             el.classList.remove('active')
             })
@@ -1136,8 +1192,29 @@ onMounted(() => {
             if (headerTitle) headerTitle.textContent = `${tableName} Table Data`
             console.log(`Switched to table: ${tableName}`)
             await loadTableData(tableName)
+            // 确保刷新列表后仍然保持当前表高亮
+            setTimeout(() => {
+                document.querySelectorAll('.table-item').forEach((el) => {
+                    const sp = el.querySelector('span')
+                    const tn = sp && sp.textContent ? sp.textContent.split(' ')[0] : ''
+                    if (tn === (clickedName || tableName)) {
+                        el.classList.add('active')
+                    }
+                })
+            }, 50)
             showSection('table')
         })
+        const delBtn = newItem.querySelector('.table-delete-btn')
+        if (delBtn) {
+            delBtn.addEventListener('click', (ev) => {
+                ev.stopPropagation()
+                const tn = delBtn.getAttribute('data-table') || ''
+                if (tn) {
+                    pendingDropTable.value = tn
+                    dropModalVisible.value = true
+                }
+            })
+        }
         })
     }
 
@@ -1510,15 +1587,24 @@ onMounted(() => {
             this.classList.contains('rename') ? 'Rename' : 
             this.classList.contains('terminal') ? 'Terminal' : 'Unknown'
         if (action === 'Create') {
+            dropMode.value = false
+            loadTablesList()
             document.querySelectorAll('.table-item').forEach((el) => {
                 el.classList.remove('active')
             })
             showSection('create')
         } else if (action === 'Drop') {
+            // 开启删除模式，在列表每个表后显示删除按钮
+            dropMode.value = true
+            loadTablesList()
 
         } else if (action === 'Rename') {
+            dropMode.value = false
+            loadTablesList()
             
         } else if (action === 'Terminal') {
+            dropMode.value = false
+            loadTablesList()
             document.querySelectorAll('.table-item').forEach((el) => {
                 el.classList.remove('active')
             })
@@ -1669,6 +1755,26 @@ body {
     padding: 20px 0;
     overflow-y: auto;
     flex-grow: 1;
+}
+
+.table-delete-btn {
+    margin-left: auto;
+    background-color: #e74c3c;
+    color: #fff;
+    border: none;
+    border-radius: 12px;
+    padding: 4px 10px;
+    font-size: 12px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.table-delete-btn:hover {
+    background-color: #c0392b;
+}
+.table-delete-svg {
+    flex-shrink: 0;
 }
 
 .tables-list h3 {
@@ -2125,6 +2231,56 @@ tbody tr:hover {
     vertical-align: middle;
     display: inline-block;
     transform: translateY(0px);
+}
+
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0,0,0,0.35);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+.modal-dialog {
+    background: #fff;
+    border-radius: 8px;
+    padding: 16px 20px;
+    width: 360px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+}
+
+.modal-dialog h3 {
+    margin-bottom: 12px;
+    color: #2c3e50;
+}
+.modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+    margin-top: 16px;
+}
+.modal-cancel {
+    background: #bdc3c7;
+    color: #2c3e50;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 12px;
+    cursor: pointer;
+}
+.modal-confirm {
+    background: #e74c3c;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 12px;
+    cursor: pointer;
+}
+.modal-confirm:hover {
+    background: #c0392b;
 }
 
 .form-row {
