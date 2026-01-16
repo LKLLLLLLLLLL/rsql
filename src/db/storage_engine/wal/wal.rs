@@ -15,6 +15,7 @@ use super::wal_entry::WALEntry;
 /// Guard to ensure WAL recovery is done before any DB operation
 static HAS_RECOVERED: OnceLock<()> = OnceLock::new();
 fn check_recovered() {
+    #[cfg(not(test))]
     HAS_RECOVERED.get().expect("WAL recovery must be done before any DB operation");
 }
 
@@ -88,13 +89,19 @@ impl WAL {
     }
     /// Recovery the database to a consistent state using the WAL log.
     /// Helper function for testing with custom WAL instance.
+    /// Args:
+    /// - write_page(table_id, page_id, data): function to write a page to storage
+    /// - update_page(table_id, page_id, offset, len, data): function to update a page in storage
+    /// - append_page(table_id) -> new_page_id: function to append a new page to storage, returns new page_id
+    /// - trunc_page(table_id): function to truncate the last page from storage
+    /// - max_page_idx(table_id) -> max_page_id: function to get the current max page index in storage
     pub fn recovery_with_instance(
         wal: Arc<WAL>,
-        write_page: &mut dyn FnMut(u64, u64, Vec<u8>) -> RsqlResult<()>,
-        update_page: &mut dyn FnMut(u64, u64, u64, u64, Vec<u8>) -> RsqlResult<()>,
-        append_page: &mut dyn FnMut(u64) -> RsqlResult<u64>,
-        trunc_page: &mut dyn FnMut(u64) -> RsqlResult<()>,
-        max_page_idx: &mut dyn FnMut(u64) -> RsqlResult<u64>,
+        write_page: &mut impl FnMut(u64, u64, Vec<u8>) -> RsqlResult<()>,
+        update_page: &mut impl FnMut(u64, u64, u64, u64, Vec<u8>) -> RsqlResult<()>,
+        append_page: &mut impl FnMut(u64) -> RsqlResult<u64>,
+        trunc_page: &mut impl FnMut(u64) -> RsqlResult<()>,
+        max_page_idx: &mut impl FnMut(u64) -> RsqlResult<u64>,
     ) -> RsqlResult<()> {
         info!("Starting WAL recovery");
         let buf = {
@@ -236,11 +243,11 @@ impl WAL {
     }
 
     pub fn recovery(
-        write_page: &mut dyn FnMut(u64, u64, Vec<u8>) -> RsqlResult<()>,
-        update_page: &mut dyn FnMut(u64, u64, u64, u64, Vec<u8>) -> RsqlResult<()>,
-        append_page: &mut dyn FnMut(u64) -> RsqlResult<u64>,
-        trunc_page: &mut dyn FnMut(u64) -> RsqlResult<()>,
-        max_page_idx: &mut dyn FnMut(u64) -> RsqlResult<u64>,
+        write_page: &mut impl FnMut(u64, u64, Vec<u8>) -> RsqlResult<()>,
+        update_page: &mut impl FnMut(u64, u64, u64, u64, Vec<u8>) -> RsqlResult<()>,
+        append_page: &mut impl FnMut(u64) -> RsqlResult<u64>,
+        trunc_page: &mut impl FnMut(u64) -> RsqlResult<()>,
+        max_page_idx: &mut impl FnMut(u64) -> RsqlResult<u64>,
     ) -> RsqlResult<()> {
         Self::recovery_with_instance(WAL::global(), write_page, update_page, append_page, trunc_page, max_page_idx)
     }

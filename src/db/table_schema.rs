@@ -2,6 +2,7 @@ use super::errors::{RsqlError, RsqlResult};
 use super::data_item::DataItem;
 use super::super::config::MAX_VARCHAR_SIZE;
 
+#[derive(Clone)]
 pub enum ColType {
     Integer,
     Float,
@@ -10,6 +11,7 @@ pub enum ColType {
     Bool
 }
 
+#[derive(Clone)]
 pub struct TableColumn {
     pub name: String, // fix 64 bytes
     pub data_type: ColType,
@@ -19,6 +21,7 @@ pub struct TableColumn {
     pub unique: bool, // TODO: not implemented
 }
 
+#[derive(Clone)]
 pub struct TableSchema {
     pub columns: Vec<TableColumn>,
 }

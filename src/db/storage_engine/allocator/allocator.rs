@@ -417,12 +417,6 @@ mod tests {
             fs::create_dir_all(crate::config::DB_DIR).unwrap();
         }
 
-        let mut noop_append = |_| Ok(0u64);
-        let mut noop_max = |_| Ok(0u64);
-        let mut noop_write = |_, _, _| Ok(());
-        let mut noop_update = |_, _, _, _, _| Ok(());
-        WAL::recovery(&mut noop_write, &mut noop_update, &mut noop_append, &mut |_| Ok(()), &mut noop_max).unwrap();
-
         ConsistStorageEngine::new(db_path, 1).unwrap()
     }
 

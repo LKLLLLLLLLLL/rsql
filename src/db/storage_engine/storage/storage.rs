@@ -243,7 +243,7 @@ impl StorageManager {
 // implement Drop trait so that StorageManager will be unregistered when it is dropped
 impl Drop for StorageManager {
     fn drop(&mut self) {
-        self.flush();
+        self.flush().unwrap();
         Self::unregister_file_path(&self.file_path);
     }
 }

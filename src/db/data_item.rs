@@ -35,8 +35,8 @@ impl DataItem {
         match self {
             DataItem::Integer(_) | DataItem::NullInt => 1 + 8,
             DataItem::Float(_) | DataItem::NullFloat => 1 + 8,
-            DataItem::Chars {len, ..} | DataItem::NullChars {len} => 1 + *len as usize,
-            DataItem::VarChar {..} | DataItem::NullVarChar => 1 + size_of::<VarCharHead>(),
+            DataItem::Chars { len, .. } | DataItem::NullChars { len } => 1 + 8 + *len as usize,
+            DataItem::VarChar { .. } | DataItem::NullVarChar => 1 + size_of::<VarCharHead>(),
             DataItem::Bool(_) | DataItem::NullBool => 1 + 1,
         }
     }
@@ -44,7 +44,7 @@ impl DataItem {
         match col_type {
             table_schema::ColType::Integer => 1 + 8,
             table_schema::ColType::Float => 1 + 8,
-            table_schema::ColType::Chars(len) => 1 + *len as usize,
+            table_schema::ColType::Chars(len) => 1 + 8 + *len as usize,
             table_schema::ColType::VarChar(_) => 1 + size_of::<VarCharHead>(),
             table_schema::ColType::Bool => 1 + 1,
         }
@@ -193,7 +193,7 @@ impl DataItem {
                         }
                         String::from_utf8(b.to_vec()).map_err(|e| RsqlError::ParserError(e.to_string()))?
                     },
-                    None => return Err(RsqlError::Unknown("Missing body bytes for VarChar data".to_string())),
+                    None => String::new(), // empty string if body not provided
                 };
                 Ok(DataItem::VarChar {head: VarCharHead {max_len, len, page_ptr}, value})
             },
