@@ -1,8 +1,9 @@
+use core::panic;
 use std::mem::size_of;
 use std::cmp::Ordering;
 
 use super::errors::{RsqlError, RsqlResult};
-use super::table;
+use super::table_schema;
 
 /// Data item representation in one block in table.
 #[derive(Debug, PartialEq,Clone)]
@@ -22,9 +23,9 @@ pub enum DataItem {
 
 #[derive(Debug, PartialEq, PartialOrd, Clone)]
 pub struct VarCharHead {
-    max_len: u64,
-    len: u64,
-    page_ptr: u64,
+    pub max_len: u64,
+    pub len: u64,
+    pub page_ptr: u64,
 }
 
 impl DataItem {
@@ -34,18 +35,18 @@ impl DataItem {
         match self {
             DataItem::Integer(_) | DataItem::NullInt => 1 + 8,
             DataItem::Float(_) | DataItem::NullFloat => 1 + 8,
-            DataItem::Chars {len, ..} | DataItem::NullChars {len} => 1 + *len as usize,
-            DataItem::VarChar {..} | DataItem::NullVarChar => 1 + size_of::<VarCharHead>(),
+            DataItem::Chars { len, .. } | DataItem::NullChars { len } => 1 + 8 + *len as usize,
+            DataItem::VarChar { .. } | DataItem::NullVarChar => 1 + size_of::<VarCharHead>(),
             DataItem::Bool(_) | DataItem::NullBool => 1 + 1,
         }
     }
-    pub fn cal_size_from_coltype(col_type: &table::ColType) -> usize {
+    pub fn cal_size_from_coltype(col_type: &table_schema::ColType) -> usize {
         match col_type {
-            table::ColType::Integer => 1 + 8,
-            table::ColType::Float => 1 + 8,
-            table::ColType::Chars(len) => 1 + *len as usize,
-            table::ColType::VarChar => 1 + size_of::<VarCharHead>(),
-            table::ColType::Bool => 1 + 1,
+            table_schema::ColType::Integer => 1 + 8,
+            table_schema::ColType::Float => 1 + 8,
+            table_schema::ColType::Chars(len) => 1 + 8 + *len as usize,
+            table_schema::ColType::VarChar(_) => 1 + size_of::<VarCharHead>(),
+            table_schema::ColType::Bool => 1 + 1,
         }
     }
     fn tag_to_byte(&self) -> u8 {
@@ -192,7 +193,7 @@ impl DataItem {
                         }
                         String::from_utf8(b.to_vec()).map_err(|e| RsqlError::ParserError(e.to_string()))?
                     },
-                    None => return Err(RsqlError::Unknown("Missing body bytes for VarChar data".to_string())),
+                    None => String::new(), // empty string if body not provided
                 };
                 Ok(DataItem::VarChar {head: VarCharHead {max_len, len, page_ptr}, value})
             },
@@ -260,7 +261,7 @@ impl PartialOrd for DataItem {
             (DataItem::Chars{..} | DataItem::NullChars{..}, DataItem::Chars{..} | DataItem::NullChars{..}) => true,
             (DataItem::VarChar{..} | DataItem::NullVarChar, DataItem::VarChar{..} | DataItem::NullVarChar) => true,
             (DataItem::Bool(_) | DataItem::NullBool, DataItem::Bool(_) | DataItem::NullBool) => true,
-            _ => false,
+            _ => panic!("Comparing different data item types: {:?} vs {:?}", self, other),
         };
 
         if !same_group {
