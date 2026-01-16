@@ -15,6 +15,9 @@
             <div class="tables-btn drop">
             <span>Drop Table</span>
             </div>
+            <div class="tables-btn terminal">
+            <span>Open Terminal</span>
+            </div>
         </div>
 
         <div class="tables-list">
@@ -31,7 +34,7 @@
         <div class="main-content">
         <!-- Top bar -->
         <div class="top-bar">
-            <h1>Current Table: <span id="current-table">Users</span></h1>
+            <h1>Current Table: <span>{{ currentTableName }}</span></h1>
 
             <div class="action-buttons">
             <button class="action-btn insert">
@@ -56,18 +59,24 @@
         <div class="data-display">
             <div class="table-container">
             <div class="table-header">
-                <h3>Users Table Data</h3>
+                <h3>{{ currentTableName }} Table Data</h3>
                 <div class="table-info">
-                <span>Total <span id="records-count"></span> records</span>
+                <span>Total {{ recordsCount }} records</span>
                 <span>Updated on <span id="update-time">1970-01-01 00:00</span></span>
                 </div>
             </div>
-
             <div class="table-scroll-wrapper">
-                <table>
-                    <thead></thead>
-                    <tbody></tbody>
-                </table>
+                <VirtualList
+                    :headers="viewHeaders"
+                    :rows="viewRows"
+                    :leading-headers="['#']"
+                    :visible-count="12"
+                    :row-height="48"
+                >
+                    <template #leading-cell="{ rowIndex }">
+                        {{ rowIndex + 1 }}
+                    </template>
+                </VirtualList>
             </div>
             </div>
 
@@ -92,6 +101,21 @@
                 </div>
             </div>
 
+            <div class="terminal-operation">
+                <h1>Terminal</h1>
+                <div class="terminal-panel">
+                    <!-- 代码编写区 -->
+                    <div class="code-area">
+                        <textarea class="codeArea-text"></textarea>
+                    </div>
+                    <button class="codeArea-submit">Submit</button>
+                    <!-- 结果展示区 -->
+                    <div class="codeArea-result">
+                        <!-- 这里将展示终端执行结果 -->
+                    </div>
+                </div>
+            </div>
+
             <div class="insert-operation">
                 <div class="operation-panel">
                     <div class="operation-header">
@@ -113,36 +137,126 @@
             <div class="delete-operation">
                 <div class="table-container delete-table-container">
                     <div class="table-header">
-                        <h3 id="delete-table-title">Users Table Data</h3>
+                        <h3 id="delete-table-title">{{ currentTableName }} Table Data</h3>
                         <div class="table-info">
-                            <span>Total <span id="delete-records-count">0</span> records</span>
+                            <span>Total {{ recordsCount }} records</span>
                             <span>Updated on <span id="delete-update-time">1970-01-01 00:00</span></span>
                         </div>
                     </div>
 
                     <div class="table-scroll-wrapper">
-                        <table>
-                            <thead class="delete-table-head"></thead>
-                            <tbody class="delete-table-body"></tbody>
-                        </table>
+                        <VirtualList
+                            :key="deleteRenderKey"
+                            :headers="viewHeaders"
+                            :rows="viewRows"
+                            :leading-headers="['Delete', '#']"
+                            :visible-count="12"
+                            :row-height="48"
+                        >
+                            <template #leading-cell="{ rowIndex, leadingIndex }">
+                                <template v-if="leadingIndex === 0">
+                                    <div class="delete-actions">
+                                        <button
+                                            v-if="deletePendingRow !== rowIndex"
+                                            class="delete-row-btn"
+                                            type="button"
+                                            @click="deletePendingRow = rowIndex"
+                                        >
+                                            Delete
+                                        </button>
+                                        <template v-else>
+                                            <button
+                                                class="cancel-delete-btn"
+                                                type="button"
+                                                @click="deletePendingRow = null"
+                                            >
+                                                Cancel
+                                            </button>
+                                            <button
+                                                class="confirm-delete-btn"
+                                                type="button"
+                                                @click="confirmDelete(rowIndex)"
+                                            >
+                                                Confirm
+                                            </button>
+                                        </template>
+                                    </div>
+                                </template>
+                                <template v-else>
+                                    {{ rowIndex + 1 }}
+                                </template>
+                            </template>
+                        </VirtualList>
                     </div>
                 </div>
             </div>
             <div class="update-operation">
                 <div class="table-container update-table-container">
                     <div class="table-header">
-                        <h3 id="update-table-title">Users Table Data</h3>
+                        <h3 id="update-table-title">{{ currentTableName }} Table Data</h3>
                         <div class="table-info">
-                            <span>Total <span id="update-records-count">0</span> records</span>
+                            <span>Total {{ recordsCount }} records</span>
                             <span>Updated on <span id="update-update-time">1970-01-01 00:00</span></span>
                         </div>
                     </div>
 
                     <div class="table-scroll-wrapper">
-                        <table>
-                            <thead class="update-table-head"></thead>
-                            <tbody class="update-table-body"></tbody>
-                        </table>
+                        <VirtualList
+                            :key="updateRenderKey"
+                            :headers="viewHeaders"
+                            :rows="viewRows"
+                            :leading-headers="['Update', '#']"
+                            :visible-count="12"
+                            :row-height="52"
+                        >
+                            <template #leading-cell="{ rowIndex, leadingIndex }">
+                                <template v-if="leadingIndex === 0">
+                                    <div class="update-actions">
+                                        <button
+                                            v-if="updateEditingRow !== rowIndex"
+                                            class="update-row-btn"
+                                            type="button"
+                                            @click="startUpdate(rowIndex)"
+                                        >
+                                            Update
+                                        </button>
+                                        <template v-else>
+                                            <button
+                                                class="cancel-update-btn"
+                                                type="button"
+                                                @click="cancelUpdate"
+                                            >
+                                                Cancel
+                                            </button>
+                                            <button
+                                                class="confirm-update-btn"
+                                                type="button"
+                                                @click="confirmUpdate(rowIndex)"
+                                            >
+                                                Confirm
+                                            </button>
+                                        </template>
+                                    </div>
+                                </template>
+                                <template v-else>
+                                    {{ rowIndex + 1 }}
+                                </template>
+                            </template>
+                            <template #cell="{ value, rowIndex, colIndex, header }">
+                                <template v-if="updateEditingRow === rowIndex">
+                                    <input
+                                        class="update-value"
+                                        type="text"
+                                        v-model="updateDraft[colIndex]"
+                                        :data-column="header"
+                                        :placeholder="headerPlaceholder(header)"
+                                    />
+                                </template>
+                                <template v-else>
+                                    {{ value }}
+                                </template>
+                            </template>
+                        </VirtualList>
                     </div>
                 </div>
             </div>
@@ -150,11 +264,290 @@
             <div class="export-operation"></div>
         </div>
         </div>
+    <Toast ref="toastRef" :message="toastMessage" :duration="toastDuration" />
     </div>
 </template>
 
 <script setup>
-import { onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import VirtualList from './List.vue'
+import Toast from '../components/Toast.vue'
+
+const viewHeaders = ref([])
+const viewRows = ref([])
+const currentTableName = ref('Users')
+const recordsCount = computed(() => viewRows.value.length)
+const deletePendingRow = ref(null)
+const updateEditingRow = ref(null)
+const updateDraft = ref([])
+const deleteRenderKey = ref(0)
+const updateRenderKey = ref(0)
+const toastRef = ref(null)
+const toastMessage = ref('')
+const toastDuration = 2500
+let currentTableHeaders = []
+let currentTableRows = []
+let currentDisplayHeaders = []
+
+function checkTypeMatches(type, data) {
+    const t = String(type || '').trim().toUpperCase()
+    const makeResult = (valid, normalized = data, message = '') => ({ valid, normalized, message })
+
+    switch (t) {
+        case 'INT': {
+            const s = typeof data === 'number' ? String(data) : String(data ?? '').trim()
+            if (!/^[+-]?\d+$/.test(s)) return makeResult(false, null, 'INT expects an integer without decimals')
+            const n = Number(s)
+            if (!Number.isInteger(n)) return makeResult(false, null, 'INT expects an integer')
+            return makeResult(true, n)
+        }
+
+        case 'CHAR': {
+            const s = String(data ?? '')
+            if (s.length > 32) return makeResult(false, null, 'CHAR length must be <= 32')
+            return makeResult(true, s)
+        }
+
+        case 'VARCHAR': {
+            return makeResult(true, String(data ?? ''))
+        }
+
+        case 'FLOAT': {
+            const s = typeof data === 'number' ? String(data) : String(data ?? '').trim()
+            if (!/^[+-]?\d+(\.\d+)?$/.test(s)) return makeResult(false, null, 'FLOAT expects a numeric value')
+            const n = Number(s)
+            if (!Number.isFinite(n)) return makeResult(false, null, 'FLOAT expects a finite number')
+            const normalized = s.includes('.') ? n : Number(n.toFixed(2))
+            return makeResult(true, normalized)
+        }
+
+        case 'BOOLEAN': {
+            if (data === true || data === false) return makeResult(true, data)
+            const s = String(data ?? '').trim().toLowerCase()
+            if (s === 'true' || s === '1') return makeResult(true, true)
+            if (s === 'false' || s === '0') return makeResult(true, false)
+            return makeResult(false, null, 'BOOLEAN expects true or false')
+        }
+
+        case 'NULL':
+            return makeResult(true, null)
+
+        default:
+            return makeResult(false, null, `Unknown type: ${t}`)
+    }
+}
+
+function renderTable(headers, rows) {
+    viewHeaders.value = Array.isArray(headers) ? headers.slice() : []
+    viewRows.value = Array.isArray(rows) ? rows.slice() : []
+}
+
+function renderDeleteTable(headers, rows) {
+    renderTable(headers, rows)
+    deletePendingRow.value = null
+    deleteRenderKey.value += 1
+}
+
+function renderUpdateTable(headers, rows) {
+    renderTable(headers, rows)
+    updateEditingRow.value = null
+    updateDraft.value = []
+    updateRenderKey.value += 1
+}
+
+function triggerToast(msg) {
+    toastMessage.value = msg
+    if (toastRef.value && typeof toastRef.value.show === 'function') {
+        toastRef.value.show()
+    }
+}
+
+function headerPlaceholder(headerName) {
+    const meta = currentTableHeaders.find(h => h.name === headerName)
+    if (!meta) return ''
+    return meta.ableToBeNULL ? '可为空' : '必填'
+}
+
+function confirmDelete(idx) {
+    const tableName = currentTableName.value
+    if (!tableName) {
+        alert('未获取到表名，无法生成删除语句')
+        return
+    }
+
+    const pkHeaders = currentTableHeaders.filter(h => h.primaryKey)
+    if (pkHeaders.length === 0) {
+        alert('当前表未设置主键，无法生成删除语句')
+        return
+    }
+
+    const rowData = Array.isArray(currentTableRows) ? currentTableRows[idx] : null
+    if (!rowData) {
+        alert('未找到该行数据，无法生成删除语句')
+        return
+    }
+
+    const whereClauses = []
+    for (const h of pkHeaders) {
+        const colIndex = currentDisplayHeaders.findIndex(n => n === h.name)
+        if (colIndex < 0) continue
+        const rawValue = rowData[colIndex]
+        if (rawValue === undefined || rawValue === null || String(rawValue).trim() === '') {
+            alert(`主键列 "${h.name}" 的值为空，无法生成删除语句`)
+            return
+        }
+        const t = String(h.type || '').trim().toUpperCase()
+        let formatted
+        if (t === 'INT' || t === 'INTEGER') {
+            formatted = String(rawValue)
+        } else if (t === 'FLOAT') {
+            const s = String(rawValue)
+            const n = parseFloat(s)
+            formatted = s.includes('.') ? s : n.toFixed(2)
+        } else {
+            formatted = `'${String(rawValue).replace(/'/g, "''")}'`
+        }
+        whereClauses.push(`${h.name} = ${formatted}`)
+    }
+
+    if (whereClauses.length === 0) {
+        alert('无法定位主键列，未生成删除语句')
+        return
+    }
+
+    const sql = `DELETE FROM ${tableName} WHERE ${whereClauses.join(' AND ')};`
+    alert('生成的 SQL 语句：\n' + sql)
+    console.log('Delete SQL:', sql)
+
+    triggerToast('删除成功')
+
+    deletePendingRow.value = null
+    renderTable(currentDisplayHeaders, currentTableRows)
+    renderDeleteTable(currentDisplayHeaders, currentTableRows)
+}
+
+function startUpdate(idx) {
+    updateEditingRow.value = idx
+    updateDraft.value = Array.isArray(currentTableRows[idx]) ? [...currentTableRows[idx]] : []
+}
+
+function cancelUpdate() {
+    updateEditingRow.value = null
+    updateDraft.value = []
+    updateRenderKey.value += 1
+}
+
+function confirmUpdate(idx) {
+    const newRow = Array.isArray(updateDraft.value) ? updateDraft.value.slice() : []
+    while (newRow.length < currentTableHeaders.length) newRow.push('')
+
+    const missingRequired = []
+    const missingPK = []
+    const typeErrors = []
+    const uniqueErrors = []
+
+    currentTableHeaders.forEach((h, i) => {
+        const val = newRow[i] ?? ''
+        const trimmed = String(val).trim()
+
+        if (!h.ableToBeNULL && trimmed === '') missingRequired.push(h.name)
+        if (h.primaryKey && trimmed === '') missingPK.push(h.name)
+
+        if (trimmed !== '') {
+            const result = checkTypeMatches(h.type, trimmed)
+            if (!result.valid) {
+                typeErrors.push({ column: h.name, type: h.type, value: trimmed, message: result.message })
+            }
+        }
+    })
+
+    if (missingRequired.length > 0) {
+        alert(`未填写必填列：${missingRequired.join(', ')}`)
+        return
+    }
+    if (missingPK.length > 0) {
+        alert(`主键未填写：${missingPK.join(', ')}`)
+        return
+    }
+    if (typeErrors.length > 0) {
+        const msg = typeErrors.map(e => `列 "${e.column}" (类型: ${e.type})：值 "${e.value}" 不匹配 - ${e.message}`).join('\n')
+        alert('数据类型验证失败：\n' + msg)
+        return
+    }
+
+    const uniqueCols = currentTableHeaders
+        .map((h, i) => ({ h, i }))
+        .filter(({ h }) => h.unique)
+    uniqueCols.forEach(({ h, i }) => {
+        const val = newRow[i]
+        const trimmed = String(val ?? '').trim()
+        if (trimmed === '') return
+        const dupRowIndex = currentTableRows.findIndex((row, ridx) => ridx !== idx && Array.isArray(row) && row[i] === trimmed)
+        if (dupRowIndex >= 0) {
+            uniqueErrors.push({ column: h.name, value: trimmed, row: dupRowIndex + 1 })
+        }
+    })
+
+    if (uniqueErrors.length > 0) {
+        const msg = uniqueErrors.map(e => `列 "${e.column}" (唯一) 值 "${e.value}" 在第 ${e.row} 行重复`).join('\n')
+        alert('唯一性约束验证失败：\n' + msg)
+        return
+    }
+
+    const tableName = currentTableName.value
+    if (!tableName) {
+        alert('未获取到表名，无法生成更新语句')
+        return
+    }
+
+    const formatValue = (type, value) => {
+        const t = String(type || '').trim().toUpperCase()
+        if (t === 'INT' || t === 'INTEGER') return String(value)
+        if (t === 'FLOAT') {
+            const s = String(value)
+            const n = parseFloat(s)
+            return s.includes('.') ? s : n.toFixed(2)
+        }
+        return `'${String(value).replace(/'/g, "''")}'`
+    }
+
+    const setClauses = currentTableHeaders.map((h, i) => `${h.name} = ${formatValue(h.type, newRow[i] ?? '')}`)
+
+    const pkHeaders = currentTableHeaders.filter(h => h.primaryKey)
+    if (pkHeaders.length === 0) {
+        alert('当前表未设置主键，无法生成更新语句')
+        return
+    }
+
+    const originalRow = Array.isArray(currentTableRows[idx]) ? currentTableRows[idx] : []
+    const whereClauses = []
+    for (const h of pkHeaders) {
+        const colIndex = currentDisplayHeaders.findIndex(n => n === h.name)
+        if (colIndex < 0) continue
+        const rawValue = (originalRow && colIndex < originalRow.length) ? originalRow[colIndex] : ''
+        if (rawValue === undefined || rawValue === null || String(rawValue).trim() === '') {
+            alert(`主键列 "${h.name}" 的值为空，无法生成更新语句`)
+            return
+        }
+        whereClauses.push(`${h.name} = ${formatValue(h.type, rawValue)}`)
+    }
+
+    if (whereClauses.length === 0) {
+        alert('无法定位主键列，未生成更新语句')
+        return
+    }
+
+    const sql = `UPDATE ${tableName} SET ${setClauses.join(', ')} WHERE ${whereClauses.join(' AND ')};`
+    alert('生成的 SQL 语句：\n' + sql)
+    console.log('Update SQL:', sql)
+
+    triggerToast('更新成功')
+
+    updateEditingRow.value = null
+    updateDraft.value = []
+    renderTable(currentDisplayHeaders, currentTableRows)
+    renderUpdateTable(currentDisplayHeaders, currentTableRows)
+}
 
 onMounted(() => {
     const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '')
@@ -166,8 +559,9 @@ onMounted(() => {
     const insertSection = document.querySelector('.insert-operation')
     const deleteSection = document.querySelector('.delete-operation')
     const updateSection = document.querySelector('.update-operation')
+    const terminalSection = document.querySelector('.terminal-operation')
     const topBar = document.querySelector('.top-bar')
-    const sections = { table: tableContainer, create: createSection, insert: insertSection, delete: deleteSection, update: updateSection }
+    const sections = { table: tableContainer, create: createSection, insert: insertSection, delete: deleteSection, update: updateSection, terminal: terminalSection }
 
     // Table elements and fallback data
     const tableElement = tableContainer ? tableContainer.querySelector('table') : null
@@ -256,9 +650,6 @@ onMounted(() => {
     }
 
     // Store current table headers (normalized objects) for insert operation
-    let currentTableHeaders = []
-    let currentTableRows = []
-    let currentDisplayHeaders = []
 
     // Normalize headers into objects: { name, type, ableToBeNULL, primaryKey, unique }
     function normalizeHeaders(headers) {
@@ -284,390 +675,10 @@ onMounted(() => {
         })
     }
 
-    function renderTable(headers, rows) {
-        if (!tableHead || !tableBody) return
-
-        tableHead.innerHTML = ''
-        tableBody.innerHTML = ''
-
-        const headRow = document.createElement('tr')
-        // Leading column for row numbers
-        const indexTh = document.createElement('th')
-        indexTh.textContent = '#'
-        headRow.appendChild(indexTh)
-        headers.forEach((text) => {
-        const th = document.createElement('th')
-        th.textContent = text
-        headRow.appendChild(th)
-        })
-        tableHead.appendChild(headRow)
-
-        rows.forEach((row, idx) => {
-        const tr = document.createElement('tr')
-        const indexTd = document.createElement('td')
-        indexTd.textContent = String(idx + 1)
-        tr.appendChild(indexTd)
-        row.forEach((cell) => {
-            const td = document.createElement('td')
-            td.textContent = cell
-            tr.appendChild(td)
-        })
-        tableBody.appendChild(tr)
-        })
-
-        const countEl = document.getElementById('records-count')
-        if (countEl) countEl.textContent = Array.isArray(rows) ? rows.length : 0
-    }
-
-    function renderDeleteTable(headers, rows) {
-        if (!deleteTableHead || !deleteTableBody) return
-
-        deleteTableHead.innerHTML = ''
-        deleteTableBody.innerHTML = ''
-
-        const headRow = document.createElement('tr')
-        const actionTh = document.createElement('th')
-        actionTh.textContent = 'Delete'
-        headRow.appendChild(actionTh)
-        const indexTh = document.createElement('th')
-        indexTh.textContent = '#'
-        headRow.appendChild(indexTh)
-        headers.forEach((text) => {
-            const th = document.createElement('th')
-            th.textContent = text
-            headRow.appendChild(th)
-        })
-        deleteTableHead.appendChild(headRow)
-
-        rows.forEach((row, idx) => {
-            const tr = document.createElement('tr')
-
-            const actionTd = document.createElement('td')
-            actionTd.className = 'delete-action-cell'
-            const actions = document.createElement('div')
-            actions.className = 'delete-actions'
-            const btn = document.createElement('button')
-            btn.className = 'delete-row-btn'
-            btn.textContent = 'Delete'
-            actions.appendChild(btn)
-            actionTd.appendChild(actions)
-            tr.appendChild(actionTd)
-
-            // Toggle to Cancel/Confirm on click
-            btn.addEventListener('click', () => {
-                actions.innerHTML = ''
-                const cancelBtn = document.createElement('button')
-                cancelBtn.className = 'cancel-delete-btn'
-                cancelBtn.textContent = 'Cancel'
-                const confirmBtn = document.createElement('button')
-                confirmBtn.className = 'confirm-delete-btn'
-                confirmBtn.textContent = 'Confirm'
-                actions.appendChild(cancelBtn)
-                actions.appendChild(confirmBtn)
-
-                cancelBtn.addEventListener('click', () => {
-                    actions.innerHTML = ''
-                    actions.appendChild(btn)
-                })
-
-                confirmBtn.addEventListener('click', () => {
-                    const currentTableEl = document.getElementById('current-table')
-                    const tableName = currentTableEl ? currentTableEl.textContent : ''
-                    if (!tableName) {
-                        alert('未获取到表名，无法生成删除语句')
-                        return
-                    }
-
-                    const pkHeaders = currentTableHeaders.filter(h => h.primaryKey)
-                    if (pkHeaders.length === 0) {
-                        alert('当前表未设置主键，无法生成删除语句')
-                        return
-                    }
-
-                    const rowData = Array.isArray(currentTableRows) ? currentTableRows[idx] : null
-                    if (!rowData) {
-                        alert('未找到该行数据，无法生成删除语句')
-                        return
-                    }
-
-                    const whereClauses = []
-                    for (const h of pkHeaders) {
-                        const colIndex = currentDisplayHeaders.findIndex(n => n === h.name)
-                        if (colIndex < 0) continue
-                        const rawValue = rowData[colIndex]
-                        if (rawValue === undefined || rawValue === null || String(rawValue).trim() === '') {
-                            alert(`主键列 "${h.name}" 的值为空，无法生成删除语句`)
-                            return
-                        }
-                        const t = String(h.type || '').trim().toUpperCase()
-                        let formatted
-                        if (t === 'INT' || t === 'INTEGER') {
-                            formatted = String(rawValue)
-                        } else if (t === 'FLOAT') {
-                            const s = String(rawValue)
-                            const n = parseFloat(s)
-                            formatted = s.includes('.') ? s : n.toFixed(2)
-                        } else {
-                            formatted = `'${String(rawValue).replace(/'/g, "''")}'`
-                        }
-                        whereClauses.push(`${h.name} = ${formatted}`)
-                    }
-
-                    if (whereClauses.length === 0) {
-                        alert('无法定位主键列，未生成删除语句')
-                        return
-                    }
-
-                    const sql = `DELETE FROM ${tableName} WHERE ${whereClauses.join(' AND ')};`
-                    alert('生成的 SQL 语句：\n' + sql)
-                    console.log('Delete SQL:', sql)
-
-                    // 重新渲染
-                    renderTable(currentDisplayHeaders, currentTableRows)
-                    renderDeleteTable(currentDisplayHeaders, currentTableRows)
-
-                    // 恢复为单个删除按钮
-                    actions.innerHTML = ''
-                    actions.appendChild(btn)
-                })
-            })
-
-            const indexTd = document.createElement('td')
-            indexTd.textContent = String(idx + 1)
-            tr.appendChild(indexTd)
-
-            row.forEach((cell) => {
-                const td = document.createElement('td')
-                td.textContent = cell
-                tr.appendChild(td)
-            })
-            deleteTableBody.appendChild(tr)
-        })
-
-        if (deleteRecordsCount) deleteRecordsCount.textContent = Array.isArray(rows) ? rows.length : 0
-    }
-
-    function renderUpdateTable(headers, rows) {
-        if (!updateTableHead || !updateTableBody) return
-
-        updateTableHead.innerHTML = ''
-        updateTableBody.innerHTML = ''
-
-        const headRow = document.createElement('tr')
-        const actionTh = document.createElement('th')
-        actionTh.textContent = 'Update'
-        headRow.appendChild(actionTh)
-        const indexTh = document.createElement('th')
-        indexTh.textContent = '#'
-        headRow.appendChild(indexTh)
-        headers.forEach((text) => {
-            const th = document.createElement('th')
-            th.textContent = text
-            headRow.appendChild(th)
-        })
-        updateTableHead.appendChild(headRow)
-
-        rows.forEach((row, idx) => {
-            const tr = document.createElement('tr')
-
-            const actionTd = document.createElement('td')
-            actionTd.className = 'update-action-cell'
-            const actions = document.createElement('div')
-            actions.className = 'update-actions'
-            const btn = document.createElement('button')
-            btn.className = 'update-row-btn'
-            btn.textContent = 'Update'
-            actions.appendChild(btn)
-            actionTd.appendChild(actions)
-            tr.appendChild(actionTd)
-
-            btn.addEventListener('click', () => {
-                actions.innerHTML = ''
-                const cancelBtn = document.createElement('button')
-                cancelBtn.className = 'cancel-update-btn'
-                cancelBtn.textContent = 'Cancel'
-                const confirmBtn = document.createElement('button')
-                confirmBtn.className = 'confirm-update-btn'
-                confirmBtn.textContent = 'Confirm'
-                actions.appendChild(cancelBtn)
-                actions.appendChild(confirmBtn)
-
-                const originalRow = Array.isArray(currentTableRows) && Array.isArray(currentTableRows[idx])
-                    ? [...currentTableRows[idx]]
-                    : []
-
-                // Annotate header cells temporarily with PK/Unique marks
-                const headerThs = updateTableHead ? Array.from(updateTableHead.querySelectorAll('tr th')).slice(2) : []
-                headerThs.forEach((thEl, i) => {
-                    const colName = Array.isArray(headers) && i < headers.length ? headers[i] : ''
-                    const meta = currentTableHeaders.find(h => h.name === colName)
-                    let label = colName
-                    if (meta && meta.primaryKey) label += '*'
-                    if (meta && meta.unique) label += ' (Unique)'
-                    thEl.textContent = label
-                })
-
-                // Turn data cells into inputs with default values and placeholders
-                const dataCells = Array.from(tr.querySelectorAll('td[data-column]'))
-                dataCells.forEach((td) => {
-                    const originalValue = td.textContent || ''
-                    td.innerHTML = ''
-                    const input = document.createElement('input')
-                    input.type = 'text'
-                    input.className = 'update-value'
-                    const colName = td.getAttribute('data-column') || ''
-                    input.value = originalValue
-                    input.setAttribute('data-column', colName)
-                    const meta = currentTableHeaders.find(h => h.name === colName)
-                    const required = meta ? !meta.ableToBeNULL : false
-                    input.placeholder = required ? '必填' : '可为空'
-                    td.appendChild(input)
-                })
-
-                // Cancel restores original values
-                cancelBtn.addEventListener('click', () => {
-                    renderUpdateTable(currentDisplayHeaders, currentTableRows)
-                })
-
-                // Confirm saves inputs back to currentTableRows and re-renders
-                confirmBtn.addEventListener('click', () => {
-                    const newRow = []
-                    dataCells.forEach((td, i) => {
-                        const input = td.querySelector('.update-value')
-                        const value = input ? input.value : ''
-                        newRow[i] = value
-                    })
-
-                    // Validation: required / PK / type / unique
-                    const missingRequired = []
-                    const missingPK = []
-                    const typeErrors = []
-                    const uniqueErrors = []
-
-                    currentTableHeaders.forEach((h, i) => {
-                        const val = newRow[i] ?? ''
-                        const trimmed = String(val).trim()
-
-                        // Required / PK not null
-                        if (!h.ableToBeNULL && trimmed === '') missingRequired.push(h.name)
-                        if (h.primaryKey && trimmed === '') missingPK.push(h.name)
-
-                        // Type check (skip empty if nullable)
-                        if (trimmed !== '') {
-                            const result = checkTypeMatches(h.type, trimmed)
-                            if (!result.valid) {
-                                typeErrors.push({ column: h.name, type: h.type, value: trimmed, message: result.message })
-                            }
-                        }
-                    })
-
-                    if (missingRequired.length > 0) {
-                        alert(`未填写必填列：${missingRequired.join(', ')}`)
-                        return
-                    }
-                    if (missingPK.length > 0) {
-                        alert(`主键未填写：${missingPK.join(', ')}`)
-                        return
-                    }
-                    if (typeErrors.length > 0) {
-                        const msg = typeErrors.map(e => `列 "${e.column}" (类型: ${e.type})：值 "${e.value}" 不匹配 - ${e.message}`).join('\n')
-                        alert('数据类型验证失败：\n' + msg)
-                        return
-                    }
-
-                    // Unique constraint: compare with other rows (exclude current idx)
-                    const uniqueCols = currentTableHeaders
-                        .map((h, i) => ({ h, i }))
-                        .filter(({ h }) => h.unique)
-                    uniqueCols.forEach(({ h, i }) => {
-                        const val = newRow[i]
-                        const trimmed = String(val ?? '').trim()
-                        if (trimmed === '') return
-                        const dupRowIndex = currentTableRows.findIndex((row, ridx) => ridx !== idx && Array.isArray(row) && row[i] === trimmed)
-                        if (dupRowIndex >= 0) {
-                            uniqueErrors.push({ column: h.name, value: trimmed, row: dupRowIndex + 1 })
-                        }
-                    })
-
-                    if (uniqueErrors.length > 0) {
-                        const msg = uniqueErrors.map(e => `列 "${e.column}" (唯一) 值 "${e.value}" 在第 ${e.row} 行重复`).join('\n')
-                        alert('唯一性约束验证失败：\n' + msg)
-                        return
-                    }
-
-                    // Build SQL UPDATE using PK in WHERE
-                    const currentTableEl = document.getElementById('current-table')
-                    const tableName = currentTableEl ? currentTableEl.textContent : ''
-                    if (!tableName) {
-                        alert('未获取到表名，无法生成更新语句')
-                        return
-                    }
-
-                    const formatValue = (type, value) => {
-                        const t = String(type || '').trim().toUpperCase()
-                        if (t === 'INT' || t === 'INTEGER') return String(value)
-                        if (t === 'FLOAT') {
-                            const s = String(value)
-                            const n = parseFloat(s)
-                            return s.includes('.') ? s : n.toFixed(2)
-                        }
-                        return `'${String(value).replace(/'/g, "''")}'`
-                    }
-
-                    const setClauses = currentTableHeaders.map((h, i) => `${h.name} = ${formatValue(h.type, newRow[i] ?? '')}`)
-
-                    const pkHeaders = currentTableHeaders.filter(h => h.primaryKey)
-                    if (pkHeaders.length === 0) {
-                        alert('当前表未设置主键，无法生成更新语句')
-                        return
-                    }
-
-                    const whereClauses = []
-                    for (const h of pkHeaders) {
-                        const colIndex = currentDisplayHeaders.findIndex(n => n === h.name)
-                        if (colIndex < 0) continue
-                        const rawValue = (originalRow && colIndex < originalRow.length) ? originalRow[colIndex] : ''
-                        if (rawValue === undefined || rawValue === null || String(rawValue).trim() === '') {
-                            alert(`主键列 "${h.name}" 的值为空，无法生成更新语句`)
-                            return
-                        }
-                        whereClauses.push(`${h.name} = ${formatValue(h.type, rawValue)}`)
-                    }
-
-                    if (whereClauses.length === 0) {
-                        alert('无法定位主键列，未生成更新语句')
-                        return
-                    }
-
-                    const sql = `UPDATE ${tableName} SET ${setClauses.join(', ')} WHERE ${whereClauses.join(' AND ')};`
-                    alert('生成的 SQL 语句：\n' + sql)
-                    console.log('Update SQL:', sql)
-
-                    // 前端不更新数据，只重新渲染
-                    renderTable(currentDisplayHeaders, currentTableRows)
-                    renderUpdateTable(currentDisplayHeaders, currentTableRows)
-                })
-            })
-
-            const indexTd = document.createElement('td')
-            indexTd.textContent = String(idx + 1)
-            tr.appendChild(indexTd)
-
-            row.forEach((cell, dataColIdx) => {
-                const td = document.createElement('td')
-                td.textContent = cell
-                // Map data cell to its header name for editing
-                const colName = Array.isArray(headers) && dataColIdx < headers.length ? headers[dataColIdx] : ''
-                td.setAttribute('data-column', String(colName))
-                tr.appendChild(td)
-            })
-            updateTableBody.appendChild(tr)
-        })
-
-        if (updateRecordsCount) updateRecordsCount.textContent = Array.isArray(rows) ? rows.length : 0
-    }
-
     async function loadTableData(tableName) { // 导入表数据
+        if (tableName) {
+            currentTableName.value = tableName
+        }
         const candidates = []
         if (tableName) {
             candidates.push(buildAssetUrl(`${tableName}.json`)) // 【查表路径】
@@ -922,6 +933,7 @@ onMounted(() => {
         sql += `\n);`
         console.log('Generated SQL:\n', sql)
         alert('生成的 SQL 语句：\n' + sql)
+        triggerToast('创建表成功')
         })
     }
 
@@ -936,6 +948,7 @@ onMounted(() => {
             newItem.classList.add('active')
             const span = newItem.querySelector('span')
             const tableName = span && span.textContent ? span.textContent.split(' ')[0] : 'Users'
+            currentTableName.value = tableName
             const currentTableEl = document.getElementById('current-table')
             if (currentTableEl) currentTableEl.textContent = tableName
             const headerTitle = document.querySelector('.table-header h3')
@@ -955,7 +968,7 @@ onMounted(() => {
             this.classList.contains('query') ? 'Query' : 'Export'
 
         const currentTableEl = document.getElementById('current-table')
-        const tableName = currentTableEl ? currentTableEl.textContent : ''
+        const tableName = currentTableName.value || (currentTableEl ? currentTableEl.textContent : '')
 
         if (action === 'Insert') {
             if (currentTableHeaders.length === 0) {
@@ -1309,6 +1322,7 @@ onMounted(() => {
 
             console.log('Insert JSON:', jsonOutput)
             console.log('Insert SQL:', sqlOutput)
+            triggerToast('插入数据成功')
         })
     }
 
@@ -1316,7 +1330,8 @@ onMounted(() => {
         button.addEventListener('click', function () {
         const action = this.classList.contains('create') ? 'Create' : 
             this.classList.contains('drop') ? 'Drop' : 
-            this.classList.contains('rename') ? 'Rename' : 'Unknown'
+            this.classList.contains('rename') ? 'Rename' : 
+            this.classList.contains('terminal') ? 'Terminal' : 'Unknown'
         if (action === 'Create') {
             document.querySelectorAll('.table-item').forEach((el) => {
                 el.classList.remove('active')
@@ -1326,9 +1341,30 @@ onMounted(() => {
 
         } else if (action === 'Rename') {
             
+        } else if (action === 'Terminal') {
+            document.querySelectorAll('.table-item').forEach((el) => {
+                el.classList.remove('active')
+            })
+            showSection('terminal')
         }
         })
     })
+
+    // Terminal Submit Button Handler
+    const submitBtn = document.querySelector('.codeArea-submit')
+    const textArea = document.querySelector('.codeArea-text')
+    if (submitBtn && textArea) {
+        submitBtn.addEventListener('click', () => {
+            let inputText = textArea.value.trim()
+            if (!inputText) {
+                alert('请输入 SQL 语句')
+                return
+            }
+            // 移除所有换行符
+            const sqlStatement = inputText.replace(/\n/g, ' ').replace(/\r/g, ' ')
+            alert('生成的 SQL 语句：\n' + sqlStatement)
+        })
+    }
 })
 </script>
 
@@ -1408,6 +1444,74 @@ body {
 .tables-btn.rename {
     background-color: #3c8dc3;
     color: white;
+}
+
+.tables-btn.terminal {
+    border-bottom: 1px solid #34495e;
+    user-select: none;
+    padding: 15px 20px;
+    cursor: pointer;
+    border-bottom: 1px solid #34495e;
+    font-weight: 600;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background-color: #f08080
+}
+.tables-btn.terminal:hover {
+    border-left: 4px solid #2c3e50;
+}
+
+.terminal-panel {
+    display: flex; 
+    flex-direction: column; 
+    height: 800px; 
+    min-height: 320px; 
+    background: #f8f8f8; 
+    border-radius: 8px; 
+    box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+}
+
+.code-area {
+    flex: 0 0 30%; 
+    position: relative; 
+    padding: 16px; 
+    background: #f5f5f5; 
+    border-bottom: 1px solid #eee;
+}
+
+.codeArea-text {
+    width: 100%; 
+    height: 100%; 
+    resize: none; 
+    font-family: monospace; 
+    font-size: 24px; 
+    border-radius: 4px; 
+    border: 1px solid #ccc; 
+    padding: 8px;
+}
+
+.codeArea-submit {
+    padding: 10px 24px; 
+    background: #4caf50; 
+    color: #fff;
+    border: none; 
+    border-radius: 4px; 
+    cursor: pointer; 
+    font-weight: 600; 
+    font-size: 15px;
+    flex: 0 0 auto;
+    align-self: center;
+    margin: 12px 0;
+    margin-left: auto
+}
+
+.codeArea-result {
+    flex: 1 1 60%; 
+    padding: 16px; 
+    background: #fff; 
+    min-height: 120px;
 }
 
 .tables-list {
@@ -1584,6 +1688,7 @@ body {
 }
 
 .create-operation,
+.terminal-operation,
 .insert-operation,
 .delete-operation,
 .update-operation,
