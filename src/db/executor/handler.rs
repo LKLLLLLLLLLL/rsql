@@ -5,19 +5,15 @@ use crate::db::table::{Table, TableSchema, ColType, TableColumn};
 use self::ExecutionResult::{Query, Mutation, Ddl, TableObj, TableWithFilter, TempTable};
 use tracing::info;
 use std::collections::HashMap;
-use sqlparser::ast::Expr;
+use sqlparser::ast::{Expr, BinaryOperator, Value::{Number, SingleQuotedString, Boolean}};
 
 pub enum ExecutionResult {
     Query {
         cols: Vec<String>,
         rows: Vec<Vec<DataItem>>, // query result
     },
-    Mutation {
-        affected_rows: u64,  // affected row_number after mutation
-    },
-    Ddl {
-        success: bool, // ddl execution status
-    },
+    Mutation, // update, delete, insert
+    Ddl, // create, drop
     TableObj(TableObject), // table object after scan
     TableWithFilter {
         table_obj: TableObject,
@@ -33,13 +29,16 @@ pub enum ExecutionResult {
 pub struct TableObject {
     table_obj: Table,
     map: HashMap<String, usize>, // col_name -> col_index
-    cols: Vec<String>,    
+    cols: (Vec<String>, Vec<ColType>), // (cols_name, cols_type)
+    indexed_cols: Vec<String>, // indexed columns
+    pk_col: (String, ColType), // primary key column name
 }
 
 pub fn execute_plan_node(node: &PlanNode) -> RsqlResult<ExecutionResult> {
     match node {
         PlanNode::TableScan { table } => {
             info!("Implement TableScan execution");
+            // 1. get Table
             let table_column = TableColumn {
                 name: "a".to_string(),
                 data_type: ColType::Integer,
@@ -52,16 +51,28 @@ pub fn execute_plan_node(node: &PlanNode) -> RsqlResult<ExecutionResult> {
                 columns: vec![table_column],
             })?;
             let table_schema = table_obj.get_schema();
+            // 2. construct TableObject
             let mut map = HashMap::new();
-            let mut cols = vec![];
+            let mut cols_name = vec![];
+            let mut cols_type = vec![];
+            let mut pk_col_name = String::new();
+            let mut pk_col_type = ColType::Integer;
             for (idx, col) in table_schema.columns.iter().enumerate() {
                 map.insert(col.name.clone(), idx);
-                cols.push(col.name.clone());
+                cols_name.push(col.name.clone());
+                cols_type.push(col.data_type.clone());
+                if col.pk {
+                    pk_col_name = col.name.clone();
+                    pk_col_type = col.data_type.clone();
+                }
             }
+            let indexed_cols = table_obj.get_indexed_col();
             let table_object = TableObject {
                 table_obj,
                 map,
-                cols,
+                cols: (cols_name, cols_type),
+                indexed_cols,
+                pk_col: (pk_col_name, pk_col_type),
             };
             Ok(TableObj(table_object)) // get table object after scan
         }
@@ -91,15 +102,75 @@ pub fn execute_plan_node(node: &PlanNode) -> RsqlResult<ExecutionResult> {
         PlanNode::Projection { exprs, input } => {
             info!("Implement Projection execution");
             let input_result = execute_plan_node(input)?;
-            if let TableWithFilter {table_obj, rows} = input_result {
-                //================ todo: handle exprs ====================
+            if let TableWithFilter {table_obj, rows: input_rows} = input_result {
+                // 0. handle * column
+                if exprs.len() == 0 {
+                    return Ok(Query {
+                        cols: table_obj.cols.0.clone(),
+                        rows: input_rows,
+                    })
+                }
+                // 1. get projection columns
+                let mut cols = vec![];
+                for expr in exprs {
+                    match expr {
+                        Expr::Identifier(ident) => {
+                            cols.push(ident.value.clone());
+                        },
+                        _ => {
+                            return Err(RsqlError::ExecutionError(format!("Projection expr {:?} is not supported", expr)))
+                        }
+                    }
+                }
+                // 2. get projection rows
+                let mut rows = vec![];
+                for row in input_rows.iter() {
+                    let mut r = vec![];
+                    for col in cols.iter() {
+                        let col_idx = table_obj.map.get(col).unwrap();
+                        r.push(row[*col_idx].clone());
+                    }
+                    rows.push(r);
+                }
                 Ok(Query{
-                    cols: table_obj.cols.clone(),
+                    cols,
                     rows,
                 }) // get final query result
             }else {
-                if let TempTable{cols, rows, table_name} = input_result {
-                    Ok(TempTable { cols, rows, table_name })
+                if let TempTable{cols: input_cols, rows: input_rows, table_name: _} = input_result {
+                    // 0. handle * column
+                    if exprs.len() == 0 {
+                        return Ok(Query {
+                            cols: input_cols,
+                            rows: input_rows,
+                        })
+                    }
+                    // 1. get projection columns
+                    let mut cols = vec![];
+                    for expr in exprs {
+                        match expr {
+                            Expr::Identifier(ident) => {
+                                cols.push(ident.value.clone());
+                            },
+                            _ => {
+                                return Err(RsqlError::ExecutionError(format!("Projection expr {:?} is not supported", expr)))
+                            }
+                        }
+                    }
+                    // 2. get projection rows
+                    let mut rows = vec![];
+                    for row in input_rows.iter() {
+                        let mut r = vec![];
+                        for col in cols.iter() {
+                            let col_idx = input_cols.iter().position(|x| x == col).unwrap();
+                            r.push(row[col_idx].clone());
+                        }
+                        rows.push(r);
+                    }
+                    Ok(Query {
+                        cols,
+                        rows,
+                    })
                 }else {
                     Err(RsqlError::ExecutionError(format!("Projection input must be a TableWithFilter or TempTable")))
                 } // handle subquery
@@ -156,9 +227,151 @@ pub fn execute_plan_node(node: &PlanNode) -> RsqlResult<ExecutionResult> {
     }
 }
 
+
+
+fn parse_number(s: &str) -> RsqlResult<DataItem> {
+    // 1. try to parse integer
+    if let Ok(int) = s.parse::<i64>() {
+        return Ok(DataItem::Integer(int));
+    }
+    
+    // 2. try to parse float
+    if let Ok(float) = s.parse::<f64>() {
+        return Ok(DataItem::Float(float));
+    }
+
+    Err(RsqlError::InvalidInput(format!("Failed to parse number from string: {}", s)))
+}
+
+fn handle_table_obj_filter_expr(table_obj: &TableObject, predicate: &Expr) -> RsqlResult<Vec<Vec<DataItem>>> {
+    match predicate {
+        Expr::BinaryOp { left, op, right } => {
+            match op {
+                BinaryOperator::And => {
+                    let left_rows = handle_table_obj_filter_expr(table_obj, left)?;
+                    let right_rows = handle_table_obj_filter_expr(table_obj, right)?;
+                    let filtered_rows = left_rows
+                        .into_iter()
+                        .filter(|left_row| {
+                            right_rows.iter().any(|right_row| left_row == right_row)
+                        })
+                        .collect(); // filter rows by AND (find rows that satisfy both left and right)
+                    Ok(filtered_rows)
+                },
+                BinaryOperator::Or => {
+                    let left_rows = handle_table_obj_filter_expr(table_obj, left)?;
+                    let right_rows = handle_table_obj_filter_expr(table_obj, right)?;
+                    let mut filtered_rows = left_rows;
+                    for row in right_rows {
+                        if !filtered_rows.iter().any(|r| r == &row) {
+                            filtered_rows.push(row);
+                        }
+                    }
+                    Ok(filtered_rows)
+                },
+                BinaryOperator::Eq => {
+                    match (&**left, &**right) {
+                        (Expr::Identifier(ident), Expr::Value(value)) => {
+                            match &value.value {
+                                Boolean(b) => {
+                                    let col = ident.value.clone();
+                                    if col == table_obj.pk_col.0 {
+                                        let bool_value = DataItem::Bool(*b);
+                                        let row = table_obj.table_obj.get_row_by_pk(&bool_value)?;
+                                        if let Some(r) = row {
+                                            Ok(vec![r])
+                                        }else {
+                                            Ok(vec![])
+                                        }
+                                    }else {
+                                        let col_idx = table_obj.map.get(&col).unwrap();
+                                        let bool_value = DataItem::Bool(*b);
+                                        let rows_iter = table_obj.table_obj.get_all_rows()?;
+                                        let mut rows = vec![];
+                                        for row in rows_iter {
+                                            let row = row?;
+                                            if row[*col_idx] == bool_value {
+                                                rows.push(row);
+                                            }
+                                        }
+                                        Ok(rows)
+                                    }
+                                },
+                                Number(n, _) => {
+                                    let col = ident.value.clone();
+                                    if col == table_obj.pk_col.0 {
+                                        let number_value = parse_number(n)?;
+                                        let row = table_obj.table_obj.get_row_by_pk(&number_value)?;
+                                        if let Some(r) = row {
+                                            Ok(vec![r])
+                                        }else {
+                                            Ok(vec![])
+                                        }
+                                    }else if table_obj.indexed_cols.contains(&col) {
+                                        let number_value = parse_number(n)?;
+                                        let rows_iter = table_obj.table_obj.get_rows_by_range_indexed_col(&col, &number_value, &number_value)?;
+                                        let mut rows = vec![];
+                                        for row in rows_iter {
+                                            let row = row?;
+                                            rows.push(row);
+                                        }
+                                        Ok(rows)
+                                    }else {
+                                        let col_idx = table_obj.map.get(&col).unwrap();
+                                        let number_value = parse_number(n)?;
+                                        let rows_iter = table_obj.table_obj.get_all_rows()?;
+                                        let mut rows = vec![];
+                                        for row in rows_iter {
+                                            let row = row?;
+                                            if row[*col_idx] == number_value {
+                                                rows.push(row);
+                                            }
+                                        }
+                                        Ok(rows)
+                                    }
+                                },
+                                SingleQuotedString(s) => {
+                                    todo!("Implement SingleQuotedString filter expression")
+                                },
+                                _ => {
+                                    Err(RsqlError::ExecutionError(format!("Unsupported filter expression: {:?}", predicate)))
+                                }
+                            }
+                        },
+                        (Expr::Identifier(left_ident), Expr::Identifier(right_ident)) => {
+                            todo!("Implement Identifier filter expression")
+                        },
+                        _ => {
+                            Err(RsqlError::ExecutionError(format!("Unsupported filter expression: {:?}", predicate)))
+                        }
+                    }
+                },
+                BinaryOperator::LtEq => {
+                    todo!("Implement LtEq filter expression")
+                },
+                BinaryOperator::GtEq => {
+                    todo!("Implement GtEq filter expression")
+                },
+                BinaryOperator::Lt => {
+                    todo!("Implement Lt filter expression")
+                },
+                BinaryOperator::Gt => {
+                    todo!("Implement Gt filter expression")
+                },
+                _ => {
+                    Err(RsqlError::ExecutionError(format!("Unsupported filter expression: {:?}", predicate)))
+                },
+            }
+        },
+        _ => {
+            Err(RsqlError::ExecutionError(format!("Unsupported filter expression: {:?}", predicate)))
+        }
+    }
+}
+
 fn handle_join(left_table_obj: &TableObject, right_table_obj: &TableObject, join_type: &JoinType, on: &Option<Expr>) -> RsqlResult<(Vec<String>, Vec<Vec<DataItem>>)> {
-    let mut extended_cols = left_table_obj.cols.clone();
-    extended_cols.extend(right_table_obj.cols.clone());
+    let mut extended_cols = left_table_obj.cols.0.clone();
+    extended_cols.extend(right_table_obj.cols.0.clone());
     let mut extended_rows: Vec<Vec<DataItem>> = vec![];
     let left_rows_iter = left_table_obj.table_obj.get_all_rows()?;
     for left_row in left_rows_iter {
