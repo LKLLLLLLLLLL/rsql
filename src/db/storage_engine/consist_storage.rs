@@ -93,3 +93,41 @@ impl ConsistStorageEngine {
         self.storage_manager.max_page_index()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::DB_DIR;
+    use std::fs;
+    use std::path::Path;
+
+    #[test]
+    fn test_consist_storage_new_write_and_persistence() {
+        let file_path = "./data/test_consist_storage.db";
+        // cleanup
+        let wal_path = Path::new(DB_DIR).join("wal.log");
+        let _ = fs::remove_file(&wal_path);
+        if Path::new(file_path).exists() {
+            fs::remove_file(file_path).unwrap();
+        }
+
+        // create engine and new page, then write
+        {
+            let mut engine = ConsistStorageEngine::new(file_path, 777).unwrap();
+            let tnx = 1u64;
+            let (pid, mut page) = engine.new_page(tnx).unwrap();
+            assert_eq!(pid, 0);
+            page.data[0] = 99;
+            engine.write(tnx, pid, &page).unwrap();
+        }
+
+        // reopen and read
+        {
+            let engine = ConsistStorageEngine::new(file_path, 777).unwrap();
+            let p = engine.read(0).unwrap();
+            assert_eq!(p.data[0], 99);
+        }
+
+        let _ = fs::remove_file(file_path);
+    }
+}
