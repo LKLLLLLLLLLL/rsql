@@ -62,16 +62,18 @@ const props = defineProps({
 	rows: { type: Array, default: () => [] },
 	rowHeight: { type: Number, default: 48 },
 	visibleCount: { type: Number, default: 12 },
-	leadingHeaders: { type: Array, default: () => [] }
+	leadingHeaders: { type: Array, default: () => [] },
+	maxHeight: { type: Number, default: '720' }, // 控制表格纵向长度
+	buffer: { type: Number, default: 4 } // 配置渲染缓冲区大小（上下各 buffer 行），提升快速滚动的流畅度
 })
 
 const scrollRef = ref(null)
 const startIndex = ref(0)
-const maxHeightPx = computed(() => `${props.visibleCount * props.rowHeight}px`)
+const maxHeightPx = computed(() => props.maxHeight != null ? `${props.maxHeight}px` : `${props.visibleCount * props.rowHeight}px`)
 const totalColumns = computed(() => props.headers.length + props.leadingHeaders.length)
-const buffer = 4
-const safeStart = computed(() => Math.max(startIndex.value - buffer, 0))
-const endIndex = computed(() => Math.min(startIndex.value + props.visibleCount + buffer, props.rows.length))
+const bufferSize = computed(() => Number.isFinite(props.buffer) ? props.buffer : 4)
+const safeStart = computed(() => Math.max(startIndex.value - bufferSize.value, 0))
+const endIndex = computed(() => Math.min(startIndex.value + props.visibleCount + bufferSize.value, props.rows.length))
 const renderStart = computed(() => safeStart.value)
 const visibleRows = computed(() => props.rows.slice(safeStart.value, endIndex.value))
 const paddingTop = computed(() => safeStart.value * props.rowHeight)

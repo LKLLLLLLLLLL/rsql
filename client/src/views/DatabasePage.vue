@@ -106,12 +106,33 @@
                 <div class="terminal-panel">
                     <!-- 代码编写区 -->
                     <div class="code-area">
-                        <textarea class="codeArea-text"></textarea>
+                        <textarea
+                            class="codeArea-text"
+                            v-model="codeInput"
+                            :placeholder="connected ? '输入 SQL 后提交' : '正在连接到 WebSocket...'"
+                            :disabled="!connected"
+                        ></textarea>
                     </div>
-                    <button class="codeArea-submit">Submit</button>
+                    <button
+                        class="codeArea-submit"
+                        type="button"
+                        :disabled="!connected"
+                        @click="submitSql"
+                    >
+                        {{ connected ? 'Submit' : '连接中' }}
+                    </button>
                     <!-- 结果展示区 -->
                     <div class="codeArea-result">
-                        <!-- 这里将展示终端执行结果 -->
+                        <div v-if="!connected">WebSocket 未连接，请稍等或检查后端是否运行。</div>
+                        <div v-else-if="codeResults.length === 0">暂无响应</div>
+                        <div v-else>
+                            <div v-for="(item, idx) in codeResults" :key="idx" class="codeArea-result-item">
+                                <div>时间: {{ new Date(item.timestamp * 1000).toLocaleString() }} | Conn: {{ item.connection_id }}</div>
+                                <div v-if="item.success">✅ {{ item.rayon_response.response_content }}</div>
+                                <div v-else>❌ {{ item.rayon_response.error || '未知错误' }}</div>
+                                <div>耗时: {{ item.rayon_response.execution_time }} ms</div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -269,7 +290,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
 import VirtualList from './List.vue'
 import Toast from '../components/Toast.vue'
 
@@ -288,6 +309,120 @@ const toastDuration = 2500
 let currentTableHeaders = []
 let currentTableRows = []
 let currentDisplayHeaders = []
+
+// WebSocket 相关状态
+const wsUrl = 'ws://127.0.0.1:4455/ws'
+const wsRef = ref(null)
+const connected = ref(false)
+const codeInput = ref('')
+const codeResults = ref([])
+
+function connectWebSocket() {
+    const socket = new WebSocket(wsUrl)
+    wsRef.value = socket
+
+    socket.onopen = () => {
+        connected.value = true
+    }
+
+    socket.onclose = () => {
+        connected.value = false
+    }
+
+    socket.onerror = (err) => {
+        console.warn('WebSocket error', err)
+        connected.value = false
+    }
+
+    socket.onmessage = (ev) => {
+        try {
+            const data = JSON.parse(ev.data)
+            codeResults.value.push(data)
+        } catch (e) {
+            console.warn('Parse WebSocket message failed', e, ev.data)
+        }
+    }
+}
+
+function submitSql() {
+    if (!wsRef.value || wsRef.value.readyState !== WebSocket.OPEN) {
+        alert('WebSocket 未连接，请稍后重试')
+        return
+    }
+
+    const sql = codeInput.value.trim()
+    if (!sql) {
+        alert('请输入 SQL 再提交')
+        return
+    }
+
+    const payload = {
+        username: 'guest',
+        userid: 0,
+        request_content: sql,
+    }
+    wsRef.value.send(JSON.stringify(payload))
+}
+
+function ensureWsReady() {
+    if (!wsRef.value || wsRef.value.readyState !== WebSocket.OPEN) {
+        alert('WebSocket 未连接，请先启动后端或等待连接成功')
+        return false
+    }
+    return true
+}
+
+function sendSqlStatement(sql, actionLabel = 'SQL') {
+    const trimmed = (sql || '').trim()
+    if (!trimmed) {
+        alert(`${actionLabel} 为空，未发送`)
+        return
+    }
+    if (!ensureWsReady()) return
+    const payload = {
+        username: 'guest',
+        userid: 0,
+        request_content: trimmed,
+    }
+    wsRef.value.send(JSON.stringify(payload))
+    codeInput.value = trimmed
+    triggerToast(`${actionLabel} 已发送`) // 轻量提示
+}
+
+// 将包含多个语句的文本拆分为多条 INSERT/SQL 逐条发送
+function sendSqlBatch(sqlText, actionLabel = 'SQL 批量') {
+    if (!ensureWsReady()) return
+    const parts = (sqlText || '')
+        .split(';')
+        .map(s => s.trim())
+        .filter(Boolean)
+    if (parts.length === 0) {
+        alert(`${actionLabel} 为空，未发送`)
+        return
+    }
+    parts.forEach((stmt, idx) => {
+        const sql = stmt.endsWith(';') ? stmt : `${stmt};`
+        const payload = {
+            username: 'guest',
+            userid: 0,
+            request_content: sql,
+        }
+        wsRef.value.send(JSON.stringify(payload))
+        console.log(`${actionLabel} 第 ${idx + 1} 条`, sql)
+    })
+    codeInput.value = parts.map(s => (s.endsWith(';') ? s : `${s};`)).join('\n')
+    triggerToast(`${actionLabel} 已逐条发送 (${parts.length} 条)`) // 轻量提示
+}
+
+onMounted(() => {
+    connectWebSocket()
+})
+
+onBeforeUnmount(() => {
+    if (wsRef.value) {
+        wsRef.value.close()
+    }
+})
 
 function checkTypeMatches(type, data) {
     const t = String(type || '').trim().toUpperCase()
@@ -416,10 +551,9 @@ function confirmDelete(idx) {
     }
 
     const sql = `DELETE FROM ${tableName} WHERE ${whereClauses.join(' AND ')};`
-    alert('生成的 SQL 语句：\n' + sql)
     console.log('Delete SQL:', sql)
 
-    triggerToast('删除成功')
+    sendSqlStatement(sql, '删除语句')
 
     deletePendingRow.value = null
     renderTable(currentDisplayHeaders, currentTableRows)
@@ -538,10 +672,9 @@ function confirmUpdate(idx) {
     }
 
     const sql = `UPDATE ${tableName} SET ${setClauses.join(', ')} WHERE ${whereClauses.join(' AND ')};`
-    alert('生成的 SQL 语句：\n' + sql)
     console.log('Update SQL:', sql)
 
-    triggerToast('更新成功')
+    sendSqlStatement(sql, '更新语句')
 
     updateEditingRow.value = null
     updateDraft.value = []
@@ -920,7 +1053,6 @@ onMounted(() => {
         }
 
         console.log('Create table payload', { tableName, columns })
-        alert('提交创建表数据：\n' + JSON.stringify({ tableName, columns }, null, 2))
 
         let sql = `CREATE TABLE ${tableName} (\n`
         columns.forEach((col, index) => {
@@ -932,8 +1064,8 @@ onMounted(() => {
         })
         sql += `\n);`
         console.log('Generated SQL:\n', sql)
-        alert('生成的 SQL 语句：\n' + sql)
-        triggerToast('创建表成功')
+
+        sendSqlStatement(sql, '创建表语句')
         })
     }
 
@@ -1312,17 +1444,10 @@ onMounted(() => {
 
             const sqlOutput = sqlStatements.join('\n')
 
-            // Show JSON first
-            alert('生成的 JSON 数据：\n' + JSON.stringify(jsonOutput, null, 2))
-            
-            // Then show SQL
-            setTimeout(() => {
-                alert('生成的 SQL 语句：\n' + sqlOutput)
-            }, 100)
-
             console.log('Insert JSON:', jsonOutput)
             console.log('Insert SQL:', sqlOutput)
-            triggerToast('插入数据成功')
+
+            sendSqlBatch(sqlOutput, '插入语句')
         })
     }
 
@@ -1350,21 +1475,6 @@ onMounted(() => {
         })
     })
 
-    // Terminal Submit Button Handler
-    const submitBtn = document.querySelector('.codeArea-submit')
-    const textArea = document.querySelector('.codeArea-text')
-    if (submitBtn && textArea) {
-        submitBtn.addEventListener('click', () => {
-            let inputText = textArea.value.trim()
-            if (!inputText) {
-                alert('请输入 SQL 语句')
-                return
-            }
-            // 移除所有换行符
-            const sqlStatement = inputText.replace(/\n/g, ' ').replace(/\r/g, ' ')
-            alert('生成的 SQL 语句：\n' + sqlStatement)
-        })
-    }
 })
 </script>
 
