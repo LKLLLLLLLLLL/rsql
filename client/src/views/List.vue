@@ -21,7 +21,7 @@
 						:style="{ height: `${rowHeight}px` }"
 					>
 						<template v-for="(_, leadIdx) in leadingHeaders" :key="`lead-c-${leadIdx}`">
-							<td>
+							<td class="leading-cell">
 								<slot
 									name="leading-cell"
 									:row="row"
@@ -121,8 +121,34 @@ onBeforeUnmount(() => {
 }
 
 .virtual-table {
-	width: 100%;
+	width: max-content; /* 让列多时自然撑开，配合横向滚动条 */
+	min-width: 100%;
 	border-collapse: collapse;
+	table-layout: fixed; /* 固定布局避免列宽抖动 */
+}
+
+.leading-cell {
+	min-width: 20px;
+	max-width: 60px;
+	width: 20px; /* 索引列固定更窄，与数据列区分 */
+	text-align: left;
+	font-variant-numeric: tabular-nums;
+}
+
+.virtual-table th,
+.virtual-table td {
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* 仅数据列使用较大的最小宽度，索引列保持窄宽度 */
+
+.virtual-table td:not(.leading-cell),
+.virtual-table th:not(.leading-cell) {
+	min-width: 140px;
+	max-width: 240px;
+	width: 160px;
 }
 
 .virtual-table .spacer td {
