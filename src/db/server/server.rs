@@ -5,7 +5,6 @@ use tracing::info;
 use crate::config::{PORT};
 use super::websocket_actor::WebsocketActor;
 use super::thread_pool::WorkingThreadPool;
-use super::transaction::TransactionManager;
 use super::types::{HttpQueryRequest, HttpQueryResponse, RayonQueryResponse};
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -16,7 +15,6 @@ use std::time::{SystemTime, UNIX_EPOCH, Instant};
 struct AppState{
     working_thread_pool: Arc<WorkingThreadPool>,
     working_query: Arc<AtomicU64>,
-    transaction_manager: Arc<TransactionManager>,
 }
 
 //handle websocket connection
@@ -31,7 +29,10 @@ async fn handle_ws_query(
         WebsocketActor::new(
             state.working_thread_pool.clone(),
             state.working_query.clone(),
-            state.transaction_manager.clone(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
         ),
         &request,
         stream,
@@ -57,7 +58,7 @@ async fn handle_http_query(
 
     let request = query_request.rayon_request.clone();
 
-    let result = state.working_thread_pool.parse_and_execute_query(request).await;
+    let result = state.working_thread_pool.parse_and_execute_query(request,0).await;
 
     let current_after = state.working_query.fetch_sub(1, Ordering::SeqCst) - 1;
     info!("Query execution completed. current working query count: {}", current_after);
@@ -98,10 +99,8 @@ pub async fn start_server() -> std::io::Result<()> {
     let state = web::Data::new(AppState{
         working_thread_pool,
         working_query: Arc::new(AtomicU64::new(0)),
-        transaction_manager: Arc::new(TransactionManager::new())
     });
     state.working_thread_pool.show_info();
-    state.transaction_manager.show_info().await;
     HttpServer::new( move || {
         App::new()
             .app_data(state.clone())

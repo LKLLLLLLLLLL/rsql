@@ -34,10 +34,10 @@ impl WorkingThreadPool{
         }
     }
 
-    pub async fn parse_and_execute_query(&self, query: RayonQueryRequest) -> RsqlResult<String> {
+    pub async fn parse_and_execute_query(&self, query: RayonQueryRequest, connection_id: u64) -> RsqlResult<String> {
         let (sender, receiver) = oneshot::channel::<RsqlResult<String>>();
         self.thread_pool.spawn(move ||{
-            if let Err(err) = executor::execute(&query.request_content){
+            if let Err(err) = executor::execute(&query.request_content,connection_id){
                 error!("execute query failed: {:?}", err);
             };
             let result = Ok(query.request_content);
@@ -48,6 +48,26 @@ impl WorkingThreadPool{
             Ok(result) => Ok(result),
             Err(e) => Err(e)
         }
+    }
+
+    pub async fn rollback(&self, connection_id: u64) -> RsqlResult<String> {
+        self.thread_pool.spawn(move ||{
+
+        });
+        let result = format!("rollbacking transaction for connection id: {}", connection_id);
+        Ok(result)
+    }
+
+    pub fn rollback_sync(&self, connection_id: u64) -> RsqlResult<String> {
+        let result = format!("rollbacking transaction (sync) for connection id: {}", connection_id);
+        self.thread_pool.spawn(move ||{
+
+        });
+        // match result {
+        //     Ok(result)=> Ok(result),
+        //     Err(e)=> Err(e)
+        // }
+        Ok(result)
     }
 
     pub fn show_info(&self){

@@ -29,25 +29,10 @@ pub struct RayonQueryResponse{
     pub execution_time: u64
 }
 
-/* websocket request/response structure used for transmitting data between the server and client */
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "command")]//use command to differentiate between different types of requests
-#[serde(rename_all = "lowercase")]//use lowercase to convert the enum variant to lowercase
-pub enum WebsocketRequestType{
-    #[serde(rename = "begin")]
-    TransactionBegin,
-    #[serde(rename = "commit")]
-    TransactionCommit,
-    #[serde(rename = "rollback")]
-    TransactionRollback,
-    #[serde(rename = "query")]
-    Query(RayonQueryRequest)//for example, {"command":"query","rayon_request":{"username":"user1","userid":1,"request_content":"select * from users"}}
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebsocketResponse {
     pub rayon_response: RayonQueryResponse,
     pub timestamp: u64,
     pub success: bool,
-    pub tx_id: u64
+    pub connection_id: u64
 }
