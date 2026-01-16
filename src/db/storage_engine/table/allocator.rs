@@ -161,8 +161,8 @@ impl HeapPage {
         // initialize the only free chunk in this page
         HeapChunk::set_next_free_chunk(&mut page, first_chunk_offset, 0);
         HeapChunk::set_prev_free_chunk(&mut page, first_chunk_offset, 0);
-        let chunk_size = (storage::Page::max_size() as u64) - first_chunk_offset;
-        HeapChunk::set_chunk_size(&mut page, first_chunk_offset, chunk_size);
+        let chunk_size = (storage::Page::max_size() as u64) - first_chunk_offset - HeapChunk::header_size();
+        HeapChunk::set_chunk_size_to_free(&mut page, first_chunk_offset, chunk_size);
         page
     }
     pub fn next_free_page(page: &storage::Page) -> u64 {
@@ -198,10 +198,10 @@ impl HeapPage {
         if first_chunk_offset != 24 {
             return false;
         };
-        // check if if chunk size == page size - header
+        // check if if chunk size == page size - chunk_header - page_header
         let chunk_size = HeapChunk::chunk_size(page, first_chunk_offset);
-        if chunk_size != (storage::Page::max_size() as u64) - first_chunk_offset {
-            panic!("Heap page corruption detected: first chunk size mismatch");
+        if chunk_size != (storage::Page::max_size() as u64) - first_chunk_offset - 24 {
+            return false;
         };
         true
     }
@@ -222,37 +222,28 @@ impl HeapChunk {
     pub fn header_size() -> u64 {
         24u64
     }
-    /// If the padding bytes are not all zero, then the chunk is free
+    /// then the chunk is free
     pub fn is_free(page: &storage::Page, offset: u64) -> bool {
-        let bytes = &page.data;
-        let offset = offset as usize;
-        let padding_bytes = &bytes[offset..offset + 12];
-        for b in padding_bytes {
-            if *b != 0u8 {
-                // is free, check corruption
-                Self::check_corruption(page, offset as u64);
-                return true;
-            }
-        }
-        false
+        !Self::is_used(page, offset)
     }
-    pub fn check_corruption(page: &storage::Page, offset: u64) -> bool {
-        let bytes = &page.data;
-        let offset = offset as usize;
-        // check padding bytes
-        let padding_bytes = &bytes[offset..offset + 12];
+    pub fn is_used(page: &storage::Page, offset: u64) -> bool {
+        // 1. check magic number
+        let magic_number_bytes = &page.data[offset as usize + 20..offset as usize + 24];
+        let magic_number = u32::from_le_bytes(magic_number_bytes.try_into().unwrap());
+        if magic_number != MAGIC_NUMBER {
+            return false;
+        }
+        // 2. check padding bytes
+        let padding_bytes = &page.data[offset as usize..offset as usize + 12];
         for b in padding_bytes {
             if *b != 0u8 {
-                return false;
+                panic!("Heap chunk corruption detected: magic number satisfied but used chunk padding bytes not zero, found {}", *b);
             }
         }
-        // check magic number
-        let magic_bytes = &bytes[offset + 20..offset+24];
-        let magic_number = u32::from_le_bytes(magic_bytes.try_into().unwrap());
-        magic_number != MAGIC_NUMBER
+        true
     }
     pub fn next_free_chunk(page: &storage::Page, offset: u64) -> u64 {
-        if Self::is_free(page, offset) {
+        if !Self::is_free(page, offset) {
             panic!("Trying to get next free chunk of a used chunk at offset {}", offset);
         }
         let bytes = &page.data;
@@ -260,16 +251,18 @@ impl HeapChunk {
         let chunk_header = &bytes[offset..offset + 8];
         u64::from_le_bytes(chunk_header.try_into().unwrap())
     }
+
     pub fn set_next_free_chunk(page: &mut storage::Page, offset: u64, next: u64) {
-        if Self::is_free(page, offset) {
+        if !Self::is_free(page, offset) {
             panic!("Trying to set next free chunk of a used chunk at offset {}", offset);
         }
         let bytes = &mut page.data;
         let offset = offset as usize;
         bytes[offset..offset + 8].copy_from_slice(&next.to_le_bytes());
     }
+
     pub fn prev_free_chunk(page: &storage::Page, offset: u64) -> u64 {
-        if Self::is_free(page, offset) {
+        if !Self::is_free(page, offset) {
             panic!("Trying to get prev free chunk of a used chunk at offset {}", offset);
         }
         let bytes = &page.data;
@@ -277,54 +270,66 @@ impl HeapChunk {
         let chunk_header = &bytes[offset + 8..offset + 16];
         u64::from_le_bytes(chunk_header.try_into().unwrap())
     }
+
     pub fn set_prev_free_chunk(page: &mut storage::Page, offset: u64, prev: u64) {
-        if Self::is_free(page, offset) {
+        if !Self::is_free(page, offset) {
             panic!("Trying to set prev free chunk of a used chunk at offset {}", offset);
         }
         let bytes = &mut page.data;
         let offset = offset as usize;
         bytes[offset + 8..offset + 16].copy_from_slice(&prev.to_le_bytes());
     }
+
     pub fn chunk_size(page: &storage::Page, offset: u64) -> u64 {
         if Self::is_free(page, offset) {
-            // chunk_size is at offset + 16
-                let bytes = &page.data;
+            // free chunk: chunk_size is at offset + 16
+            let bytes = &page.data;
             let offset = offset as usize;
             let chunk_size_bytes = &bytes[offset + 16..offset + 24];
             u64::from_le_bytes(chunk_size_bytes.try_into().unwrap())
         } else {
-            // chunk_size is at offset + 12
+            // used chunk: chunk_size is at offset + 12
             let bytes = &page.data;
             let offset = offset as usize;
             let chunk_size_bytes = &bytes[offset + 12..offset + 20];
             u64::from_le_bytes(chunk_size_bytes.try_into().unwrap())
         }
     }
-    pub fn set_chunk_size(page: &mut storage::Page, offset: u64, size: u64) {
+    pub fn set_chunk_size_to_free(page: &mut storage::Page, offset: u64, size: u64) {
+        // free chunk: chunk_size is at offset + 16
         let bytes = &mut page.data;
         let offset = offset as usize;
         bytes[offset + 16..offset + 24].copy_from_slice(&size.to_le_bytes());
     }
-    /// Ptr is the pointer to user, which point to the data part of the chunk
+    pub fn set_chunk_size_to_used(page: &mut storage::Page, offset: u64, size: u64) {
+        // used chunk: chunk_size is at offset + 12
+        let bytes = &mut page.data;
+        let offset = offset as usize;
+        bytes[offset + 12..offset + 20].copy_from_slice(&size.to_le_bytes());
+    }
+    // offset is the pointer to the header of the chunk
     pub fn ptr_to_offset(ptr: u64) -> u64 {
         ptr - Self::header_size()
     }
-    /// Offset is the pointer to chunk header
+    // ptr is the pointer to the data area of the chunk
     pub fn offset_to_ptr(offset: u64) -> u64 {
         offset + Self::header_size()
     }
-    
+
     /// Set the padding bytes to all zero
     /// And the magic number to avoid corruption
     fn set_used(page: &mut storage::Page, offset: u64) {
-        let chunk_size = Self::chunk_size(page, offset);
-        let chunk_size_bytes = chunk_size.to_le_bytes();
+        let offset = offset as usize;
+        let old_chunk_size_bytes = page.data[offset + 16..offset + 24].to_vec();
+        // let old_chunk_size = u64::from_le_bytes(old_chunk_size_bytes.try_into().unwrap());
         let magic_bytes = MAGIC_NUMBER.to_le_bytes();
         let zero_bytes = [0u8; 12];
-        page.data[offset as usize..(offset + 12) as usize].copy_from_slice(&zero_bytes);
-        page.data[(offset + 12) as usize..(offset + 20) as usize].copy_from_slice(&chunk_size_bytes);
-        page.data[(offset + 20) as usize..(offset + 24) as usize].copy_from_slice(&magic_bytes);
+        page.data[offset..offset + 12].copy_from_slice(&zero_bytes);
+        page.data[offset + 12..offset + 20].copy_from_slice(&old_chunk_size_bytes);
+        page.data[offset + 20..offset + 24].copy_from_slice(&magic_bytes);
+        assert!(Self::is_used(page, offset as u64));
     }
+
     /// Set the chunk as free chunk
     /// This will not update free list links
     fn set_free(
@@ -333,13 +338,14 @@ impl HeapChunk {
         next_free: u64,
         prev_free: u64,
     ) {
-        let chunk_size = Self::chunk_size(page, offset);
-        // set next free chunk
-        Self::set_next_free_chunk(page, offset, next_free);
-        // set prev free chunk
-        Self::set_prev_free_chunk(page, offset, prev_free);
-        // set chunk size
-        Self::set_chunk_size(page, offset, chunk_size);
+        let offset = offset as usize;
+        let old_chunk_size_bytes = page.data[offset + 12..offset + 20].to_vec();
+        let next_free_bytes = next_free.to_le_bytes();
+        let prev_free_bytes = prev_free.to_le_bytes();
+        page.data[offset..(offset + 8)].copy_from_slice(&next_free_bytes);
+        page.data[(offset + 8)..(offset + 16)].copy_from_slice(&prev_free_bytes);
+        page.data[(offset + 16)..(offset + 24)].copy_from_slice(&old_chunk_size_bytes);
+        assert!(Self::is_free(page, offset as u64));
     }
     /// If you found this chunk suitable,
     /// you can call this function to allocate it
@@ -359,14 +365,14 @@ impl HeapChunk {
         let next_free = Self::next_free_chunk(page, offset);
         let prev_free = Self::prev_free_chunk(page, offset);
         // 1. try split the chunk and update freelist links
-        let remaining_size = chunk_size - size;
+        let remaining_size = chunk_size - size - Self::header_size();
         if remaining_size >= Self::header_size() + 8 { // make sure the remaining chunk's size >= 8bytes
             // split the chunk
             let new_free_chunk_offset = offset + Self::header_size() + size;
             // update current chunk size
-            Self::set_chunk_size(page, offset, size);
+            Self::set_chunk_size_to_free(page, offset, size); // the chunk size will be convert by set_used later
             // initialize new free chunk
-            Self::set_chunk_size(page, new_free_chunk_offset, remaining_size);
+            Self::set_chunk_size_to_free(page, new_free_chunk_offset, remaining_size);
             Self::set_next_free_chunk(page, new_free_chunk_offset, next_free);
             Self::set_prev_free_chunk(page, new_free_chunk_offset, prev_free);
             // update prev next pointer
@@ -400,8 +406,9 @@ impl HeapChunk {
     }
     pub fn dealloc_chunk(
         page: &mut storage::Page,
-        offset: u64,
+        ptr: u64,
     ) -> RsqlResult<()> {
+        let offset = Self::ptr_to_offset(ptr);
         if Self::is_free(page, offset) {
             panic!("Trying to dealloc a free chunk at offset {}", offset);
         };
@@ -411,7 +418,7 @@ impl HeapChunk {
         let mut current_chunk_offset = HeapPage::first_free_chunk_offset(page);
         let mut prev_free_chunk_offset = 0u64;
         loop {
-            if current_chunk_offset == 0 || prev_free_chunk_offset > offset {
+            if current_chunk_offset == 0 || current_chunk_offset > offset {
                 break;
             }
             prev_free_chunk_offset = current_chunk_offset;
@@ -432,7 +439,7 @@ impl HeapChunk {
             };
         };
         // merge prev and next if possible
-        if merge_prev {
+        if merge_prev && !merge_next {
             let next_free_chunk = Self::next_free_chunk(page, prev_free_chunk_offset);
             let prev_free_chunk = Self::prev_free_chunk(page, prev_free_chunk_offset);
             let new_chunk_offset = prev_free_chunk_offset;
@@ -440,7 +447,7 @@ impl HeapChunk {
                 Self::chunk_size(page, prev_free_chunk_offset) +
                 Self::header_size() +
                 Self::chunk_size(page, offset);
-            Self::set_chunk_size(page, new_chunk_offset, new_chunk_size);
+            Self::set_chunk_size_to_free(page, new_chunk_offset, new_chunk_size);
             Self::set_next_free_chunk(page, new_chunk_offset, next_free_chunk);
             Self::set_prev_free_chunk(page, offset, prev_free_chunk);
             // update prev next pointer
@@ -455,10 +462,7 @@ impl HeapChunk {
                 HeapChunk::set_prev_free_chunk(page, next_free_chunk, new_chunk_offset);
             }
         };
-        // Because the merge operation is idempotent,
-        // So whatever merge_prev is true or false,
-        // we can just check merge_next here
-        if merge_next {
+        if !merge_prev && merge_next {
             let next_free_chunk = Self::next_free_chunk(page, current_chunk_offset);
             let prev_free_chunk = Self::prev_free_chunk(page, current_chunk_offset);
             let new_chunk_offset = offset;
@@ -466,7 +470,32 @@ impl HeapChunk {
                 Self::chunk_size(page, offset) +
                 Self::header_size() +
                 Self::chunk_size(page, current_chunk_offset);
-            Self::set_chunk_size(page, new_chunk_offset, new_chunk_size);
+            Self::set_chunk_size_to_free(page, new_chunk_offset, new_chunk_size);
+            Self::set_next_free_chunk(page, new_chunk_offset, next_free_chunk);
+            Self::set_prev_free_chunk(page, new_chunk_offset, prev_free_chunk);
+            // update prev next pointer
+            if prev_free_chunk != 0 {
+                HeapChunk::set_next_free_chunk(page, prev_free_chunk, new_chunk_offset);
+            } else {
+                // update first free chunk pointer in page header
+                HeapPage::set_first_free_chunk_offset(page, new_chunk_offset);
+            }
+            // update next prev pointer
+            if next_free_chunk != 0 {
+                HeapChunk::set_prev_free_chunk(page, next_free_chunk, new_chunk_offset);
+            }
+        };
+        if merge_prev && merge_next {
+            let next_free_chunk = Self::next_free_chunk(page, current_chunk_offset);
+            let prev_free_chunk = Self::prev_free_chunk(page, prev_free_chunk_offset);
+            let new_chunk_offset = prev_free_chunk_offset;
+            let new_chunk_size = 
+                Self::chunk_size(page, prev_free_chunk_offset) +
+                Self::header_size() +
+                Self::chunk_size(page, offset) +
+                Self::header_size() +
+                Self::chunk_size(page, current_chunk_offset);
+            Self::set_chunk_size_to_free(page, new_chunk_offset, new_chunk_size);
             Self::set_next_free_chunk(page, new_chunk_offset, next_free_chunk);
             Self::set_prev_free_chunk(page, new_chunk_offset, prev_free_chunk);
             // update prev next pointer
@@ -859,7 +888,7 @@ impl Allocator {
                     // found a suitable chunk
                     let ptr = HeapChunk::alloc_chunk(&mut page, current_chunk, size)?;
                     storage.write(tnx_id, current_page, &page)?;
-                    break 'found Ok((current_page, HeapChunk::ptr_to_offset(ptr)))
+                    break 'found Ok((current_page, ptr))
                 }
                 // move to next chunk
                 current_chunk = HeapChunk::next_free_chunk(&page, current_chunk);
@@ -893,5 +922,157 @@ impl Allocator {
             self.del_heap_page(tnx_id, page_idx, storage)?;
         }
         Ok(())
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::Path;
+    use std::sync::Mutex;
+    use crate::db::storage_engine::wal::WAL;
+
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn setup_storage(db_path: &str) -> ConsistStorageEngine {
+        let wal_path = Path::new(crate::config::DB_DIR).join("wal.log");
+        if Path::new(db_path).exists() { fs::remove_file(db_path).unwrap(); }
+        
+        // Ensure data directory exists
+        if !Path::new(crate::config::DB_DIR).exists() {
+            fs::create_dir_all(crate::config::DB_DIR).unwrap();
+        }
+
+        let mut noop_append = |_| Ok(0u64);
+        let mut noop_max = |_| Ok(0u64);
+        let mut noop_write = |_, _, _| Ok(());
+        let mut noop_update = |_, _, _, _, _| Ok(());
+        WAL::recovery(&mut noop_write, &mut noop_update, &mut noop_append, &mut |_| Ok(()), &mut noop_max).unwrap();
+
+        ConsistStorageEngine::new(db_path, 1).unwrap()
+    }
+
+    fn cleanup(db_path: &str) {
+        if Path::new(db_path).exists() { fs::remove_file(db_path).unwrap(); }
+    }
+
+    #[test]
+    fn test_bitmap() {
+        let num_bits = 20;
+        let mut bytes = Bitmap::empty_bitmap(num_bits);
+        assert_eq!(bytes.len(), 3);
+        assert!(!Bitmap::is_full(&bytes, num_bits));
+        assert!(Bitmap::is_all_empty(&bytes, num_bits));
+
+        for i in 0..num_bits {
+            assert_eq!(Bitmap::find_empty_bit(&bytes, num_bits), Some(i));
+            Bitmap::set_bit_true(&mut bytes, i);
+        }
+        assert!(Bitmap::is_full(&bytes, num_bits));
+        assert!(!Bitmap::is_all_empty(&bytes, num_bits));
+        assert_eq!(Bitmap::find_empty_bit(&bytes, num_bits), None);
+
+        Bitmap::set_bit_false(&mut bytes, 5);
+        assert_eq!(Bitmap::find_empty_bit(&bytes, num_bits), Some(5));
+        assert!(!Bitmap::is_full(&bytes, num_bits));
+    }
+
+    #[test]
+    fn test_entry_alloc_free() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        let db_path = "./data/test_entry.db";
+        let mut storage = setup_storage(db_path);
+        let tnx_id = 1;
+
+        // Create page 0 for allocator metadata
+        storage.new_page(tnx_id).unwrap();
+
+        let mut allocator = Allocator::create(100, 0); // entry_size=100, begin_with=0 in page 0
+        
+        // alloc entries
+        let mut entries = Vec::new();
+        for _ in 0..10 {
+            let (page_idx, offset) = allocator.alloc_entry(tnx_id, &mut storage).unwrap();
+            entries.push((page_idx, offset));
+        }
+
+        // check uniqueness
+        let mut seen = std::collections::HashSet::new();
+        for e in &entries {
+            assert!(seen.insert(e.clone()));
+        }
+
+        // free entries
+        for (page_idx, offset) in entries {
+            allocator.free_entry(tnx_id, page_idx, offset, &mut storage).unwrap();
+        }
+
+        cleanup(db_path);
+    }
+
+    #[test]
+    fn test_heap_alloc_free() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        let db_path = "./data/test_heap.db";
+        let mut storage = setup_storage(db_path);
+        let tnx_id = 1;
+
+        storage.new_page(tnx_id).unwrap();
+        let mut allocator = Allocator::create(100, 0);
+
+        // alloc heap space
+        let (p1, o1) = allocator.alloc_heap(tnx_id, 500, &mut storage).unwrap();
+        let (p2, o2) = allocator.alloc_heap(tnx_id, 1000, &mut storage).unwrap();
+        
+        // write some data
+        let data1 = vec![1u8; 500];
+        storage.write_bytes(tnx_id, p1, o1 as usize, &data1).unwrap();
+
+        // free
+        allocator.free_heap(tnx_id, p1, o1, &mut storage).unwrap();
+        allocator.free_heap(tnx_id, p2, o2, &mut storage).unwrap();
+
+        cleanup(db_path);
+    }
+
+    #[test]
+    fn test_heap_merge() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        let db_path = "./data/test_merge.db";
+        let mut storage = setup_storage(db_path);
+        let tnx_id = 1;
+
+        storage.new_page(tnx_id).unwrap();
+        let mut allocator = Allocator::create(100, 0);
+
+        // alloc 3 contiguous chunks
+        let (p1, o1) = allocator.alloc_heap(tnx_id, 100, &mut storage).unwrap();
+        let (p2, o2) = allocator.alloc_heap(tnx_id, 100, &mut storage).unwrap();
+        let (p3, o3) = allocator.alloc_heap(tnx_id, 100, &mut storage).unwrap();
+
+        assert_eq!(p1, p2);
+        assert_eq!(p2, p3);
+
+        // free middle one
+        allocator.free_heap(tnx_id, p2, o2, &mut storage).unwrap();
+
+        // free first one (should merge with middle)
+        allocator.free_heap(tnx_id, p1, o1, &mut storage).unwrap();
+
+        // free last one (should merge with previous merged chunk)
+        allocator.free_heap(tnx_id, p3, o3, &mut storage).unwrap();
+        
+        // After all freed, the page should be deleted
+        // try to read page will failed
+        match storage.read(p1) {
+            Ok(p) => {
+                assert!(false, "Page data after all frees: {:?}", p.data);
+            },
+            Err(_) => {},
+        };
+
+        cleanup(db_path);
     }
 }

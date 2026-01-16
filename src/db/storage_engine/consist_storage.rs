@@ -37,7 +37,7 @@ impl ConsistStorageEngine {
             if *byte != old_page.data[i] {
                 start = Some(i);
                 break; // find the start of the first difference
-            }
+            };
         };
         let start = match start {
             Some(s) => s,
@@ -57,15 +57,14 @@ impl ConsistStorageEngine {
     }
     pub fn write_bytes(&mut self, tnx_id: u64, page_id: u64, offset: usize, data: &[u8]) -> RsqlResult<()> {
         // read old data for WAL
-        let old_page = self.storage_manager.read_page(page_id)?;
+        let mut old_page = self.storage_manager.read_page(page_id)?;
         let old_data = &old_page.data[offset..offset + data.len()];
         // write to WAL first
         self.wal.update_page(tnx_id, self.table_id, page_id, offset as u64, old_data, data)?;
         self.wal.flush()?;
         // then write to storage
-        let mut page = self.storage_manager.read_page(page_id)?;
-        page.data[offset..offset + data.len()].copy_from_slice(data);
-        self.storage_manager.write_page(&page, page_id)?;
+        old_page.data[offset..offset + data.len()].copy_from_slice(data);
+        self.storage_manager.write_page(&old_page, page_id)?;
         Ok(())
     }
     pub fn new_page(&mut self, tnx_id: u64) -> RsqlResult<(u64, Page)> {
