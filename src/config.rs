@@ -7,7 +7,7 @@ pub const WEB_PORT: u16 = 4456;
 pub const LOG_LEVEL: &str = "debug";
 pub const LOG_PATH: &str = "./logs/rsql.log";
 
-pub const THREAD_MAXNUM: u64 = 10;
+pub const THREAD_MAXNUM: usize = 10;
 
 pub const DB_DIR: &str = "./data";
 

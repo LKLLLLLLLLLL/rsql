@@ -1,11 +1,13 @@
 use rayon::ThreadPoolBuilder;
-// use crate::{config::THREAD_MAXNUM};
-use super::types::{HttpQueryRequest};
-use super::super::executor;
 use num_cpus;
 use tracing::{error};
-use crate::db::errors::{RsqlResult,RsqlError};
 use futures::channel::oneshot;
+
+use crate::{config::THREAD_MAXNUM};
+use crate::db::errors::{ RsqlResult};
+use super::types::{ RayonQueryRequest };
+use super::super::executor;
+
 pub struct WorkingThreadPool{
     thread_pool: rayon::ThreadPool,
     max_thread_num: usize,
@@ -13,20 +15,29 @@ pub struct WorkingThreadPool{
 
 impl WorkingThreadPool{
     pub fn new() -> Self{
-        let detected = num_cpus::get();
+        if THREAD_MAXNUM == 0 {
+            let detected = num_cpus::get();
+            return Self{
+                thread_pool: ThreadPoolBuilder::new()
+                   .num_threads(detected)
+                   .build()
+                   .unwrap(),
+                max_thread_num: detected,
+            }
+        }
         Self{
             thread_pool: ThreadPoolBuilder::new()
-                .num_threads(detected)
+                .num_threads(THREAD_MAXNUM)
                 .build()
                 .unwrap(),
-            max_thread_num: detected,
+            max_thread_num: THREAD_MAXNUM,
         }
     }
 
-    pub async fn parse_and_execute_query(&self, query: HttpQueryRequest) -> RsqlResult<String> {
+    pub async fn parse_and_execute_query(&self, query: RayonQueryRequest, connection_id: u64) -> RsqlResult<String> {
         let (sender, receiver) = oneshot::channel::<RsqlResult<String>>();
         self.thread_pool.spawn(move ||{
-            if let Err(err) = executor::execute(&query.request_content){
+            if let Err(err) = executor::execute(&query.request_content,connection_id){
                 error!("execute query failed: {:?}", err);
             };
             let result = Ok(query.request_content);
@@ -38,6 +49,27 @@ impl WorkingThreadPool{
             Err(e) => Err(e)
         }
     }
+
+    pub async fn rollback(&self, connection_id: u64) -> RsqlResult<String> {
+        self.thread_pool.spawn(move ||{
+
+        });
+        let result = format!("rollbacking transaction for connection id: {}", connection_id);
+        Ok(result)
+    }
+
+    pub fn rollback_sync(&self, connection_id: u64) -> RsqlResult<String> {
+        let result = format!("rollbacking transaction (sync) for connection id: {}", connection_id);
+        self.thread_pool.spawn(move ||{
+
+        });
+        // match result {
+        //     Ok(result)=> Ok(result),
+        //     Err(e)=> Err(e)
+        // }
+        Ok(result)
+    }
+
     pub fn show_info(&self){
         println!("max thread num: {}", self.max_thread_num);
         println!("thread pool:{:?}",self.thread_pool)
