@@ -21,7 +21,7 @@ use sqlparser::parser::Parser;
 
 // Internal modules
 use crate::db::sql_parser::utils::is_aggregate_expr;
-use crate::db::errors::{RsqlResult, RsqlError};
+use crate::db::common::{RsqlResult, RsqlError};
 
 // Represents the state of a transaction.
 #[derive(Debug)]

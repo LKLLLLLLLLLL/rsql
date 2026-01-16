@@ -4,11 +4,11 @@ use std::collections::{HashMap, HashSet};
 
 use super::storage::Page;
 use crate::config;
-use crate::db::errors::{RsqlError, RsqlResult};
+use crate::db::common::{RsqlError, RsqlResult};
 use crate::db::data_item::{DataItem, VarCharHead};
 use super::btree_index;
 use super::consist_storage::ConsistStorageEngine;
-use crate::db::table_schema::{ColType, TableSchema};
+use crate::db::table_schema::TableSchema;
 
 use super::allocator::Allocator;
 
@@ -92,7 +92,7 @@ impl Table {
         let new_head = VarCharHead {
             max_len: head.max_len,
             len: heap_len,
-            page_ptr: pack_ptr(heap_page_idx, heap_offset),
+            page_ptr: Some(pack_ptr(heap_page_idx, heap_offset)),
         };
         Ok(DataItem::VarChar { head: new_head, value })
     }
@@ -105,7 +105,10 @@ impl Table {
         if value.len() != 0 {
             panic!("load_varchar called with non-empty value");
         }
-        let (heap_page_idx, heap_offset) = unpack_ptr(varchar_head.page_ptr);
+        if let None = varchar_head.page_ptr {
+            return Err(RsqlError::StorageError("Cannot load varchar with empty pointer".to_string()));
+        };
+        let (heap_page_idx, heap_offset) = unpack_ptr(varchar_head.page_ptr.unwrap());
         let heap_data = self.storage.read_bytes(heap_page_idx, heap_offset as usize, varchar_head.len as usize)?;
         Ok(DataItem::VarChar {
             head: varchar_head.clone(),
@@ -118,7 +121,10 @@ impl Table {
         let DataItem::VarChar { head: varchar_head, value } = varchar_head else {
             panic!("load_varchar called with non-varchar data item");
         };
-        let (heap_page_idx, heap_offset) = unpack_ptr(varchar_head.page_ptr);
+        if let None = varchar_head.page_ptr {
+            return Err(RsqlError::StorageError("Cannot delete varchar with empty pointer".to_string()));
+        };
+        let (heap_page_idx, heap_offset) = unpack_ptr(varchar_head.page_ptr.unwrap());
         // free heap
         self.allocator.free_heap(tnx_id, heap_page_idx, heap_offset, &mut self.storage)?;
         Ok(())
@@ -543,7 +549,7 @@ mod tests {
         let dummy_row = vec![
             DataItem::Integer(999),
             DataItem::VarChar {
-                head: VarCharHead { max_len: 64, len: 5, page_ptr: 0 }, 
+                head: VarCharHead { max_len: 64, len: 5, page_ptr: Some(0) }, 
                 value: "dummy".to_string(),
             },
         ];
@@ -553,7 +559,7 @@ mod tests {
         let row1 = vec![
             DataItem::Integer(1),
             DataItem::VarChar {
-                head: VarCharHead { max_len: 64, len: 11, page_ptr: 0 }, 
+                head: VarCharHead { max_len: 64, len: 11, page_ptr: Some(0) }, 
                 value: "Hello World".to_string(),
             },
         ];
@@ -574,7 +580,7 @@ mod tests {
         let row1_updated = vec![
             DataItem::Integer(1),
             DataItem::VarChar {
-                head: VarCharHead { max_len: 64, len: 3, page_ptr: 0 },
+                head: VarCharHead { max_len: 64, len: 3, page_ptr: Some(0) },
                 value: "Bye".to_string(),
             },
         ];

@@ -1,6 +1,6 @@
-use super::errors::{RsqlError, RsqlResult};
+use super::common::{RsqlError, RsqlResult};
 use super::data_item::DataItem;
-use super::super::config::MAX_VARCHAR_SIZE;
+use super::super::config::{MAX_VARCHAR_SIZE, MAX_COL_NAME_SIZE};
 
 #[derive(Clone)]
 pub enum ColType {
@@ -13,7 +13,7 @@ pub enum ColType {
 
 #[derive(Clone)]
 pub struct TableColumn {
-    pub name: String, // fix 64 bytes
+    pub name: String, // fix to MAX_COL_NAME_SIZE bytes
     pub data_type: ColType,
     pub pk: bool,
     pub nullable: bool,
@@ -28,7 +28,7 @@ pub struct TableSchema {
 
 impl TableSchema {
     /// Bytes structure in disk:
-    /// [schema_length: 8bytes][col1_name: 64bytes][col1_type: 1byte][col1_extra: 8bytes][col1_pk:1byte][col1_nullable:1byte][col1_unique:1byte][col1_index:1byte]...
+    /// [schema_length: 8bytes][col1_name: MAX_COL_NAME_SIZE bytes][col1_type: 1byte][col1_extra: 8bytes][col1_pk:1byte][col1_nullable:1byte][col1_unique:1byte][col1_index:1byte]...
     /// each column takes 76bytes
     fn from_bytes(bytes: &[u8]) -> RsqlResult<(Self, u64)> {
         let mut offset = 0;
@@ -37,10 +37,10 @@ impl TableSchema {
         offset += 8;
         let mut columns = vec![];
         while offset + 76 <= schema_length as usize {
-            let name_bytes = &bytes[offset..offset+64];
+            let name_bytes = &bytes[offset..offset+MAX_COL_NAME_SIZE];
             let name = String::from_utf8(name_bytes.iter().cloned().take_while(|&b| b != 0).collect())
                 .map_err(|_| RsqlError::StorageError("Invalid column name".to_string()))?;
-            offset += 64;
+            offset += MAX_COL_NAME_SIZE;
             let col_type_byte = bytes[offset];
             offset += 1;
             let extra_bytes = &bytes[offset..offset+8];
@@ -76,10 +76,10 @@ impl TableSchema {
     fn to_bytes(&self) -> Vec<u8> {
         let mut buf = vec![0u8; 8];
         for col in &self.columns {
-            if col.name.len() > 64 {
-                panic!("Column name too long");
+            if col.name.len() > MAX_COL_NAME_SIZE {
+                panic!("Column name {} exceeds max length {}", col.name, MAX_COL_NAME_SIZE);
             }
-            let mut name_bytes = [0u8; 64];
+            let mut name_bytes = [0u8; MAX_COL_NAME_SIZE];
             name_bytes[..col.name.len()].copy_from_slice(col.name.as_bytes());
             buf.extend_from_slice(&name_bytes);
             match col.data_type {

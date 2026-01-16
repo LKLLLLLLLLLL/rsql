@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::db::errors::RsqlResult;
+use crate::db::common::RsqlResult;
 
 use super::storage::{StorageManager, Page};
 use super::wal::WAL;

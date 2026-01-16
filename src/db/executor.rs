@@ -1,4 +1,4 @@
-use super::errors::RsqlResult;
+use super::common::RsqlResult;
 use std::thread;
 use tracing::info;
 

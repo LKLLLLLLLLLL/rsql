@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, OnceLock, atomic::{AtomicU64, Ordering}};
 use tracing::{warn, info};
 
 use crate::config::{DB_DIR, MAX_WAL_SIZE};
-use crate::db::errors::{RsqlError, RsqlResult};
+use crate::db::common::{RsqlError, RsqlResult};
 
 use super::wal_entry::WALEntry;
 

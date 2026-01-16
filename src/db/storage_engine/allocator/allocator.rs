@@ -1,7 +1,7 @@
 use super::super::storage;
 use super::heap_utils::{HeapChunk, HeapPage};
 use super::entry_utils::{Bitmap, EntryPage};
-use crate::db::errors::RsqlResult;
+use crate::db::common::RsqlResult;
 use crate::db::storage_engine::consist_storage::ConsistStorageEngine;
 
 

@@ -1,5 +1,5 @@
 use crate::config::{PAGE_SIZE_BYTES, MAX_PAGE_CACHE_BYTES};
-use crate::db::errors::{RsqlError, RsqlResult};
+use crate::db::common::{RsqlError, RsqlResult};
 use super::cache::LRUCache;
 use std::sync::{RwLock, Mutex, Arc, OnceLock};
 use std::fs::{self, OpenOptions, File};

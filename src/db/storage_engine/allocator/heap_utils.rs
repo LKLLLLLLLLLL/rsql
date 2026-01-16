@@ -1,5 +1,5 @@
 use super::super::storage;
-use crate::db::errors::RsqlResult;
+use crate::db::common::RsqlResult;
 
 const MAGIC_NUMBER: u32 = 0x4c515352; // 'RSQL' in little endian hex
 
