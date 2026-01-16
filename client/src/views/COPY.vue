@@ -7,21 +7,25 @@
         </div>
         <div class="tables-buttons">
             <div class="tables-btn create">
+            <Icon :path="mdiTablePlus" size="18" />
             <span>Create New Table</span>
             </div>
             <div class="tables-btn rename">
+            <Icon :path="mdiTableEdit" size="18" />
             <span>Rename Table</span>
             </div>
             <div class="tables-btn drop">
+            <Icon :path="mdiTableRemove" size="18" />
             <span>Drop Table</span>
             </div>
             <div class="tables-btn terminal">
+            <Icon :path="mdiConsoleLine" size="18" />
             <span>Open Terminal</span>
             </div>
         </div>
 
         <div class="tables-list">
-            <h3>Table List</h3>
+            <h3> Table List</h3>
         </div>
 
         <div class="sidebar-footer">
@@ -37,21 +41,26 @@
             <h1>Current Table: <span>{{ currentTableName }}</span></h1>
 
             <div class="action-buttons">
-            <button class="action-btn insert">
-                <span>Insert</span>
-            </button>
-            <button class="action-btn delete">
-                <span>Delete</span>
-            </button>
-            <button class="action-btn update">
-                <span>Update</span>
-            </button>
-            <button class="action-btn query">
-                <span>Query</span>
-            </button>
-            <button class="action-btn export">
-                <span>Export</span>
-            </button>
+                <button class="action-btn insert">
+                    <Icon :path="mdiPlus" size="18" />
+                    <span>Insert</span>
+                </button>
+                <button class="action-btn delete">
+                    <Icon :path="mdiDelete" size="18" />
+                    <span>Delete</span>
+                </button>
+                <button class="action-btn update">
+                    <Icon :path="mdiPencil" size="18" />
+                    <span>Update</span>
+                </button>
+                <button class="action-btn query">
+                    <Icon :path="mdiMagnify" size="18" />
+                    <span>Query</span>
+                </button>
+                <button class="action-btn export">
+                    <Icon :path="mdiDownload" size="18" />
+                    <span>Export</span>
+                </button>
             </div>
         </div>
 
@@ -82,7 +91,7 @@
 
             <div class="create-operation">
                 <div class="operation-panel">
-                    <h4>创建新表</h4>
+                    <h4><Icon :path="mdiTablePlus" size="18" /> 创建新表</h4>
 
                     <div class="form-row">
                     <label for="create-table-name">表名</label>
@@ -92,12 +101,16 @@
                     <div class="columns-section">
                     <div class="columns-header">
                         <h4>列定义</h4>
-                        <button type="button" class="add-column-btn" id="add-column-btn">添加列</button>
+                        <button type="button" class="add-column-btn" id="add-column-btn">
+                            添加列
+                        </button>
                     </div>
                     <div class="columns-list" id="columns-container"></div>
                     </div>
 
-                    <button type="button" class="submit-create-btn" id="submit-create-btn">提交创建表</button>
+                    <button type="button" class="submit-create-btn" id="submit-create-btn">
+                        提交创建表
+                    </button>
                 </div>
             </div>
 
@@ -290,9 +303,45 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
+import { computed, onMounted, onBeforeUnmount, ref, defineComponent, h } from 'vue'
 import VirtualList from './List.vue'
 import Toast from '../components/Toast.vue'
+import {
+    mdiConsoleLine,
+    mdiDelete,
+    mdiDownload,
+    mdiMagnify,
+    mdiPencil,
+    mdiPlus,
+    mdiTableEdit,
+    mdiTablePlus,
+    mdiTableRemove,
+    mdiTable,
+    mdiTableColumnPlusAfter,
+    mdiCheckCircleOutline,
+} from '@mdi/js'
+
+const Icon = defineComponent({
+    name: 'Icon',
+    props: {
+        path: { type: String, required: true },
+        size: { type: [Number, String], default: 18 },
+    },
+    setup(props) {
+        return () =>
+            h(
+                'svg',
+                {
+                    class: 'icon',
+                    width: props.size,
+                    height: props.size,
+                    viewBox: '0 0 24 24',
+                    'aria-hidden': 'true',
+                },
+                [h('path', { d: props.path, fill: 'currentColor' })],
+            )
+    },
+})
 
 const viewHeaders = ref([])
 const viewRows = ref([])
@@ -2075,6 +2124,15 @@ tbody tr:hover {
 .operation-panel h4 {
     font-size: 1.2rem;
     color: #2c3e50;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.icon {
+    vertical-align: middle;
+    display: inline-block;
+    transform: translateY(0px);
 }
 
 .form-row {
