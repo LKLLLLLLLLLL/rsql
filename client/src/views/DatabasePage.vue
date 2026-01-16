@@ -1502,6 +1502,9 @@ onMounted(() => {
 
     document.querySelectorAll('.tables-btn').forEach((button) => {
         button.addEventListener('click', function () {
+        // 仅允许一个按钮为激活态（红色）
+        document.querySelectorAll('.tables-btn').forEach((el) => el.classList.remove('active'))
+        this.classList.add('active')
         const action = this.classList.contains('create') ? 'Create' : 
             this.classList.contains('drop') ? 'Drop' : 
             this.classList.contains('rename') ? 'Rename' : 
@@ -1600,26 +1603,15 @@ body {
 
 .tables-btn.create,
 .tables-btn.drop,
-.tables-btn.rename {
-    background-color: #3c8dc3;
+.tables-btn.rename,
+.tables-btn.terminal {
+    background-color: #3c8dc3; /* 默认蓝色 */
     color: white;
 }
 
-.tables-btn.terminal {
-    border-bottom: 1px solid #34495e;
-    user-select: none;
-    padding: 15px 20px;
-    cursor: pointer;
-    border-bottom: 1px solid #34495e;
-    font-weight: 600;
-    transition: all 0.2s ease;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    background-color: #f08080
-}
-.tables-btn.terminal:hover {
-    border-left: 4px solid #2c3e50;
+.tables-btn.active {
+    background-color: #f08080; /* 激活红色 */
+    color: white;
 }
 
 .terminal-panel {
