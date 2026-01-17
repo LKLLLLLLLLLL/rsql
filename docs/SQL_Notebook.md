@@ -1,65 +1,63 @@
-# SQL Language Implementation Functions
+# SQL Feature Support Notebook
 
-## 1. Transaction Support
+## 1. Transaction
 
-### Supported
-- Explicit transactions:
-- BEGIN
-- COMMIT
-- ROLLBACK
-- Implicit transactions (statements without BEGIN)
+Supported:
+- `BEGIN`
+- `COMMIT`
+- `ROLLBACK`
 
-### Semantics
-- A transaction starts at BEGIN and must end with either COMMIT or ROLLBACK.
-- Statements outside explicit transactions are grouped into implicit transactions.
-
-### Errors
--	Nested transactions are not supported.
-- Explicit transactions must be closed.
-
-## 2. Data Definition Language (DDL)
-
-### a) CREATE TABLE
-
-The `CREATE TABLE` statement defines the schema of a table, including:
-
-- Table name
-- Column names
-- Data types
-- Constraints
-
-#### Supported Data Types and Implementation
-
-- INT (Integer)
-- CHAR(n) (Fixed-length Character)
-- VARCHAR(n) (Variable-length Character)
-- FLOAT
-- BOOLEAN
-- NULL 
-
-#### Constraints
-
-- **PRIMARY KEY:** Recorded in table metadata; enforced by uniqueness checks during insertion and update.  
-- **NOT NULL:** Prevents insertion or update of `NULL` values.  
-- **UNIQUE (optional):** Ensures column values are not duplicated.
-
-Unsupported or unrecognized constraints will result in a `ParserError`.
-
-### b) ALTER TABLE
-
-- **ADD column:** Appends a new column definition to metadata; existing records are filled with default values or `NULL`.  
-- **DROP column:** Marks the column as invalid in metadata; physical data removal may be deferred (logical deletion).  
-- **MODIFY / RENAME column:** Renaming affects metadata only; type modification may require rewriting table data.
-
-### c) DROP TABLE
-
-- Optional `IF EXISTS` is supported
+Limitations:
+- No nested transactions
 
 ---
 
-## 3. Data Manipulation Language (DML)
+## 2. DDL
 
-### a) INSERT INTO
+### 2.1 CREATE
+
+Supported:
+- `CREATE TABLE`
+- Column definitions (`ColumnDef`)
+- Column constraints:
+  - `PRIMARY KEY`
+  - `NOT NULL`
+  - `UNIQUE`
+- `CREATE INDEX`
+- `CREATE UNIQUE INDEX`
+
+Unsupported:
+- None
+
+---
+
+### 2.2 ALTER TABLE
+
+Supported:
+- `RENAME TABLE`
+
+Unsupported:
+- `ADD COLUMN`
+- `DROP COLUMN`
+- `ALTER COLUMN TYPE`
+
+---
+
+### 2.3 DROP
+
+Supported:
+- `DROP TABLE`
+- `DROP TABLE IF EXISTS`
+
+---
+
+## 3. DML
+
+### 3.1 INSERT
+
+Supported:
+- `INSERT VALUES`
+- `INSERT SELECT`
 
 | SQL Type | DataItem Variant | Storage Method |
 |----------|----------------|----------------|
@@ -70,44 +68,34 @@ Unsupported or unrecognized constraints will result in a `ParserError`.
 | BOOLEAN  | Bool(bool)     | Fixed size     |
 | NULL     | Null           | Marker only    |
 
-### b) DELETE FROM
+---
 
-- Records are identified using the `WHERE` clause.  
+### 3.2 DELETE
 
-### c) UPDATE
-
-- Target records are located using the `WHERE` clause.  
-
-### d) SELECT
-
-#### i. Supported sources:
-- Base tables
--	Subqueries (derived tables)
-
-#### ii. Supported join types:
--	INNER JOIN
--	LEFT JOIN
--	RIGHT JOIN
--	FULL JOIN
--	CROSS JOIN
-
-Join conditions are supported via ON expressions only.
-
-#### iii. Supported Functions
--   "COUNT"
--   "SUM"
--   "AVG"
--   "MIN"
--   "MAX"
-
-#### iv.Unsupported:
--	NATURAL JOIN
--	USING clause
--   EXISTS
+Supported:
+- `DELETE`
+- `DELETE WHERE`
 
 ---
 
-## 4. Operations and Expressions
+### 3.3 UPDATE
+
+Supported:
+- `UPDATE`
+- `UPDATE WHERE`
+
+---
+
+## 4. SELECT (Single Table)
+
+Supported:
+- `SELECT *`
+- Projection (`SELECT col1, col2`)
+- `WHERE`
+
+---
+
+### 4.1 WHERE Conditions
 
 ### a) Comparison Operators
 
@@ -143,4 +131,63 @@ Logical operators are used in boolean expressions:
 | `OR`     | Logical OR         | Short-circuit evaluation |
 | `NOT`    | Logical NOT        | Unary operator |
 
-- e.g., `age > 18 AND salary < 10000`.
+Unsupported:
+- `LIKE`
+- `ILIKE`
+
+---
+
+### 4.2 GROUP BY & Aggregate
+
+Supported:
+- `GROUP BY`
+- `COUNT`
+- `SUM`
+- `AVG`
+- `MIN`
+- `MAX`
+
+---
+
+## 5. JOIN (Multi-Table)
+
+Supported:
+- `INNER JOIN`
+- `LEFT JOIN`
+- `RIGHT JOIN`
+- `FULL JOIN`
+- `CROSS JOIN`
+- `FROM A, B`
+
+Unsupported:
+- `NATURAL JOIN`
+
+---
+
+## 6. Subquery
+
+Supported:
+- Scalar subquery
+
+Unsupported:
+- `IN`
+- `NOT IN`
+- `EXISTS`
+---
+
+## 7. DCL
+
+Supported:
+- `CREATE USER`
+- `DROP USER`
+
+Unsupported:
+- `GRANT`
+- `REVOKE`
+
+---
+
+## 8. Notes
+
+- Unsupported features are rejected during logical plan construction.
+- All supported features are mapped to explicit logical plan nodes.

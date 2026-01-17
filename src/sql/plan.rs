@@ -45,7 +45,7 @@ pub enum ApplyType {
 pub type AlterTableOperation = AstAlterTableOperation;
 
 /// Represents a logical query plan.
-/// Each variant corresponds to a relational algebra operation or DDL/DML operation.
+/// Each variant corresponds to a relational algebra operation or DDL/DML/DCL operation.
 #[derive(Debug)]
 pub enum PlanNode {
     /// Scans a table for all rows.
@@ -126,11 +126,22 @@ pub enum PlanNode {
         input: Box<PlanNode>,
         assignments: Vec<(String, Expr)>,
     },
+    /// Creates a new user.
+    CreateUser {
+        user_name: String,
+    },
+    /// Drops a user.
+    DropUser {
+        user_name: String,
+        if_exists: bool,
+    },
 }
 
 #[derive(Debug)]
 pub enum PlanItem {
-    Statement(PlanNode),
+    DDL(PlanNode),
+    DML(PlanNode),
+    DCL(PlanNode),
     Begin,
     Commit,
     Rollback,
@@ -146,6 +157,52 @@ impl Plan {
     /// Flattens all statements into Plan.items, including transaction boundaries.
     pub fn build_plan(sql: &str) -> RsqlResult<Plan> {
         use sqlparser::ast::Statement::*;
+        let mut items = Vec::new();
+
+        // Check for DCL CREATE USER or DROP USER before parsing
+        let sql_trimmed = sql.trim_start();
+        let lower = sql_trimmed.to_ascii_lowercase();
+        // Only handle single statement for DCL shortcut
+        if lower.starts_with("create user") {
+            // Parse: CREATE USER <user_name>[;]
+            // Accepts: "CREATE USER alice;" or "CREATE USER alice"
+            // Extract user_name
+            let mut rest: &str = &sql_trimmed[("create user".len())..].trim_start();
+            // Ensure rest is &str, not &&str
+            let user_name = rest
+                .split(|c: char| c == ';' || c.is_whitespace())
+                .next()
+                .unwrap_or("")
+                .trim_matches(|c: char| c == ';' || c.is_whitespace())
+                .to_string();
+            if user_name.is_empty() {
+                return Err(RsqlError::ParserError("CREATE USER missing user name".to_string()));
+            }
+            items.push(PlanItem::DCL(PlanNode::CreateUser { user_name }));
+            return Ok(Plan { items });
+        } else if lower.starts_with("drop user") {
+            // Parse: DROP USER [IF EXISTS] <user_name>[;]
+            let mut rest: &str = &sql_trimmed[("drop user".len())..].trim_start();
+            let mut if_exists = false;
+            if rest.to_ascii_lowercase().starts_with("if exists") {
+                if_exists = true;
+                rest = &rest["if exists".len()..].trim_start();
+            }
+            // Now rest is &str
+            let user_name = rest
+                .split(|c: char| c == ';' || c.is_whitespace())
+                .next()
+                .unwrap_or("")
+                .trim_matches(|c: char| c == ';' || c.is_whitespace())
+                .to_string();
+            if user_name.is_empty() {
+                return Err(RsqlError::ParserError("DROP USER missing user name".to_string()));
+            }
+            items.push(PlanItem::DCL(PlanNode::DropUser { user_name, if_exists }));
+            return Ok(Plan { items });
+        }
+
+        // Otherwise use sqlparser as normal
         let dialect = GenericDialect {};
         let ast = Parser::parse_sql(&dialect, sql)
             .map_err(|e| RsqlError::ParserError(format!("{e}")))?;
@@ -154,16 +211,39 @@ impl Plan {
             return Err(RsqlError::ParserError("Empty SQL".to_string()));
         }
 
-        let mut items = Vec::new();
-
         for stmt in ast.iter() {
+            use sqlparser::ast::Statement::*;
             match stmt {
                 StartTransaction { .. } => items.push(PlanItem::Begin),
                 Commit { .. } => items.push(PlanItem::Commit),
                 Rollback { .. } => items.push(PlanItem::Rollback),
+                // DDL
+                CreateTable { .. }
+                | Drop { object_type: ObjectType::Table, .. }
+                | AlterTable { .. }
+                | CreateIndex { .. } => {
+                    let node = Self::from_ast(stmt)?;
+                    items.push(PlanItem::DDL(node));
+                }
+                // DML
+                Insert { .. }
+                | Update { .. }
+                | Delete { .. }
+                | Query(_) => {
+                    let node = Self::from_ast(stmt)?;
+                    items.push(PlanItem::DML(node));
+                }
+                // DCL
+                CreateUser { .. }
+                | Drop { object_type: ObjectType::User, .. } => {
+                    let node = Self::from_ast(stmt)?;
+                    items.push(PlanItem::DCL(node));
+                }
+                // Fallback for anything else
                 _ => {
                     let node = Self::from_ast(stmt)?;
-                    items.push(PlanItem::Statement(node));
+                    // Default: treat as DML if not matched above
+                    items.push(PlanItem::DML(node));
                 }
             }
         }
@@ -387,12 +467,20 @@ impl Plan {
                 let plan = Self::build_query(query)?;
                 Ok((expr.clone(), Some((plan, ApplyType::Scalar))))
             }
-            Expr::InSubquery { subquery, negated, .. } => {
-                let plan = Self::build_query(subquery)?;
-                Ok((expr.clone(), Some((plan, if *negated { ApplyType::NotIn } else { ApplyType::In }))))
+            Expr::InSubquery { .. } => {
+                Err(RsqlError::ParserError(
+                    "IN / NOT IN subqueries are not supported".to_string(),
+                ))
             }
             Expr::Exists { .. } => {
-                Err(RsqlError::ParserError("EXISTS subquery is not supported".to_string()))
+                Err(RsqlError::ParserError(
+                    "EXISTS subquery is not supported".to_string(),
+                ))
+            }
+            Expr::Like { .. } | Expr::ILike { .. } => {
+                Err(RsqlError::ParserError(
+                    "LIKE / ILIKE expressions are not supported".to_string(),
+                ))
             }
             Expr::BinaryOp { left, op, right } => {
                 let (left_clean, left_sub) = Self::extract_subqueries_from_expr(left)?;
@@ -432,7 +520,7 @@ impl Plan {
         Ok((clean_exprs, sub))
     }
 
-    // ==================== DDL / INSERT / UPDATE / DELETE ====================
+    // ==================== DDL / INSERT / UPDATE / DELETE / DCL ====================
     fn from_ddl_ast(stmt: &Statement) -> RsqlResult<PlanNode> {
         match stmt {
             Statement::CreateTable(create) => {
@@ -493,7 +581,7 @@ impl Plan {
                     return Err(RsqlError::ParserError("Multiple ALTER TABLE operations not supported".to_string()));
                 }
                 let op = &alter.operations[0];
-                use sqlparser::ast::{AlterTableOperation, RenameTableNameKind};
+                use sqlparser::ast::AlterTableOperation;
                 match op {
                     AlterTableOperation::RenameTable { table_name: new_name } => {
                         // For RENAME TABLE, keep RenameTableNameKind::To(obj_name) as is
@@ -647,7 +735,20 @@ impl Plan {
                     assignments,
                 })
             }
-            _ => Err(RsqlError::ParserError("DDL not implemented yet".to_string())),
+            // --- DCL: CREATE USER, DROP USER ---
+            Statement::CreateUser(inner) => {
+                // Only support CREATE USER <user_name>
+                Ok(PlanNode::CreateUser {
+                    user_name: inner.name.to_string(),
+                })
+            }
+            Statement::Drop { object_type, names, if_exists, .. } if *object_type == ObjectType::User && names.len() == 1 => {
+                Ok(PlanNode::DropUser {
+                    user_name: names[0].to_string(),
+                    if_exists: *if_exists,
+                })
+            }
+            _ => Err(RsqlError::ParserError("DDL/DCL not implemented yet".to_string())),
         }
     }
 
@@ -797,6 +898,16 @@ impl Plan {
                 PlanNode::Delete { .. } => "Delete".to_string(),
                 PlanNode::Update { assignments, .. } => {
                     format!("Update [assigns={}]", assignments.len())
+                }
+                PlanNode::CreateUser { user_name } => {
+                    format!("CreateUser [{}]", user_name)
+                }
+                PlanNode::DropUser { user_name, if_exists } => {
+                    if *if_exists {
+                        format!("DropUser [{}] IF EXISTS", user_name)
+                    } else {
+                        format!("DropUser [{}]", user_name)
+                    }
                 }
             }
         }
@@ -1008,6 +1119,18 @@ impl Plan {
                         }
                     }
                 }
+                // ---- Add pretty print for CreateUser ----
+                PlanNode::CreateUser { user_name } => {
+                    let path = "(PlanNode::CreateUser.user_name)";
+                    println!("{}{} -> {}", prefix, path, user_name);
+                }
+                // ---- Add pretty print for DropUser ----
+                PlanNode::DropUser { user_name, if_exists } => {
+                    let path_user = "(PlanNode::DropUser.user_name)";
+                    println!("{}{} -> {}", prefix, path_user, user_name);
+                    let path_exists = "(PlanNode::DropUser.if_exists)";
+                    println!("{}{} -> {}", prefix, path_exists, if_exists);
+                }
                 _ => {}
             }
         }
@@ -1187,6 +1310,16 @@ impl Plan {
                 PlanNode::Update { assignments, .. } => {
                     format!("Update [assigns={}]", assignments.len())
                 }
+                PlanNode::CreateUser { user_name } => {
+                    format!("CreateUser [{}]", user_name)
+                }
+                PlanNode::DropUser { user_name, if_exists } => {
+                    if *if_exists {
+                        format!("DropUser [{}] IF EXISTS", user_name)
+                    } else {
+                        format!("DropUser [{}]", user_name)
+                    }
+                }
             }
         }
 
@@ -1208,7 +1341,6 @@ impl Plan {
         inner(plan, "", true);
     }
 }
-
 
 #[cfg(test)]
 mod tests {
