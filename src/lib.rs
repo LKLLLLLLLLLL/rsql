@@ -2,8 +2,9 @@ use tracing_subscriber::prelude::*;
 use std::fs;
 use std::path;
 use tracing::info;
-use db::server::server::start_server;
+use std::env;
 
+mod daemon;
 mod config;
 mod web_server;
 mod db;
@@ -38,11 +39,51 @@ pub fn init_log() {
 }
 
 pub fn run() {
+    let args: Vec<String> = env::args().collect();
+    
     init_log();
-    info!("rsql server is starting...");
-    info!("log file path: {}", config::LOG_PATH);
-    if let Err(e) = actix_web::rt::System::new().block_on(start_server()) {
-        tracing::error!("server failed: {:?}", e);
+    
+    if args.len() >= 2 {
+        match args[1].as_str() {
+            "web" => {
+                info!("RSQL Web Server starting...");
+                if let Err(e) = actix_web::rt::System::new().block_on(web_server::start_server()) {
+                    tracing::error!("Web Server starting failed: {:?}", e);
+                    std::process::exit(1);
+                }
+                info!("RSQL Web Server stopped.");
+                return;
+            }
+            "sql" => {
+                info!("RSQL SQL Server starting...");
+                if let Err(e) = actix_web::rt::System::new().block_on(db::server::server::start_server()) {
+                    tracing::error!("SQL Server starting failed: {:?}", e);
+                    std::process::exit(1);
+                }
+                info!("RSQL SQL Server stopped.");
+                return;
+            }
+            "daemon" => {
+                info!("RSQL Daemon starting...");
+                start_daemon_mode();
+                return;
+            }
+            _ => {
+                tracing::warn!("Unknown arguments '{}', daemon process will be started.", args[1]);
+            }
+        }
     }
-    info!("rsql server stopped.");
+    
+    info!("RSQL Daemon process starting...(default)");
+    start_daemon_mode();
+}
+
+fn start_daemon_mode() {
+    info!("log file path: {}", config::LOG_PATH);
+    
+    if let Err(e) = actix_web::rt::System::new().block_on(daemon::start()) {
+        tracing::error!("Daemon process starting failed: {:?}", e);
+        std::process::exit(1);
+    }
+    info!("RSQL Daemon process stopped.");
 }
