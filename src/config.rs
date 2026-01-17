@@ -23,3 +23,7 @@ pub const PAGE_SIZE_BYTES: usize = 4 * 1024; // 4 KB
 
 pub const DEFAULT_USERNAME: &str = "root";
 pub const DEFAULT_PASSWORD: &str = "password";
+
+pub const MONITOR_TERM: u64 = 30; // 30 seconds
+pub const MAX_RESTART_TIMES: u32 = 5;
+pub const MAX_RESTART_INTERVAL: u64 = 2; // 2 seconds
