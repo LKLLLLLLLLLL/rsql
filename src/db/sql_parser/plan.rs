@@ -23,19 +23,6 @@ use sqlparser::parser::Parser;
 use crate::db::sql_parser::utils::is_aggregate_expr;
 use crate::db::common::{RsqlResult, RsqlError};
 
-// Represents the state of a transaction.
-#[derive(Debug)]
-pub enum TnxState {
-    Commit,
-    Rollback,
-}
-
-#[derive(Debug)]
-pub struct Tnx {
-    pub stmts: Vec<PlanNode>,
-    pub commit_stat: TnxState,
-}
-
 /// Represents the type of join operation.
 #[derive(Debug, Clone, Copy)]
 pub enum JoinType {
@@ -114,6 +101,14 @@ pub enum PlanNode {
         table_name: String,
         if_exists: bool,
     },
+    /// Creates an index on a table.
+    /// Represents a CREATE INDEX statement.
+    CreateIndex {
+        index_name: String,
+        table_name: String,
+        columns: Vec<String>,
+        unique: bool,
+    },
     /// Inserts data into a table.
     /// If `input` is Some, it represents an INSERT ... SELECT subquery plan.
     Insert {
@@ -133,114 +128,47 @@ pub enum PlanNode {
     },
 }
 
-/// SQL -> LogicalPlan(IR)
+#[derive(Debug)]
+pub enum PlanItem {
+    Statement(PlanNode),
+    Begin,
+    Commit,
+    Rollback,
+}
+
 #[derive(Debug)]
 pub struct Plan {
-    pub tnxs: Vec<Tnx>,
+    pub items: Vec<PlanItem>,
 }
 
 impl Plan {
     /// Builds a logical plan from a SQL string.
-    /// Handles multi-statement SQL and transaction boundaries.
+    /// Flattens all statements into Plan.items, including transaction boundaries.
     pub fn build_plan(sql: &str) -> RsqlResult<Plan> {
         use sqlparser::ast::Statement::*;
         let dialect = GenericDialect {};
         let ast = Parser::parse_sql(&dialect, sql)
             .map_err(|e| RsqlError::ParserError(format!("{e}")))?;
+
         if ast.is_empty() {
             return Err(RsqlError::ParserError("Empty SQL".to_string()));
         }
 
-        let mut tnxs: Vec<Tnx> = Vec::new();
-        let mut curr_stmts: Vec<PlanNode> = Vec::new();
-        let mut in_explicit_tnx = false;
-        let mut curr_commit_stat = TnxState::Commit;
-        let mut has_explicit_tnx = false;
+        let mut items = Vec::new();
 
         for stmt in ast.iter() {
             match stmt {
-                StartTransaction { .. } => {
-                    // Start a new transaction
-                    if in_explicit_tnx {
-                        return Err(RsqlError::ParserError(
-                            "Nested BEGIN detected, a transaction is already open".to_string()
-                        ));
-                    }
-                    in_explicit_tnx = true;
-                    has_explicit_tnx = true;
-                    curr_stmts.clear();
-                    curr_commit_stat = TnxState::Commit;
-                }
-                Commit { .. } => {
-                    if in_explicit_tnx {
-                        tnxs.push(Tnx {
-                            stmts: std::mem::take(&mut curr_stmts),
-                            commit_stat: TnxState::Commit,
-                        });
-                        in_explicit_tnx = false;
-                        curr_commit_stat = TnxState::Commit;
-                    } else {
-                        // COMMIT without BEGIN: treat as single transaction
-                        tnxs.push(Tnx {
-                            stmts: std::mem::take(&mut curr_stmts),
-                            commit_stat: TnxState::Commit,
-                        });
-                        curr_commit_stat = TnxState::Commit;
-                    }
-                }
-                Rollback { .. } => {
-                    if in_explicit_tnx {
-                        tnxs.push(Tnx {
-                            stmts: std::mem::take(&mut curr_stmts),
-                            commit_stat: TnxState::Rollback,
-                        });
-                        in_explicit_tnx = false;
-                        curr_commit_stat = TnxState::Commit;
-                    } else {
-                        // ROLLBACK without BEGIN: treat as single transaction
-                        tnxs.push(Tnx {
-                            stmts: std::mem::take(&mut curr_stmts),
-                            commit_stat: TnxState::Rollback,
-                        });
-                        curr_commit_stat = TnxState::Commit;
-                    }
-                }
+                StartTransaction { .. } => items.push(PlanItem::Begin),
+                Commit { .. } => items.push(PlanItem::Commit),
+                Rollback { .. } => items.push(PlanItem::Rollback),
                 _ => {
-                    // Normal SQL statement
-                    let plan_node = Self::from_ast(stmt)?;
-                    curr_stmts.push(plan_node);
+                    let node = Self::from_ast(stmt)?;
+                    items.push(PlanItem::Statement(node));
                 }
             }
         }
 
-        // If any statements remain, wrap them as a transaction.
-        if in_explicit_tnx {
-            return Err(RsqlError::ParserError(
-                "Explicit transaction not closed, missing COMMIT or ROLLBACK".to_string()
-            ));
-        }
-
-        if !curr_stmts.is_empty() {
-            tnxs.push(Tnx {
-                stmts: std::mem::take(&mut curr_stmts),
-                commit_stat: curr_commit_stat,
-            });
-        }
-
-        // If there were no explicit transactions, but statements exist and no tnxs added, wrap all as one tnx.
-        if tnxs.is_empty() && !curr_stmts.is_empty() {
-            tnxs.push(Tnx {
-                stmts: std::mem::take(&mut curr_stmts),
-                commit_stat: TnxState::Commit,
-            });
-        }
-
-        // If there were no explicit transactions (no BEGIN/COMMIT/ROLLBACK), but statements exist, wrap all as a default transaction.
-        if !has_explicit_tnx && !tnxs.is_empty() {
-            // Already handled by above, do nothing.
-        }
-
-        Ok(Plan { tnxs })
+        Ok(Plan { items })
     }
 
     /// AST -> LogicalPlan
@@ -252,7 +180,8 @@ impl Plan {
             | Statement::Delete { .. }
             | Statement::CreateTable { .. }
             | Statement::Drop { .. }
-            | Statement::AlterTable { .. } => Self::from_ddl_ast(stmt),
+            | Statement::AlterTable { .. }
+            | Statement::CreateIndex { .. } => Self::from_ddl_ast(stmt),
             // Transaction statements are handled in build_plan, so treat as error here.
             Statement::StartTransaction { .. }
             | Statement::Commit { .. }
@@ -506,19 +435,107 @@ impl Plan {
     // ==================== DDL / INSERT / UPDATE / DELETE ====================
     fn from_ddl_ast(stmt: &Statement) -> RsqlResult<PlanNode> {
         match stmt {
-            Statement::CreateTable(create) => Ok(PlanNode::CreateTable {
-                table_name: create.name.to_string(),
-                columns: create.columns.clone(),
-            }),
+            Statement::CreateTable(create) => {
+                // ========== Validation logic ==========
+                use sqlparser::ast::{ColumnOption, DataType};
+                for col in &create.columns {
+                    let mut has_primary = false;
+                    let mut has_unique = false;
+                    let mut has_not_null = false;
+                    let mut has_null = false;
+                    for opt in &col.options {
+                        match &opt.option {
+                            ColumnOption::PrimaryKey(_) => {
+                                has_primary = true;
+                            }
+                            ColumnOption::Unique(_) => {
+                                has_unique = true;
+                            }
+                            ColumnOption::NotNull => {
+                                has_not_null = true;
+                            }
+                            ColumnOption::Null => {
+                                has_null = true;
+                            }
+                            _ => {}
+                        }
+                    }
+                    // Only when both PRIMARY KEY and NULL are specified, it's an error.
+                    if has_primary && has_null {
+                        return Err(RsqlError::ParserError(format!(
+                            "Column `{}` cannot be both PRIMARY KEY and NULL",
+                            col.name
+                        )));
+                    }
+                    // 2. VARCHAR-like columns cannot be PRIMARY KEY or UNIQUE.
+                    match &col.data_type {
+                        DataType::Varchar(_)
+                        | DataType::Char(_)
+                        | DataType::Character(_)
+                        | DataType::CharacterVarying(_) => {
+                            if has_primary || has_unique {
+                                return Err(RsqlError::ParserError(format!(
+                                    "VARCHAR column `{}` cannot be PRIMARY KEY or UNIQUE",
+                                    col.name
+                                )));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                Ok(PlanNode::CreateTable {
+                    table_name: create.name.to_string(),
+                    columns: create.columns.clone(),
+                })
+            },
             Statement::AlterTable(alter) => {
-                if alter.operations.len() == 1 {
-                    Ok(PlanNode::AlterTable { table_name: alter.name.to_string(), operation: alter.operations[0].clone() })
-                } else { Err(RsqlError::ParserError("Multiple ALTER TABLE operations not supported".to_string())) }
+                if alter.operations.len() != 1 {
+                    return Err(RsqlError::ParserError("Multiple ALTER TABLE operations not supported".to_string()));
+                }
+                let op = &alter.operations[0];
+                use sqlparser::ast::{AlterTableOperation, RenameTableNameKind};
+                match op {
+                    AlterTableOperation::RenameTable { table_name: new_name } => {
+                        // For RENAME TABLE, keep RenameTableNameKind::To(obj_name) as is
+                        Ok(PlanNode::AlterTable {
+                            table_name: alter.name.to_string(),
+                            operation: AlterTableOperation::RenameTable {
+                                table_name: new_name.clone(),
+                            },
+                        })
+                    }
+                    AlterTableOperation::AddColumn { .. } => {
+                        Err(RsqlError::ParserError("ALTER TABLE ADD COLUMN is not supported".to_string()))
+                    }
+                    AlterTableOperation::DropColumn { .. } => {
+                        Err(RsqlError::ParserError("ALTER TABLE DROP COLUMN is not supported".to_string()))
+                    }
+                    AlterTableOperation::RenameColumn { .. } => {
+                        Err(RsqlError::ParserError("ALTER TABLE RENAME COLUMN is not supported".to_string()))
+                    }
+                    AlterTableOperation::AlterColumn { op: sqlparser::ast::AlterColumnOperation::SetDataType { .. }, .. } => {
+                        Err(RsqlError::ParserError("ALTER TABLE ALTER COLUMN TYPE is not supported".to_string()))
+                    }
+                    _ => Err(RsqlError::ParserError("ALTER TABLE operation is not supported".to_string())),
+                }
             }
             Statement::Drop { object_type, names, if_exists, .. } => {
                 if *object_type == ObjectType::Table && names.len() == 1 {
                     Ok(PlanNode::DropTable { table_name: names[0].to_string(), if_exists: *if_exists })
                 } else { Err(RsqlError::ParserError("Only DROP TABLE supported".to_string())) }
+            }
+            Statement::CreateIndex(create_index) => {
+                // Build a logical plan node for CREATE INDEX with safe unwrap for Option<ObjectName>
+                let index_name = match &create_index.name {
+                    Some(name) => name.to_string(),
+                    None => return Err(RsqlError::ParserError("CREATE INDEX must have a name".to_string())),
+                };
+                Ok(PlanNode::CreateIndex {
+                    index_name,
+                    table_name: create_index.table_name.to_string(),
+                    columns: create_index.columns.iter().map(|c| c.to_string()).collect(),
+                    unique: create_index.unique,
+                })
             }
             Statement::Insert(insert) => {
                 if let Some(source) = &insert.source {
@@ -640,7 +657,7 @@ impl Plan {
             exprs.iter().map(|e| format!("{}", e)).collect::<Vec<_>>().join(", ")
         }
 
-        fn fmt_alter_op(op: &AlterTableOperation) -> String {
+        fn fmt_alter_op(op: &AlterTableOperation, table_name: &str) -> String {
             match op {
                 AlterTableOperation::AddColumn { column_def, .. } => {
                     format!(
@@ -661,7 +678,6 @@ impl Plan {
                         format!("DROP COLUMN {}", cols)
                     }
                 }
-                // Handle RENAME COLUMN at the correct enum level (see below for new branch)
                 AlterTableOperation::RenameColumn {
                     old_column_name,
                     new_column_name,
@@ -671,6 +687,10 @@ impl Plan {
                         old_column_name,
                         new_column_name
                     )
+                }
+                AlterTableOperation::RenameTable { table_name: new_name } => {
+                    // Only print the new table name (do not include "TO" or old name here)
+                    format!("{}", new_name)
                 }
                 AlterTableOperation::AlterColumn { column_name, op } => {
                     match op {
@@ -719,10 +739,47 @@ impl Plan {
                 }
                 PlanNode::Projection { exprs, .. } => format!("Projection [{}]", fmt_exprs(exprs)),
                 PlanNode::Join { join_type, on, .. } => format!("Join [{:?}, on: {}]", join_type, on.as_ref().map_or("None".to_string(), |e| format!("{}", e))),
-                PlanNode::CreateTable { table_name, columns } => format!("CreateTable [{}] cols={}", table_name, columns.iter().map(|c| c.name.to_string()).collect::<Vec<_>>().join(", ")),
-                PlanNode::AlterTable { table_name, operation } => format!("AlterTable [{}] {}", table_name, fmt_alter_op(operation)),
+                PlanNode::CreateTable { table_name, columns } => {
+                    // Enhanced: show column constraints (PRIMARY KEY, UNIQUE, NOT NULL, NULL) for each column
+                    let mut col_labels = Vec::new();
+                    for col in columns {
+                        let mut constraints = Vec::new();
+                        for opt in &col.options {
+                            use sqlparser::ast::ColumnOption;
+                            match &opt.option {
+                                ColumnOption::PrimaryKey { .. } => constraints.push("PRIMARY KEY"),
+                                ColumnOption::Unique { .. } => constraints.push("UNIQUE"),
+                                ColumnOption::NotNull => constraints.push("NOT NULL"),
+                                ColumnOption::Null => constraints.push("NULL"),
+                                _ => {}
+                            }
+                        }
+                        let col_str = if constraints.is_empty() {
+                            format!("{}", col.name)
+                        } else {
+                            format!("{} [{}]", col.name, constraints.join(", "))
+                        };
+                        col_labels.push(col_str);
+                    }
+                    format!("CreateTable [{}] cols={}", table_name, col_labels.join(", "))
+                }
+                PlanNode::AlterTable { table_name, operation } => {
+                    use sqlparser::ast::AlterTableOperation;
+                    match operation {
+                        AlterTableOperation::RenameTable { table_name: new_name } => {
+                            // Only print both old and new table names, no "TO"
+                            format!("AlterTable [{}] RENAME TABLE {} {}", table_name, table_name, new_name)
+                        }
+                        _ => format!("AlterTable [{}] {}", table_name, fmt_alter_op(operation, table_name)),
+                    }
+                }
                 PlanNode::DropTable { table_name, if_exists } => {
                     if *if_exists { format!("DropTable [{}] IF EXISTS", table_name) } else { format!("DropTable [{}]", table_name) }
+                }
+                PlanNode::CreateIndex { index_name, table_name, columns, unique } => {
+                    // Pretty print for CREATE INDEX logical plan node
+                    let uniq_str = if *unique { "UNIQUE " } else { "" };
+                    format!("CreateIndex [{}{}] on [{}] cols=[{}]", uniq_str, index_name, table_name, columns.join(", "))
                 }
                 PlanNode::Insert { table_name, columns, values, input } => {
                     if let Some(_) = input {
@@ -768,7 +825,8 @@ impl Plan {
             exprs.iter().map(|e| format!("{}", e)).collect::<Vec<_>>().join(", ")
         }
 
-        fn fmt_alter_op(op: &AlterTableOperation) -> String {
+        fn fmt_alter_op(op: &AlterTableOperation, old_table_name: &str) -> String {
+            use sqlparser::ast::RenameTableNameKind;
             match op {
                 AlterTableOperation::AddColumn { column_def, .. } => {
                     format!(
@@ -798,6 +856,18 @@ impl Plan {
                         old_column_name,
                         new_column_name
                     )
+                }
+                AlterTableOperation::RenameTable { table_name: new_name_kind } => {
+                    // Print as: RENAME TABLE <old> TO <new>
+                    match new_name_kind {
+                        RenameTableNameKind::To(obj_name) => {
+                            format!("RENAME TABLE {} TO {}", old_table_name, obj_name)
+                        }
+                        _ => {
+                            // fallback
+                            format!("RENAME TABLE {} TO {:?}", old_table_name, new_name_kind)
+                        }
+                    }
                 }
                 AlterTableOperation::AlterColumn { column_name, op } => {
                     match op {
@@ -840,6 +910,7 @@ impl Plan {
 
         // Print all expression fields of a PlanNode, with their field paths.
         fn print_plan_expr_paths(plan: &PlanNode, prefix: &str, plan_path: &str) {
+            use sqlparser::ast::{AlterTableOperation, RenameTableNameKind};
             match plan {
                 PlanNode::Filter { predicate, .. } => {
                     let path = format!("(PlanNode::Filter.predicate)");
@@ -877,6 +948,64 @@ impl Plan {
                     for (i, (_col, expr)) in assignments.iter().enumerate() {
                         let path = format!("(PlanNode::Update.assignments[{}].1)", i);
                         print_expr_with_path(expr, prefix, &path);
+                    }
+                }
+                PlanNode::CreateTable { columns, .. } => {
+                    // For each column, print its name and constraints
+                    for (i, col) in columns.iter().enumerate() {
+                        let name_path = format!("(PlanNode::CreateTable.columns[{}].name)", i);
+                        println!("{}{} -> {}", prefix, name_path, col.name);
+                        for (j, opt) in col.options.iter().enumerate() {
+                            use sqlparser::ast::ColumnOption;
+                            let opt_path = format!("(PlanNode::CreateTable.columns[{}].options[{}].option)", i, j);
+                            let constraint = match &opt.option {
+                                ColumnOption::PrimaryKey { .. } => "PRIMARY KEY",
+                                ColumnOption::Unique { .. } => "UNIQUE",
+                                ColumnOption::NotNull => "NOT NULL",
+                                ColumnOption::Null => "NULL",
+                                _ => continue,
+                            };
+                            println!("{}{} -> {}", prefix, opt_path, constraint);
+                        }
+                    }
+                }
+                PlanNode::CreateIndex { index_name, table_name, columns, unique } => {
+                    let path_index = "(PlanNode::CreateIndex.index_name)";
+                    println!("{}{} -> {}", prefix, path_index, index_name);
+                    let path_table = "(PlanNode::CreateIndex.table_name)";
+                    println!("{}{} -> {}", prefix, path_table, table_name);
+                    let path_unique = "(PlanNode::CreateIndex.unique)";
+                    println!("{}{} -> {}", prefix, path_unique, unique);
+                    for (i, col) in columns.iter().enumerate() {
+                        let path_col = format!("(PlanNode::CreateIndex.columns[{}])", i);
+                        println!("{}{} -> {}", prefix, path_col, col);
+                    }
+                }
+                PlanNode::AlterTable { table_name, operation } => {
+                    // Print table_name and operation as detailed fields
+                    let path_table = "(PlanNode::AlterTable.table_name)";
+                    println!("{}{} -> {}", prefix, path_table, table_name);
+                    match operation {
+                        AlterTableOperation::RenameTable { table_name: new_name_kind } => {
+                            // Print as two fields: old_table_name and new_table_name (only table names)
+                            let old_path = "(PlanNode::AlterTable.operation.old_table_name)";
+                            let new_path = "(PlanNode::AlterTable.operation.new_table_name)";
+                            println!("{}{} -> {}", prefix, old_path, table_name);
+                            match new_name_kind {
+                                RenameTableNameKind::To(obj_name) => {
+                                    println!("{}{} -> {}", prefix, new_path, obj_name);
+                                }
+                                _ => {
+                                    println!("{}{} -> {:?}", prefix, new_path, new_name_kind);
+                                }
+                            }
+                        }
+                        _ => {
+                            let path_op = "(PlanNode::AlterTable.operation)";
+                            // Format operation as a string, e.g., "ADD COLUMN ..."
+                            let op_str = fmt_alter_op(operation, table_name);
+                            println!("{}{} -> {}", prefix, path_op, op_str);
+                        }
                     }
                 }
                 _ => {}
@@ -1005,10 +1134,40 @@ impl Plan {
                 }
                 PlanNode::Projection { exprs, .. } => format!("Projection [{}]", fmt_exprs(exprs)),
                 PlanNode::Join { join_type, on, .. } => format!("Join [{:?}, on: {}]", join_type, on.as_ref().map_or("None".to_string(), |e| format!("{}", e))),
-                PlanNode::CreateTable { table_name, columns } => format!("CreateTable [{}] cols={}", table_name, columns.iter().map(|c| c.name.to_string()).collect::<Vec<_>>().join(", ")),
-                PlanNode::AlterTable { table_name, operation } => format!("AlterTable [{}] {}", table_name, fmt_alter_op(operation)),
+                PlanNode::CreateTable { table_name, columns } => {
+                    // Enhanced: show column constraints (UNIQUE, NOT NULL, NULL) for each column
+                    let mut col_labels = Vec::new();
+                    for col in columns {
+                        let mut constraints = Vec::new();
+                        for opt in &col.options {
+                            use sqlparser::ast::ColumnOption;
+                            match &opt.option {
+                                ColumnOption::Unique { .. } => constraints.push("UNIQUE"),
+                                ColumnOption::NotNull => constraints.push("NOT NULL"),
+                                ColumnOption::Null => constraints.push("NULL"),
+                                _ => {}
+                            }
+                        }
+                        let col_str = if constraints.is_empty() {
+                            format!("{}", col.name)
+                        } else {
+                            format!("{} [{}]", col.name, constraints.join(", "))
+                        };
+                        col_labels.push(col_str);
+                    }
+                    format!("CreateTable [{}] cols={}", table_name, col_labels.join(", "))
+                }
+                PlanNode::AlterTable { table_name, operation } => {
+                    // For pretty_print_pro, print RENAME TABLE with old and new table names as separate fields
+                    format!("AlterTable [{}] {}", table_name, fmt_alter_op(operation, table_name))
+                }
                 PlanNode::DropTable { table_name, if_exists } => {
                     if *if_exists { format!("DropTable [{}] IF EXISTS", table_name) } else { format!("DropTable [{}]", table_name) }
+                }
+                PlanNode::CreateIndex { index_name, table_name, columns, unique } => {
+                    // Pretty print for CREATE INDEX logical plan node (pro version)
+                    let uniq_str = if *unique { "UNIQUE " } else { "" };
+                    format!("CreateIndex [{}{}] on [{}] cols=[{}]", uniq_str, index_name, table_name, columns.join(", "))
                 }
                 PlanNode::Insert { table_name, columns, values, input } => {
                     if let Some(_) = input {
