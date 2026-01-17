@@ -10,6 +10,7 @@ use crate::db::data_item::{DataItem, VarCharHead};
 use super::btree_index;
 use super::consist_storage::ConsistStorageEngine;
 use crate::db::table_schema::TableSchema;
+use crate::db::utils;
 
 use super::allocator::Allocator;
 
@@ -146,16 +147,17 @@ impl Table {
         Ok(entry_data)
     }
 
-    pub fn from(id: u64, schema: TableSchema) -> RsqlResult<Self> {
+    pub fn from(id: u64, schema: TableSchema, is_sys: bool) -> RsqlResult<Self> {
         // 1. check if table already opened
         let guard = get_table_guard();
         let mut guard = guard.lock().unwrap();
+        #[cfg(not(test))]
         if guard.contains(&id) {
             panic!("Table {} already opened in this process", id);
         }
         guard.insert(id);
         // 2. open table file
-        let path = get_table_path(id);
+        let path = get_table_path(id, is_sys);
         let path_str = path.to_str().unwrap();
         let storage = ConsistStorageEngine::new(path_str, id)?;
         if let None = storage.max_page_index() {
@@ -203,16 +205,17 @@ impl Table {
         })
     }
     /// Create a new table with given schema
-    pub fn create(id: u64, schema: TableSchema, tnx_id: u64) -> RsqlResult<Self> { 
+    pub fn create(id: u64, schema: TableSchema, tnx_id: u64, is_sys: bool) -> RsqlResult<Self> { 
         // check if table already opened
         let guard = get_table_guard();
         let mut guard = guard.lock().unwrap();
+        #[cfg(not(test))]
         if guard.contains(&id) {
             panic!("Table {} already opened in this process", id);
         }
         guard.insert(id);
         // create table file
-        let path = get_table_path(id);
+        let path = get_table_path(id, is_sys);
         let path_str = path.to_str().unwrap();
         let mut storage = ConsistStorageEngine::new(path_str, id)?;
         // 1. collect indexes info
@@ -447,11 +450,19 @@ impl Table {
 
 /// Get the file path for a table given its ID
 /// For tests, use temp directory
-fn get_table_path(id: u64) -> PathBuf {
-    if cfg!(test) {
-        std::env::temp_dir().join(format!("rsql_test_table_{}.dbt", id))
+fn get_table_path(id: u64, is_sys: bool) -> PathBuf {
+    if is_sys {
+        if cfg!(test) {
+            utils::test_dir(format!("table_{id}")).join(format!("{}.dbs", id))
+        } else {
+            std::path::Path::new(config::DB_DIR).join("sys").join(format!("{}.dbs", id))
+        }
     } else {
-        std::path::Path::new(config::DB_DIR).join(format!("{}.dbt", id))
+        if cfg!(test) {
+            utils::test_dir(format!("table_{id}")).join(format!("{}.dbt", id))
+        } else {
+            std::path::Path::new(config::DB_DIR).join("tables").join(format!("{}.dbt", id))
+        }
     }
 }
 
@@ -499,19 +510,19 @@ mod tests {
         let tnx_id = 1;
 
         // cleanup if exists
-        let path = get_table_path(table_id);
+        let path = get_table_path(table_id, false);
         let _ = fs::remove_file(&path);
 
         {
             // 1. Create table
-            let table = Table::create(table_id, schema.clone(), tnx_id).expect("Failed to create table");
+            let table = Table::create(table_id, schema.clone(), tnx_id, false).expect("Failed to create table");
             assert_eq!(table.id, table_id);
             assert_eq!(table.get_schema().get_columns().len(), 2);
         }
 
         {
             // 2. Open table
-            let table = Table::from(table_id, schema).expect("Failed to open table");
+            let table = Table::from(table_id, schema, false).expect("Failed to open table");
             assert_eq!(table.id, table_id);
         }
 
@@ -541,10 +552,10 @@ mod tests {
             ];
         let schema = TableSchema::new(columns).unwrap();
         let tnx_id = 1;
-        let path = get_table_path(table_id);
+        let path = get_table_path(table_id, false);
         let _ = fs::remove_file(&path);
 
-        let mut table = Table::create(table_id, schema, tnx_id).expect("Failed to create table");
+        let mut table = Table::create(table_id, schema, tnx_id, false).expect("Failed to create table");
 
         // 0. Insert a dummy row to prevent pages from becoming completely empty
         // (The current implementation panics when trying to free a non-last page)
@@ -606,10 +617,10 @@ mod tests {
         let table_id = 2001;
         let schema = setup_schema();
         let tnx_id = 1;
-        let path = get_table_path(table_id);
+        let path = get_table_path(table_id, false);
         let _ = fs::remove_file(&path);
 
-        let mut table = Table::create(table_id, schema, tnx_id).expect("Failed to create table");
+        let mut table = Table::create(table_id, schema, tnx_id, false).expect("Failed to create table");
 
         // Insert 5 rows
         for i in 1..=5 {
@@ -645,10 +656,10 @@ mod tests {
         let table_id = 1000;
         let schema = setup_schema();
         let tnx_id = 1;
-        let path = get_table_path(table_id);
+        let path = get_table_path(table_id, false);
         let _ = fs::remove_file(&path);
 
-        let table = Table::create(table_id, schema, tnx_id).expect("Failed to create table");
+        let table = Table::create(table_id, schema, tnx_id, false).expect("Failed to create table");
         let pk_val = DataItem::Integer(1);
         
         let result = table.get_row_by_pk(&pk_val).expect("Search failed");
@@ -662,10 +673,10 @@ mod tests {
         let table_id = 1001;
         let schema = setup_schema();
         let tnx_id = 1;
-        let path = get_table_path(table_id);
+        let path = get_table_path(table_id, false);
         let _ = fs::remove_file(&path);
 
-        let table = Table::create(table_id, schema, tnx_id).expect("Failed to create table");
+        let table = Table::create(table_id, schema, tnx_id, false).expect("Failed to create table");
         let mut iter = table.get_all_rows().expect("Failed to get all rows");
         
         assert!(iter.next().is_none());
