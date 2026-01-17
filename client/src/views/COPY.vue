@@ -7,21 +7,25 @@
         </div>
         <div class="tables-buttons">
             <div class="tables-btn create">
+            <Icon :path="mdiTablePlus" size="18" />
             <span>Create New Table</span>
             </div>
             <div class="tables-btn rename">
+            <Icon :path="mdiTableEdit" size="18" />
             <span>Rename Table</span>
             </div>
             <div class="tables-btn drop">
+            <Icon :path="mdiTableRemove" size="18" />
             <span>Drop Table</span>
             </div>
             <div class="tables-btn terminal">
+            <Icon :path="mdiConsoleLine" size="18" />
             <span>Open Terminal</span>
             </div>
         </div>
 
         <div class="tables-list">
-            <h3>Table List</h3>
+            <h3> Table List</h3>
         </div>
 
         <div class="sidebar-footer">
@@ -37,21 +41,26 @@
             <h1>Current Table: <span>{{ currentTableName }}</span></h1>
 
             <div class="action-buttons">
-            <button class="action-btn insert">
-                <span>Insert</span>
-            </button>
-            <button class="action-btn delete">
-                <span>Delete</span>
-            </button>
-            <button class="action-btn update">
-                <span>Update</span>
-            </button>
-            <button class="action-btn query">
-                <span>Query</span>
-            </button>
-            <button class="action-btn export">
-                <span>Export</span>
-            </button>
+                <button class="action-btn insert">
+                    <Icon :path="mdiPlus" size="18" />
+                    <span>Insert</span>
+                </button>
+                <button class="action-btn delete">
+                    <Icon :path="mdiDelete" size="18" />
+                    <span>Delete</span>
+                </button>
+                <button class="action-btn update">
+                    <Icon :path="mdiPencil" size="18" />
+                    <span>Update</span>
+                </button>
+                <button class="action-btn query">
+                    <Icon :path="mdiMagnify" size="18" />
+                    <span>Query</span>
+                </button>
+                <button class="action-btn export">
+                    <Icon :path="mdiDownload" size="18" />
+                    <span>Export</span>
+                </button>
             </div>
         </div>
 
@@ -82,7 +91,7 @@
 
             <div class="create-operation">
                 <div class="operation-panel">
-                    <h4>创建新表</h4>
+                    <h4><Icon :path="mdiTablePlus" size="18" /> 创建新表</h4>
 
                     <div class="form-row">
                     <label for="create-table-name">表名</label>
@@ -92,12 +101,16 @@
                     <div class="columns-section">
                     <div class="columns-header">
                         <h4>列定义</h4>
-                        <button type="button" class="add-column-btn" id="add-column-btn">添加列</button>
+                        <button type="button" class="add-column-btn" id="add-column-btn">
+                            添加列
+                        </button>
                     </div>
                     <div class="columns-list" id="columns-container"></div>
                     </div>
 
-                    <button type="button" class="submit-create-btn" id="submit-create-btn">提交创建表</button>
+                    <button type="button" class="submit-create-btn" id="submit-create-btn">
+                        提交创建表
+                    </button>
                 </div>
             </div>
 
@@ -106,12 +119,33 @@
                 <div class="terminal-panel">
                     <!-- 代码编写区 -->
                     <div class="code-area">
-                        <textarea class="codeArea-text"></textarea>
+                        <textarea
+                            class="codeArea-text"
+                            v-model="codeInput"
+                            :placeholder="connected ? '输入 SQL 后提交' : '正在连接到 WebSocket...'"
+                            :disabled="!connected"
+                        ></textarea>
                     </div>
-                    <button class="codeArea-submit">Submit</button>
+                    <button
+                        class="codeArea-submit"
+                        type="button"
+                        :disabled="!connected"
+                        @click="submitSql"
+                    >
+                        {{ connected ? 'Submit' : '连接中' }}
+                    </button>
                     <!-- 结果展示区 -->
                     <div class="codeArea-result">
-                        <!-- 这里将展示终端执行结果 -->
+                        <div v-if="!connected">WebSocket 未连接，请稍等或检查后端是否运行。</div>
+                        <div v-else-if="codeResults.length === 0">暂无响应</div>
+                        <div v-else>
+                            <div v-for="(item, idx) in codeResults" :key="idx" class="codeArea-result-item">
+                                <div>时间: {{ new Date(item.timestamp * 1000).toLocaleString() }} | Conn: {{ item.connection_id }}</div>
+                                <div v-if="item.success">✅ {{ item.rayon_response.response_content }}</div>
+                                <div v-else>❌ {{ item.rayon_response.error || '未知错误' }}</div>
+                                <div>耗时: {{ item.rayon_response.execution_time }} ms</div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -264,14 +298,66 @@
             <div class="export-operation"></div>
         </div>
         </div>
+    <!-- 删除确认弹窗 -->
+    <div v-if="dropModalVisible" class="modal-overlay">
+        <div class="modal-dialog">
+            <h3><Icon :path="mdiAlertOctagonOutline" size="18" /> 确认删除</h3>
+            <p>确定删除表 <strong>{{ pendingDropTable }}</strong>？此操作不可撤销。</p>
+            <div class="modal-actions">
+                <button class="modal-cancel" @click="dropModalVisible = false">取消</button>
+                <button class="modal-confirm" @click="confirmDropTable">
+                    <Icon :path="mdiCheckCircleOutline" size="16" /> 确认删除
+                </button>
+            </div>
+        </div>
+    </div>
+
     <Toast ref="toastRef" :message="toastMessage" :duration="toastDuration" />
     </div>
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onBeforeUnmount, ref, defineComponent, h } from 'vue'
 import VirtualList from './List.vue'
 import Toast from '../components/Toast.vue'
+import {
+    mdiConsoleLine,
+    mdiDelete,
+    mdiDownload,
+    mdiMagnify,
+    mdiPencil,
+    mdiPlus,
+    mdiTableEdit,
+    mdiTablePlus,
+    mdiTableRemove,
+    mdiTable,
+    mdiTableColumnPlusAfter,
+    mdiCheckCircleOutline,
+    mdiTrashCanOutline,
+    mdiAlertOctagonOutline,
+} from '@mdi/js'
+
+const Icon = defineComponent({
+    name: 'Icon',
+    props: {
+        path: { type: String, required: true },
+        size: { type: [Number, String], default: 18 },
+    },
+    setup(props) {
+        return () =>
+            h(
+                'svg',
+                {
+                    class: 'icon',
+                    width: props.size,
+                    height: props.size,
+                    viewBox: '0 0 24 24',
+                    'aria-hidden': 'true',
+                },
+                [h('path', { d: props.path, fill: 'currentColor' })],
+            )
+    },
+})
 
 const viewHeaders = ref([])
 const viewRows = ref([])
@@ -288,6 +374,124 @@ const toastDuration = 2500
 let currentTableHeaders = []
 let currentTableRows = []
 let currentDisplayHeaders = []
+// Drop 模式与弹窗
+const dropMode = ref(false)
+const dropModalVisible = ref(false)
+const pendingDropTable = ref('')
+
+// WebSocket 相关状态
+const wsUrl = 'ws://127.0.0.1:4455/ws'
+const wsRef = ref(null)
+const connected = ref(false)
+const codeInput = ref('')
+const codeResults = ref([])
+
+function connectWebSocket() {
+    const socket = new WebSocket(wsUrl)
+    wsRef.value = socket
+
+    socket.onopen = () => {
+        connected.value = true
+    }
+
+    socket.onclose = () => {
+        connected.value = false
+    }
+
+    socket.onerror = (err) => {
+        console.warn('WebSocket error', err)
+        connected.value = false
+    }
+
+    socket.onmessage = (ev) => {
+        try {
+            const data = JSON.parse(ev.data)
+            codeResults.value.push(data)
+        } catch (e) {
+            console.warn('Parse WebSocket message failed', e, ev.data)
+        }
+    }
+}
+
+function submitSql() {
+    if (!wsRef.value || wsRef.value.readyState !== WebSocket.OPEN) {
+        alert('WebSocket 未连接，请稍后重试')
+        return
+    }
+
+    const sql = codeInput.value.trim()
+    if (!sql) {
+        alert('请输入 SQL 再提交')
+        return
+    }
+
+    const payload = {
+        username: 'guest',
+        userid: 0,
+        request_content: sql,
+    }
+    wsRef.value.send(JSON.stringify(payload))
+}
+
+function ensureWsReady() {
+    if (!wsRef.value || wsRef.value.readyState !== WebSocket.OPEN) {
+        alert('WebSocket 未连接，请先启动后端或等待连接成功')
+        return false
+    }
+    return true
+}
+
+function sendSqlStatement(sql, actionLabel = 'SQL') {
+    const trimmed = (sql || '').trim()
+    if (!trimmed) {
+        alert(`${actionLabel} 为空，未发送`)
+        return
+    }
+    if (!ensureWsReady()) return
+    const payload = {
+        username: 'guest',
+        userid: 0,
+        request_content: trimmed,
+    }
+    wsRef.value.send(JSON.stringify(payload))
+    codeInput.value = trimmed
+    triggerToast(`${actionLabel} 已发送`) // 轻量提示
+}
+
+// 将包含多个语句的文本拆分为多条 INSERT/SQL 逐条发送
+function sendSqlBatch(sqlText, actionLabel = 'SQL 批量') {
+    if (!ensureWsReady()) return
+    const parts = (sqlText || '')
+        .split(';')
+        .map(s => s.trim())
+        .filter(Boolean)
+    if (parts.length === 0) {
+        alert(`${actionLabel} 为空，未发送`)
+        return
+    }
+    parts.forEach((stmt, idx) => {
+        const sql = stmt.endsWith(';') ? stmt : `${stmt};`
+        const payload = {
+            username: 'guest',
+            userid: 0,
+            request_content: sql,
+        }
+        wsRef.value.send(JSON.stringify(payload))
+        console.log(`${actionLabel} 第 ${idx + 1} 条`, sql)
+    })
+    codeInput.value = parts.map(s => (s.endsWith(';') ? s : `${s};`)).join('\n')
+    triggerToast(`${actionLabel} 已逐条发送 (${parts.length} 条)`) // 轻量提示
+}
+
+onMounted(() => {
+    connectWebSocket()
+})
+
+onBeforeUnmount(() => {
+    if (wsRef.value) {
+        wsRef.value.close()
+    }
+})
 
 function checkTypeMatches(type, data) {
     const t = String(type || '').trim().toUpperCase()
@@ -362,6 +566,21 @@ function triggerToast(msg) {
     }
 }
 
+function confirmDropTable() {
+    const name = (pendingDropTable.value || '').trim()
+    if (!name) {
+        dropModalVisible.value = false
+        return
+    }
+    const sql = `DROP TABLE ${name};`
+    sendSqlStatement(sql, '删除表')
+    dropModalVisible.value = false
+    // 重新获取并渲染表列表
+    setTimeout(() => {
+        loadTablesList()
+    }, 100)
+}
+
 function headerPlaceholder(headerName) {
     const meta = currentTableHeaders.find(h => h.name === headerName)
     if (!meta) return ''
@@ -416,10 +635,9 @@ function confirmDelete(idx) {
     }
 
     const sql = `DELETE FROM ${tableName} WHERE ${whereClauses.join(' AND ')};`
-    alert('生成的 SQL 语句：\n' + sql)
     console.log('Delete SQL:', sql)
 
-    triggerToast('删除成功')
+    sendSqlStatement(sql, '删除语句')
 
     deletePendingRow.value = null
     renderTable(currentDisplayHeaders, currentTableRows)
@@ -538,10 +756,9 @@ function confirmUpdate(idx) {
     }
 
     const sql = `UPDATE ${tableName} SET ${setClauses.join(', ')} WHERE ${whereClauses.join(' AND ')};`
-    alert('生成的 SQL 语句：\n' + sql)
     console.log('Update SQL:', sql)
 
-    triggerToast('更新成功')
+    sendSqlStatement(sql, '更新语句')
 
     updateEditingRow.value = null
     updateDraft.value = []
@@ -772,7 +989,17 @@ onMounted(() => {
         const sorted = Array.isArray(names)
             ? names.slice().map(n => String(n)).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
             : []
-        const items = sorted.map((n) => `<div class="table-item"><span>${n}</span></div>`).join('')
+        const items = sorted.map((n) => {
+            const delBtn = dropMode.value
+                ? `<button class="table-delete-btn" data-table="${n}">
+                        <svg class="table-delete-svg" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="${mdiTrashCanOutline}" fill="currentColor" />
+                        </svg>
+                        删除
+                   </button>`
+                : ''
+            return `<div class="table-item"><span>${n}</span>${delBtn}</div>`
+        }).join('')
         tablesListEl.innerHTML = header + items
         const countEl = document.getElementById('tables-counts')
         if (countEl) countEl.textContent = String(sorted.length)
@@ -920,7 +1147,6 @@ onMounted(() => {
         }
 
         console.log('Create table payload', { tableName, columns })
-        alert('提交创建表数据：\n' + JSON.stringify({ tableName, columns }, null, 2))
 
         let sql = `CREATE TABLE ${tableName} (\n`
         columns.forEach((col, index) => {
@@ -932,16 +1158,27 @@ onMounted(() => {
         })
         sql += `\n);`
         console.log('Generated SQL:\n', sql)
-        alert('生成的 SQL 语句：\n' + sql)
-        triggerToast('创建表成功')
+
+        sendSqlStatement(sql, '创建表语句')
         })
     }
 
-    function attachTableItemClickHandlers() { // 绑定左侧导航栏表项点击事件
+    function attachTableItemClickHandlers() { // 绑定左侧导航栏表项点击事件及删除按钮
         document.querySelectorAll('.table-item').forEach((item) => {
         const newItem = item.cloneNode(true)
         if (item.parentNode) item.parentNode.replaceChild(newItem, item)
-        newItem.addEventListener('click', async function () {
+        newItem.addEventListener('click', async function (e) {
+            // 点击删除按钮时，不触发表项切换
+            if (e && e.target && e.target.classList && e.target.classList.contains('table-delete-btn')) {
+                return
+            }
+            // 点击任意表项时，将顶部四个按钮恢复为未选中（蓝色）
+            document.querySelectorAll('.tables-btn').forEach((el) => el.classList.remove('active'))
+            // 退出删除模式并刷新列表隐藏删除按钮
+            const clickedSpan = newItem.querySelector('span')
+            const clickedName = clickedSpan && clickedSpan.textContent ? clickedSpan.textContent.split(' ')[0] : ''
+            dropMode.value = false
+            loadTablesList()
             document.querySelectorAll('.table-item').forEach((el) => {
             el.classList.remove('active')
             })
@@ -955,8 +1192,29 @@ onMounted(() => {
             if (headerTitle) headerTitle.textContent = `${tableName} Table Data`
             console.log(`Switched to table: ${tableName}`)
             await loadTableData(tableName)
+            // 确保刷新列表后仍然保持当前表高亮
+            setTimeout(() => {
+                document.querySelectorAll('.table-item').forEach((el) => {
+                    const sp = el.querySelector('span')
+                    const tn = sp && sp.textContent ? sp.textContent.split(' ')[0] : ''
+                    if (tn === (clickedName || tableName)) {
+                        el.classList.add('active')
+                    }
+                })
+            }, 50)
             showSection('table')
         })
+        const delBtn = newItem.querySelector('.table-delete-btn')
+        if (delBtn) {
+            delBtn.addEventListener('click', (ev) => {
+                ev.stopPropagation()
+                const tn = delBtn.getAttribute('data-table') || ''
+                if (tn) {
+                    pendingDropTable.value = tn
+                    dropModalVisible.value = true
+                }
+            })
+        }
         })
     }
 
@@ -1312,36 +1570,41 @@ onMounted(() => {
 
             const sqlOutput = sqlStatements.join('\n')
 
-            // Show JSON first
-            alert('生成的 JSON 数据：\n' + JSON.stringify(jsonOutput, null, 2))
-            
-            // Then show SQL
-            setTimeout(() => {
-                alert('生成的 SQL 语句：\n' + sqlOutput)
-            }, 100)
-
             console.log('Insert JSON:', jsonOutput)
             console.log('Insert SQL:', sqlOutput)
-            triggerToast('插入数据成功')
+
+            sendSqlBatch(sqlOutput, '插入语句')
         })
     }
 
     document.querySelectorAll('.tables-btn').forEach((button) => {
         button.addEventListener('click', function () {
+        // 仅允许一个按钮为激活态（红色）
+        document.querySelectorAll('.tables-btn').forEach((el) => el.classList.remove('active'))
+        this.classList.add('active')
         const action = this.classList.contains('create') ? 'Create' : 
             this.classList.contains('drop') ? 'Drop' : 
             this.classList.contains('rename') ? 'Rename' : 
             this.classList.contains('terminal') ? 'Terminal' : 'Unknown'
         if (action === 'Create') {
+            dropMode.value = false
+            loadTablesList()
             document.querySelectorAll('.table-item').forEach((el) => {
                 el.classList.remove('active')
             })
             showSection('create')
         } else if (action === 'Drop') {
+            // 开启删除模式，在列表每个表后显示删除按钮
+            dropMode.value = true
+            loadTablesList()
 
         } else if (action === 'Rename') {
+            dropMode.value = false
+            loadTablesList()
             
         } else if (action === 'Terminal') {
+            dropMode.value = false
+            loadTablesList()
             document.querySelectorAll('.table-item').forEach((el) => {
                 el.classList.remove('active')
             })
@@ -1350,21 +1613,6 @@ onMounted(() => {
         })
     })
 
-    // Terminal Submit Button Handler
-    const submitBtn = document.querySelector('.codeArea-submit')
-    const textArea = document.querySelector('.codeArea-text')
-    if (submitBtn && textArea) {
-        submitBtn.addEventListener('click', () => {
-            let inputText = textArea.value.trim()
-            if (!inputText) {
-                alert('请输入 SQL 语句')
-                return
-            }
-            // 移除所有换行符
-            const sqlStatement = inputText.replace(/\n/g, ' ').replace(/\r/g, ' ')
-            alert('生成的 SQL 语句：\n' + sqlStatement)
-        })
-    }
 })
 </script>
 
@@ -1441,26 +1689,15 @@ body {
 
 .tables-btn.create,
 .tables-btn.drop,
-.tables-btn.rename {
-    background-color: #3c8dc3;
+.tables-btn.rename,
+.tables-btn.terminal {
+    background-color: #3c8dc3; /* 默认蓝色 */
     color: white;
 }
 
-.tables-btn.terminal {
-    border-bottom: 1px solid #34495e;
-    user-select: none;
-    padding: 15px 20px;
-    cursor: pointer;
-    border-bottom: 1px solid #34495e;
-    font-weight: 600;
-    transition: all 0.2s ease;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    background-color: #f08080
-}
-.tables-btn.terminal:hover {
-    border-left: 4px solid #2c3e50;
+.tables-btn.active {
+    background-color: #f08080; /* 激活红色 */
+    color: white;
 }
 
 .terminal-panel {
@@ -1518,6 +1755,26 @@ body {
     padding: 20px 0;
     overflow-y: auto;
     flex-grow: 1;
+}
+
+.table-delete-btn {
+    margin-left: auto;
+    background-color: #e74c3c;
+    color: #fff;
+    border: none;
+    border-radius: 12px;
+    padding: 4px 10px;
+    font-size: 12px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.table-delete-btn:hover {
+    background-color: #c0392b;
+}
+.table-delete-svg {
+    flex-shrink: 0;
 }
 
 .tables-list h3 {
@@ -1965,6 +2222,65 @@ tbody tr:hover {
 .operation-panel h4 {
     font-size: 1.2rem;
     color: #2c3e50;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.icon {
+    vertical-align: middle;
+    display: inline-block;
+    transform: translateY(0px);
+}
+
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0,0,0,0.35);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+.modal-dialog {
+    background: #fff;
+    border-radius: 8px;
+    padding: 16px 20px;
+    width: 360px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+}
+
+.modal-dialog h3 {
+    margin-bottom: 12px;
+    color: #2c3e50;
+}
+.modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+    margin-top: 16px;
+}
+.modal-cancel {
+    background: #bdc3c7;
+    color: #2c3e50;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 12px;
+    cursor: pointer;
+}
+.modal-confirm {
+    background: #e74c3c;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 12px;
+    cursor: pointer;
+}
+.modal-confirm:hover {
+    background: #c0392b;
 }
 
 .form-row {
