@@ -16,7 +16,7 @@ pub fn execute(sql: &str, connection_id: u64) -> RsqlResult<()> {
         // execute plan_nodes in the transaction
         for stmt in &tnx.stmts {
             info!("Executing statement: {:?}", stmt);
-            execute_plan_node(stmt)?;
+            execute_plan_node(stmt, connection_id)?;
         }
         
         // 根据事务状态决定提交或回滚

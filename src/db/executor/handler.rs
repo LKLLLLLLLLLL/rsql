@@ -4,7 +4,7 @@ use crate::db::data_item::{DataItem};
 use crate::db::table_schema::{TableSchema, ColType, TableColumn};
 use crate::db::storage_engine::table::{Table};
 use self::ExecutionResult::{Query, Mutation, Ddl, TableObj, TableWithFilter, TempTable};
-use super::expr_handler::{handle_on_expr, handle_table_obj_filter_expr, handle_temp_table_filter_expr};
+use super::expr_handler::{handle_on_expr, handle_table_obj_filter_expr, handle_temp_table_filter_expr, handle_insert_expr};
 use tracing::info;
 use std::collections::HashMap;
 use sqlparser::ast::{Expr};
@@ -36,49 +36,54 @@ pub struct TableObject {
     pub pk_col: (String, ColType), // primary key column name
 }
 
-pub fn execute_plan_node(node: &PlanNode) -> RsqlResult<ExecutionResult> {
+fn get_table_object (table_name: &str) -> RsqlResult<TableObject> {
+    // 1. get Table
+    let table_column = TableColumn {
+        name: table_name.to_string(),
+        data_type: ColType::Integer,
+        pk: true,
+        nullable: false,
+        index: true,
+        unique: false,
+    };
+    let table_obj = Table::from(0, TableSchema::new(vec![table_column])?)?;
+    let table_schema = table_obj.get_schema();
+    // 2. construct TableObject
+    let mut map = HashMap::new();
+    let mut cols_name = vec![];
+    let mut cols_type = vec![];
+    let mut pk_col_name = String::new();
+    let mut pk_col_type = ColType::Integer;
+    for (idx, col) in table_schema.get_columns().iter().enumerate() {
+        map.insert(col.name.clone(), idx);
+        cols_name.push(col.name.clone());
+        cols_type.push(col.data_type.clone());
+        if col.pk {
+            pk_col_name = col.name.clone();
+            pk_col_type = col.data_type.clone();
+        }
+    }
+    let indexed_cols = table_obj.get_schema().get_indexed_col();
+    let table_object = TableObject {
+        table_obj,
+        map,
+        cols: (cols_name, cols_type),
+        indexed_cols,
+        pk_col: (pk_col_name, pk_col_type),
+    };
+    Ok(table_object)
+}
+
+pub fn execute_plan_node(node: &PlanNode, tnx_id: u64) -> RsqlResult<ExecutionResult> {
     match node {
         PlanNode::TableScan { table } => {
             info!("Implement TableScan execution");
-            // 1. get Table
-            let table_column = TableColumn {
-                name: "a".to_string(),
-                data_type: ColType::Integer,
-                pk: true,
-                nullable: false,
-                index: true,
-                unique: false, // TODO: not implemented
-            };
-            let table_obj = Table::from(0, TableSchema::new(vec![table_column])?)?;
-            let table_schema = table_obj.get_schema();
-            // 2. construct TableObject
-            let mut map = HashMap::new();
-            let mut cols_name = vec![];
-            let mut cols_type = vec![];
-            let mut pk_col_name = String::new();
-            let mut pk_col_type = ColType::Integer;
-            for (idx, col) in table_schema.get_columns().iter().enumerate() {
-                map.insert(col.name.clone(), idx);
-                cols_name.push(col.name.clone());
-                cols_type.push(col.data_type.clone());
-                if col.pk {
-                    pk_col_name = col.name.clone();
-                    pk_col_type = col.data_type.clone();
-                }
-            }
-            let indexed_cols = table_obj.get_schema().get_indexed_col();
-            let table_object = TableObject {
-                table_obj,
-                map,
-                cols: (cols_name, cols_type),
-                indexed_cols,
-                pk_col: (pk_col_name, pk_col_type),
-            };
+            let table_object = get_table_object(table)?;
             Ok(TableObj(table_object)) // get table object after scan
         }
         PlanNode::Filter { predicate, input } => {
             info!("Implement Filter execution");
-            let input_result = execute_plan_node(input)?;
+            let input_result = execute_plan_node(input, tnx_id)?;
             if let TableObj(table_obj) = input_result {
                 let filter_result = handle_table_obj_filter_expr(&table_obj, predicate)?;
                 Ok(TableWithFilter { table_obj, rows: filter_result }) // get temp query result after filter
@@ -97,7 +102,7 @@ pub fn execute_plan_node(node: &PlanNode) -> RsqlResult<ExecutionResult> {
         }
         PlanNode::Projection { exprs, input } => {
             info!("Implement Projection execution");
-            let input_result = execute_plan_node(input)?;
+            let input_result = execute_plan_node(input, tnx_id)?;
             if let TableWithFilter {table_obj, rows: input_rows} = input_result {
                 // 0. handle * column
                 if exprs.len() == 0 {
@@ -180,7 +185,7 @@ pub fn execute_plan_node(node: &PlanNode) -> RsqlResult<ExecutionResult> {
         }
         PlanNode::Join { left, right, join_type, on } => {
             info!("Implement Join execution");
-            if let (TableObj(left_table_obj), TableObj(right_table_obj)) = (execute_plan_node(left)?, execute_plan_node(right)?) {
+            if let (TableObj(left_table_obj), TableObj(right_table_obj)) = (execute_plan_node(left, tnx_id)?, execute_plan_node(right, tnx_id)?) {
                 let (joined_cols, joined_rows) = handle_join(&left_table_obj, &right_table_obj, join_type, on)?;
                 Ok(TempTable { cols: joined_cols, rows: joined_rows, table_name: None })
             }else {
@@ -192,7 +197,7 @@ pub fn execute_plan_node(node: &PlanNode) -> RsqlResult<ExecutionResult> {
         }
         PlanNode::Subquery { subquery, alias } => {
             info!("Implement Subquery execution");
-            let subquery_result = execute_plan_node(subquery)?;
+            let subquery_result = execute_plan_node(subquery, tnx_id)?;
             if let Query{cols, rows} = subquery_result {
                 Ok(TempTable { cols, rows, table_name: alias.clone() })
             }else {
@@ -203,8 +208,35 @@ pub fn execute_plan_node(node: &PlanNode) -> RsqlResult<ExecutionResult> {
                 }
             }
         }
-        PlanNode::Insert { table_name, columns, values, input } => {
-            todo!("Implement Insert execution")
+        PlanNode::Insert { table_name, columns, values, input: _ } => {
+            let mut table_object = get_table_object(table_name)?;
+            if let Some(cols) = columns {
+                let mut null_cols = vec![];
+                for col_type in table_object.cols.1.iter() {
+                    match col_type {
+                        ColType::Integer => {
+                            null_cols.push(DataItem::NullInt);
+                        },
+                        ColType::Float => {
+                            null_cols.push(DataItem::NullFloat);
+                        },
+                        ColType::Chars(size) => {
+                            null_cols.push(DataItem::NullChars { len: *size as u64 });
+                        },
+                        ColType::Bool => {
+                            null_cols.push(DataItem::NullBool);
+                        },
+                        ColType::VarChar(_) => {
+                            null_cols.push(DataItem::NullVarChar);
+                        },
+                    }
+                }
+                let data_item = handle_insert_expr(&table_object, cols, &null_cols, &values[0])?;
+                table_object.table_obj.insert_row(data_item, tnx_id)?;
+                Ok(Mutation)
+            }else {
+                Err(RsqlError::ExecutionError(format!("Insert columns is None")))
+            }
         }
         PlanNode::Delete { input } => {
             todo!("Implement Delete execution")

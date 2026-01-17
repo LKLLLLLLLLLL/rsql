@@ -846,3 +846,43 @@ pub fn handle_on_expr(left_null_row: &Vec<DataItem>, right_null_row: &Vec<DataIt
         },
     }
 }
+
+pub fn handle_insert_expr(table_object: &TableObject, cols: &Vec<String>, null_cols: &Vec<DataItem>, values: &Vec<Expr>) -> RsqlResult<Vec<DataItem>> {
+    let mut data_item = null_cols.clone();
+    for (idx, expr) in values.iter().enumerate() {
+        match expr {
+            Expr::Value(value) => {
+                match &value.value {
+                    Boolean(b) => {
+                        let col_idx = table_object.map.get(&cols[idx]).unwrap();
+                        data_item[*col_idx] = DataItem::Bool(*b);
+                    },
+                    Number(n, _) => {
+                        let number_value = parse_number(n)?;
+                        let col_idx = table_object.map.get(&cols[idx]).unwrap();
+                        data_item[*col_idx] = number_value;
+                    },
+                    SingleQuotedString(s) => {
+                        let col_idx = table_object.map.get(&cols[idx]).unwrap();
+                        let col_type = table_object.cols.1[*col_idx].clone();
+                        match col_type {
+                            ColType::Chars(size) => {
+                                data_item[*col_idx] = DataItem::Chars{len: size as u64, value: s.clone()};
+                            },
+                            _ => {
+                                return Err(RsqlError::ExecutionError(format!("Unsupported insert value type: {:?}", value.value)))
+                            },
+                        }
+                    },
+                    _ => {
+                        return Err(RsqlError::ExecutionError(format!("Unsupported insert value type: {:?}", value.value)))
+                    },
+                }
+            },
+            _ => {
+                return Err(RsqlError::ExecutionError(format!("Insert value must be a constant expression")))
+            }
+        }
+    }
+    Ok(data_item)
+}
