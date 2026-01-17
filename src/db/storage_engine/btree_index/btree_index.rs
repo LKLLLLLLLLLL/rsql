@@ -503,3 +503,208 @@ impl BTreeIndex {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::storage_engine::consist_storage::ConsistStorageEngine;
+    use crate::db::data_item::DataItem;
+
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_btree_basic_insert_find_exists() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("test_btree_basic.db");
+        let file_path_str = file_path.to_str().unwrap();
+
+        let tnx = 1u64;
+        let mut storage = ConsistStorageEngine::new(file_path_str, 1).unwrap();
+        let mut idx = BTreeIndex::new(&mut storage, tnx).unwrap();
+
+        // insert several entries including duplicate keys
+        idx.insert_entry(tnx, DataItem::Integer(10), 100, 1, &mut storage).unwrap();
+        idx.insert_entry(tnx, DataItem::Integer(5), 50, 1, &mut storage).unwrap();
+        idx.insert_entry(tnx, DataItem::Integer(10), 101, 2, &mut storage).unwrap();
+        idx.insert_entry(tnx, DataItem::Integer(15), 150, 3, &mut storage).unwrap();
+
+        // check exists
+        assert!(idx.check_exists(DataItem::Integer(10), &storage).unwrap());
+        assert!(idx.check_exists(DataItem::Integer(5), &storage).unwrap());
+        assert!(!idx.check_exists(DataItem::Integer(999), &storage).unwrap());
+
+        // find_entry should return one matching entry for key 10
+        let found = idx.find_entry(DataItem::Integer(10), &storage).unwrap();
+        assert!(found.is_some());
+    }
+
+    #[test]
+    fn test_btree_range_traverse_update_delete() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("test_btree_ops.db");
+        let file_path_str = file_path.to_str().unwrap();
+
+        let tnx = 1u64;
+        let mut storage = ConsistStorageEngine::new(file_path_str, 2).unwrap();
+        let mut idx = BTreeIndex::new(&mut storage, tnx).unwrap();
+
+        // insert values 1..=10, with duplicates for even numbers
+        for i in 1..=10u64 {
+            idx.insert_entry(tnx, DataItem::Integer(i as i64), i * 10, i, &mut storage).unwrap();
+            if i % 2 == 0 {
+                // duplicate
+                idx.insert_entry(tnx, DataItem::Integer(i as i64), i * 10 + 1, i + 100, &mut storage).unwrap();
+            }
+        }
+
+        // traverse all entries and count
+        let all: Vec<_> = idx.traverse_all_entries(&storage).unwrap().map(|r| r.unwrap()).collect();
+        // there should be 10 + 5 duplicates = 15 entries
+        assert_eq!(all.len(), 15);
+
+        // range iterator: from 3 to 6 (inclusive) -> keys 3,4,4,5,6,6
+        let start = Some(DataItem::Integer(3));
+        let end = Some(DataItem::Integer(6));
+        let mut it = idx.find_range_entry(start, end, &storage).unwrap();
+        let mut got = Vec::new();
+        while let Some(res) = it.next() {
+            let pair = res.unwrap();
+            got.push(pair);
+        }
+        // expected entries: keys 3,4(2 entries),5,6(2 entries) => total 6
+        assert_eq!(got.len(), 6);
+
+        // update one specific duplicate (key=4) change child page and offset
+        let key4 = DataItem::Integer(4);
+        // pick an existing duplicate entry to update: old child_page = 41, old_offset = 104
+        let updated = idx.update_entry(tnx, key4.clone(), 41, 104, 9999, 999, &mut storage).unwrap();
+        assert!(updated);
+
+        // verify the updated entry is present and old one gone
+        // traverse and look for new pointer
+        let all_after: Vec<_> = idx.traverse_all_entries(&storage).unwrap().map(|r| r.unwrap()).collect();
+        assert!(all_after.contains(&(9999u64, 999u64)));
+        assert!(!all_after.contains(&(41u64, 104u64)));
+
+        // delete the updated entry
+        let deleted = idx.delete_entry(tnx, key4.clone(), 9999, 999, &mut storage).unwrap();
+        assert!(deleted);
+
+        // ensure duplicate (other copy) of key 4 still exists (child_page 40, offset 4 expected)
+        let exists_still = idx.check_exists(key4.clone(), &storage).unwrap();
+        assert!(exists_still);
+    }
+
+    #[test]
+    fn test_btree_traverse_order_and_duplicates() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("test_btree_traverse.db");
+        let file_path_str = file_path.to_str().unwrap();
+
+        let tnx = 1u64;
+        let mut storage = ConsistStorageEngine::new(file_path_str, 1).unwrap();
+        let mut idx = BTreeIndex::new(&mut storage, tnx).unwrap();
+
+        // insert unsorted keys with duplicates, use child_page_num to reflect key
+        idx.insert_entry(tnx, DataItem::Integer(10), 100, 10, &mut storage).unwrap();
+        idx.insert_entry(tnx, DataItem::Integer(5), 50, 5, &mut storage).unwrap();
+        idx.insert_entry(tnx, DataItem::Integer(10), 101, 11, &mut storage).unwrap();
+        idx.insert_entry(tnx, DataItem::Integer(15), 150, 15, &mut storage).unwrap();
+
+        let all: Vec<_> = idx.traverse_all_entries(&storage).unwrap().map(|r| r.unwrap()).collect();
+        // Expect order: key 5, key 10 (first), key 10 (second), key 15
+        let expected = vec![(50u64,5u64),(100u64,10u64),(101u64,11u64),(150u64,15u64)];
+        assert_eq!(all, expected);
+    }
+
+    #[test]
+    fn test_btree_root_split_and_many_inserts() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("test_btree_root_split.db");
+        let file_path_str = file_path.to_str().unwrap();
+
+        let tnx = 1u64;
+        // small page size parameter to encourage splits
+        let mut storage = ConsistStorageEngine::new(file_path_str, 2).unwrap();
+        let mut idx = BTreeIndex::new(&mut storage, tnx).unwrap();
+
+
+        // Insert many keys to force splits and internal node creations
+        let mut inserted = Vec::new();
+        for i in 1..=60u64 {
+            let key = DataItem::Integer(i as i64);
+            let child = i * 10;
+            let offset = i;
+            idx.insert_entry(tnx, key.clone(), child, offset, &mut storage).unwrap();
+            inserted.push((i, child, offset));
+        }
+
+        // After lots of inserts, ensure entries are present (structure may
+        // or may not allocate a new root page depending on split policy).
+
+        // Check that all inserted entries can be found
+        for (i, child, offset) in inserted {
+            let key = DataItem::Integer(i as i64);
+            let found = idx.find_entry(key, &storage).unwrap();
+            assert!(found.is_some());
+            let (fpage, foff) = found.unwrap();
+            // child/page numbers used may correspond to first matching duplicate,
+            // but we used unique child values so we can assert equality
+            assert_eq!(fpage, child);
+            assert_eq!(foff, offset);
+        }
+    }
+
+    #[test]
+    fn test_btree_range_iterator_with_none_start_or_end() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("test_btree_range_none.db");
+        let file_path_str = file_path.to_str().unwrap();
+
+        let tnx = 1u64;
+        let mut storage = ConsistStorageEngine::new(file_path_str, 2).unwrap();
+        let mut idx = BTreeIndex::new(&mut storage, tnx).unwrap();
+
+        // insert 1..=10 with duplicates on evens
+        for i in 1..=10u64 {
+            idx.insert_entry(tnx, DataItem::Integer(i as i64), i*100, i, &mut storage).unwrap();
+            if i % 2 == 0 {
+                idx.insert_entry(tnx, DataItem::Integer(i as i64), i*100+1, i+100, &mut storage).unwrap();
+            }
+        }
+
+        // start = None, end = Some(3) -> should return keys <= 3
+        let mut it1 = idx.find_range_entry(None, Some(DataItem::Integer(3)), &storage).unwrap();
+        let res1: Vec<_> = it1.by_ref().map(|r| r.unwrap()).collect();
+        // keys: 1,2,2,3 -> 4 entries
+        assert_eq!(res1.len(), 4);
+
+        // start = Some(8), end = None -> should return keys >=8 to end
+        let mut it2 = idx.find_range_entry(Some(DataItem::Integer(8)), None, &storage).unwrap();
+        let res2: Vec<_> = it2.by_ref().map(|r| r.unwrap()).collect();
+        // keys 8,8,9,10,10 => 5 entries
+        assert_eq!(res2.len(), 5);
+    }
+
+    #[test]
+    fn test_update_delete_nonexistent_return_false() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("test_btree_update_delete_nonexist.db");
+        let file_path_str = file_path.to_str().unwrap();
+
+        let tnx = 1u64;
+        let mut storage = ConsistStorageEngine::new(file_path_str, 1).unwrap();
+        let mut idx = BTreeIndex::new(&mut storage, tnx).unwrap();
+
+        // insert a single key
+        idx.insert_entry(tnx, DataItem::Integer(1), 10, 1, &mut storage).unwrap();
+
+        // try updating a non-existing key
+        let updated = idx.update_entry(tnx, DataItem::Integer(999), 1, 1, 2, 2, &mut storage).unwrap();
+        assert!(!updated);
+
+        // try deleting a non-existing pointer for an existing key
+        let deleted = idx.delete_entry(tnx, DataItem::Integer(1), 9999, 9999, &mut storage).unwrap();
+        assert!(!deleted);
+    }
+}

@@ -404,19 +404,12 @@ mod tests {
     use std::fs;
     use std::path::Path;
     use std::sync::Mutex;
-    use crate::db::storage_engine::wal::WAL;
+    use tempfile::tempdir;
 
     static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     fn setup_storage(db_path: &str) -> ConsistStorageEngine {
-        let wal_path = Path::new(crate::config::DB_DIR).join("wal.log");
         if Path::new(db_path).exists() { fs::remove_file(db_path).unwrap(); }
-        
-        // Ensure data directory exists
-        if !Path::new(crate::config::DB_DIR).exists() {
-            fs::create_dir_all(crate::config::DB_DIR).unwrap();
-        }
-
         ConsistStorageEngine::new(db_path, 1).unwrap()
     }
 
@@ -448,8 +441,10 @@ mod tests {
     #[test]
     fn test_entry_alloc_free() {
         let _guard = TEST_LOCK.lock().unwrap();
-        let db_path = "./data/test_entry.db";
-        let mut storage = setup_storage(db_path);
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test_entry.db");
+        let db_path_str = db_path.to_str().unwrap();
+        let mut storage = setup_storage(db_path_str);
         let tnx_id = 1;
 
         // Create page 0 for allocator metadata
@@ -475,14 +470,16 @@ mod tests {
             allocator.free_entry(tnx_id, page_idx, offset, &mut storage).unwrap();
         }
 
-        cleanup(db_path);
+        cleanup(db_path_str);
     }
 
     #[test]
     fn test_heap_alloc_free() {
         let _guard = TEST_LOCK.lock().unwrap();
-        let db_path = "./data/test_heap.db";
-        let mut storage = setup_storage(db_path);
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test_heap.db");
+        let db_path_str = db_path.to_str().unwrap();
+        let mut storage = setup_storage(db_path_str);
         let tnx_id = 1;
 
         storage.new_page(tnx_id).unwrap();
@@ -500,14 +497,16 @@ mod tests {
         allocator.free_heap(tnx_id, p1, o1, &mut storage).unwrap();
         allocator.free_heap(tnx_id, p2, o2, &mut storage).unwrap();
 
-        cleanup(db_path);
+        cleanup(db_path_str);
     }
 
     #[test]
     fn test_heap_merge() {
         let _guard = TEST_LOCK.lock().unwrap();
-        let db_path = "./data/test_merge.db";
-        let mut storage = setup_storage(db_path);
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test_merge.db");
+        let db_path_str = db_path.to_str().unwrap();
+        let mut storage = setup_storage(db_path_str);
         let tnx_id = 1;
 
         storage.new_page(tnx_id).unwrap();
@@ -539,6 +538,6 @@ mod tests {
             Err(_) => {},
         };
 
-        cleanup(db_path);
+        cleanup(db_path_str);
     }
 }

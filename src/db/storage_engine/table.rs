@@ -1,6 +1,7 @@
 use std::sync::OnceLock;
 use std::sync::Mutex;
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
 use super::storage::Page;
 use crate::config;
@@ -154,8 +155,9 @@ impl Table {
         }
         guard.insert(id);
         // 2. open table file
-        let path = config::DB_DIR.to_string() + "/" + &id.to_string() + ".dbt"; // .dbt for database table
-        let storage = ConsistStorageEngine::new(&path, id)?;
+        let path = get_table_path(id);
+        let path_str = path.to_str().unwrap();
+        let storage = ConsistStorageEngine::new(path_str, id)?;
         if let None = storage.max_page_index() {
             return Err(RsqlError::StorageError(format!("Table {id} file is empty, maybe corrupted")));
         };
@@ -188,7 +190,7 @@ impl Table {
         };
         // 5. check if indexes compatible with schema
         if indexes.len() != schema.get_columns().iter().filter(|col| col.index).count() {
-            panic!("Incompatible index count between schema and table file {}", path);
+            panic!("Incompatible index count between schema and table file {:?}", path);
         }
         // 6. construct allocator
         let allocator = Allocator::from(&header_page, offset as u64)?;
@@ -210,8 +212,9 @@ impl Table {
         }
         guard.insert(id);
         // create table file
-        let path = config::DB_DIR.to_string() + "/" + &id.to_string() + ".dbt"; // .dbt for database table
-        let mut storage = ConsistStorageEngine::new(&path, id)?;
+        let path = get_table_path(id);
+        let path_str = path.to_str().unwrap();
+        let mut storage = ConsistStorageEngine::new(path_str, id)?;
         // 1. collect indexes info
         let mut index_cols = HashSet::new();
         for col in schema.get_columns() {
@@ -442,6 +445,16 @@ impl Table {
     }
 }
 
+/// Get the file path for a table given its ID
+/// For tests, use temp directory
+fn get_table_path(id: u64) -> PathBuf {
+    if cfg!(test) {
+        std::env::temp_dir().join(format!("rsql_test_table_{}.dbt", id))
+    } else {
+        std::path::Path::new(config::DB_DIR).join(format!("{}.dbt", id))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -481,14 +494,12 @@ mod tests {
 
     #[test]
     fn test_table_create_and_open() {
-        let db_dir = config::DB_DIR;
-        let _ = fs::create_dir_all(db_dir);
         let table_id = 999;
         let schema = setup_schema();
         let tnx_id = 1;
 
         // cleanup if exists
-        let path = format!("{}/{}.dbt", db_dir, table_id);
+        let path = get_table_path(table_id);
         let _ = fs::remove_file(&path);
 
         {
@@ -509,8 +520,6 @@ mod tests {
 
     #[test]
     fn test_table_crud_operations() {
-        let db_dir = config::DB_DIR;
-        let _ = fs::create_dir_all(db_dir);
         let table_id = 2000;
         let columns = vec![
                 TableColumn {
@@ -532,7 +541,7 @@ mod tests {
             ];
         let schema = TableSchema::new(columns).unwrap();
         let tnx_id = 1;
-        let path = format!("{}/{}.dbt", db_dir, table_id);
+        let path = get_table_path(table_id);
         let _ = fs::remove_file(&path);
 
         let mut table = Table::create(table_id, schema, tnx_id).expect("Failed to create table");
@@ -594,12 +603,10 @@ mod tests {
 
     #[test]
     fn test_table_scans() {
-        let db_dir = config::DB_DIR;
-        let _ = fs::create_dir_all(db_dir);
         let table_id = 2001;
         let schema = setup_schema();
         let tnx_id = 1;
-        let path = format!("{}/{}.dbt", db_dir, table_id);
+        let path = get_table_path(table_id);
         let _ = fs::remove_file(&path);
 
         let mut table = Table::create(table_id, schema, tnx_id).expect("Failed to create table");
@@ -635,12 +642,10 @@ mod tests {
 
     #[test]
     fn test_get_row_by_pk_empty() {
-        let db_dir = config::DB_DIR;
-        let _ = fs::create_dir_all(db_dir);
         let table_id = 1000;
         let schema = setup_schema();
         let tnx_id = 1;
-        let path = format!("{}/{}.dbt", db_dir, table_id);
+        let path = get_table_path(table_id);
         let _ = fs::remove_file(&path);
 
         let table = Table::create(table_id, schema, tnx_id).expect("Failed to create table");
@@ -654,12 +659,10 @@ mod tests {
 
     #[test]
     fn test_get_all_rows_empty() {
-        let db_dir = config::DB_DIR;
-        let _ = fs::create_dir_all(db_dir);
         let table_id = 1001;
         let schema = setup_schema();
         let tnx_id = 1;
-        let path = format!("{}/{}.dbt", db_dir, table_id);
+        let path = get_table_path(table_id);
         let _ = fs::remove_file(&path);
 
         let table = Table::create(table_id, schema, tnx_id).expect("Failed to create table");
