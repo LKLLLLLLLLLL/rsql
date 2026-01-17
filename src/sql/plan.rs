@@ -139,7 +139,9 @@ pub enum PlanNode {
 
 #[derive(Debug)]
 pub enum PlanItem {
-    Statement(PlanNode),
+    DDL(PlanNode),
+    DML(PlanNode),
+    DCL(PlanNode),
     Begin,
     Commit,
     Rollback,
@@ -176,7 +178,7 @@ impl Plan {
             if user_name.is_empty() {
                 return Err(RsqlError::ParserError("CREATE USER missing user name".to_string()));
             }
-            items.push(PlanItem::Statement(PlanNode::CreateUser { user_name }));
+            items.push(PlanItem::DCL(PlanNode::CreateUser { user_name }));
             return Ok(Plan { items });
         } else if lower.starts_with("drop user") {
             // Parse: DROP USER [IF EXISTS] <user_name>[;]
@@ -196,7 +198,7 @@ impl Plan {
             if user_name.is_empty() {
                 return Err(RsqlError::ParserError("DROP USER missing user name".to_string()));
             }
-            items.push(PlanItem::Statement(PlanNode::DropUser { user_name, if_exists }));
+            items.push(PlanItem::DCL(PlanNode::DropUser { user_name, if_exists }));
             return Ok(Plan { items });
         }
 
@@ -210,13 +212,38 @@ impl Plan {
         }
 
         for stmt in ast.iter() {
+            use sqlparser::ast::Statement::*;
             match stmt {
                 StartTransaction { .. } => items.push(PlanItem::Begin),
                 Commit { .. } => items.push(PlanItem::Commit),
                 Rollback { .. } => items.push(PlanItem::Rollback),
+                // DDL
+                CreateTable { .. }
+                | Drop { object_type: ObjectType::Table, .. }
+                | AlterTable { .. }
+                | CreateIndex { .. } => {
+                    let node = Self::from_ast(stmt)?;
+                    items.push(PlanItem::DDL(node));
+                }
+                // DML
+                Insert { .. }
+                | Update { .. }
+                | Delete { .. }
+                | Query(_) => {
+                    let node = Self::from_ast(stmt)?;
+                    items.push(PlanItem::DML(node));
+                }
+                // DCL
+                CreateUser { .. }
+                | Drop { object_type: ObjectType::User, .. } => {
+                    let node = Self::from_ast(stmt)?;
+                    items.push(PlanItem::DCL(node));
+                }
+                // Fallback for anything else
                 _ => {
                     let node = Self::from_ast(stmt)?;
-                    items.push(PlanItem::Statement(node));
+                    // Default: treat as DML if not matched above
+                    items.push(PlanItem::DML(node));
                 }
             }
         }
