@@ -211,4 +211,10 @@ impl TableSchema {
         };
         sizes
     }
+    pub fn get_indexed_col(&self) -> Vec<String> {
+        self.columns.iter()
+            .filter(|col| col.index)
+            .map(|col| col.name.clone())
+            .collect()
+    }
 }

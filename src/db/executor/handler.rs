@@ -1,7 +1,8 @@
 use super::super::errors::{RsqlResult, RsqlError};
 use super::super::sql_parser::plan::{PlanNode, JoinType};
 use crate::db::data_item::{DataItem};
-use crate::db::table::{Table, TableSchema, ColType, TableColumn};
+use crate::db::table_schema::{TableSchema, ColType, TableColumn};
+use crate::db::storage_engine::table::{Table};
 use self::ExecutionResult::{Query, Mutation, Ddl, TableObj, TableWithFilter, TempTable};
 use tracing::info;
 use std::collections::HashMap;
@@ -66,7 +67,7 @@ pub fn execute_plan_node(node: &PlanNode) -> RsqlResult<ExecutionResult> {
                     pk_col_type = col.data_type.clone();
                 }
             }
-            let indexed_cols = table_obj.get_indexed_col();
+            let indexed_cols = table_obj.get_schema().get_indexed_col();
             let table_object = TableObject {
                 table_obj,
                 map,
@@ -80,16 +81,8 @@ pub fn execute_plan_node(node: &PlanNode) -> RsqlResult<ExecutionResult> {
             info!("Implement Filter execution");
             let input_result = execute_plan_node(input)?;
             if let TableObj(table_obj) = input_result {
-                //================ todo: handle predicate ====================
-                let rows_iter = table_obj.table_obj.get_all_rows()?;
-                let mut rows: Vec<Vec<DataItem>> = vec![];
-                for row in rows_iter {
-                    match row {
-                        Ok(r) => rows.push(r),
-                        Err(e) => return Err(e),
-                    }
-                }
-                Ok(TableWithFilter { table_obj, rows }) // get temp query result after filter
+                let filter_result = handle_table_obj_filter_expr(&table_obj, predicate)?;
+                Ok(TableWithFilter { table_obj, rows: filter_result }) // get temp query result after filter
             }else {
                 if let TempTable{cols, rows, table_name} = input_result {
                     //================ todo: handle predicate ====================
@@ -331,7 +324,39 @@ fn handle_table_obj_filter_expr(table_obj: &TableObject, predicate: &Expr) -> Rs
                                     }
                                 },
                                 SingleQuotedString(s) => {
-                                    todo!("Implement SingleQuotedString filter expression")
+                                    let col = ident.value.clone();
+                                    let col_idx = table_obj.map.get(&col).unwrap();
+                                    let col_type = table_obj.cols.1[*col_idx].clone();
+                                    let string_value = match col_type {
+                                        ColType::Chars(size) => DataItem::Chars{len: size as u64, value: s.clone()},
+                                        _ => return Err(RsqlError::ExecutionError(format!("Unsupported char type on table {col}")))
+                                    };
+                                    if col == table_obj.pk_col.0 {
+                                        let row = table_obj.table_obj.get_row_by_pk(&string_value)?;
+                                        if let Some(r) = row {
+                                            Ok(vec![r])
+                                        }else {
+                                            Ok(vec![])
+                                        }
+                                    }else if table_obj.indexed_cols.contains(&col) {
+                                        let rows_iter = table_obj.table_obj.get_rows_by_range_indexed_col(&col, &string_value, &string_value)?;
+                                        let mut rows = vec![];
+                                        for row in rows_iter {
+                                            let row = row?;
+                                            rows.push(row);
+                                        }
+                                        Ok(rows)
+                                    }else {
+                                        let rows_iter = table_obj.table_obj.get_all_rows()?;
+                                        let mut rows = vec![];
+                                        for row in rows_iter {
+                                            let row = row?;
+                                            if row[*col_idx] == string_value {
+                                                rows.push(row);
+                                            }
+                                        }
+                                        Ok(rows)
+                                    }
                                 },
                                 _ => {
                                     Err(RsqlError::ExecutionError(format!("Unsupported filter expression: {:?}", predicate)))
@@ -339,7 +364,19 @@ fn handle_table_obj_filter_expr(table_obj: &TableObject, predicate: &Expr) -> Rs
                             }
                         },
                         (Expr::Identifier(left_ident), Expr::Identifier(right_ident)) => {
-                            todo!("Implement Identifier filter expression")
+                            let left_col = left_ident.value.clone();
+                            let left_col_idx = table_obj.map.get(&left_col).unwrap();
+                            let right_col = right_ident.value.clone();
+                            let right_col_idx = table_obj.map.get(&right_col).unwrap();
+                            let rows_iter = table_obj.table_obj.get_all_rows()?;
+                            let mut rows = vec![];
+                            for row in rows_iter {
+                                let row = row?;
+                                if row[*left_col_idx] == row[*right_col_idx] {
+                                    rows.push(row);
+                                }
+                            }
+                            Ok(rows)
                         },
                         _ => {
                             Err(RsqlError::ExecutionError(format!("Unsupported filter expression: {:?}", predicate)))
@@ -347,16 +384,224 @@ fn handle_table_obj_filter_expr(table_obj: &TableObject, predicate: &Expr) -> Rs
                     }
                 },
                 BinaryOperator::LtEq => {
-                    todo!("Implement LtEq filter expression")
+                    match (&**left, &**right) {
+                        (Expr::Identifier(ident), Expr::Value(value)) => {
+                            match &value.value {
+                                Number(n, _) => {
+                                    let col = ident.value.clone();
+                                    let col_idx = table_obj.map.get(&col).unwrap();
+                                    let number_value = parse_number(n)?;
+                                    if table_obj.indexed_cols.contains(&col) {
+                                        let col_min = DataItem::Integer(-2147483647);
+                                        let rows_iter = table_obj.table_obj.get_rows_by_range_indexed_col(&col, &col_min, &number_value)?;
+                                        let mut rows = vec![];
+                                        for row in rows_iter {
+                                            let row = row?;
+                                            rows.push(row);
+                                        }
+                                        Ok(rows)
+                                    }else {
+                                        let rows_iter = table_obj.table_obj.get_all_rows()?;
+                                        let mut rows = vec![];
+                                        for row in rows_iter {
+                                            let row = row?;
+                                            if row[*col_idx] <= number_value {
+                                                rows.push(row);
+                                            }
+                                        }
+                                        Ok(rows)
+                                    }
+                                },
+                                _ => {
+                                    Err(RsqlError::ExecutionError(format!("Unsupported filter expression: {:?}", predicate)))
+                                }
+                            }
+                        },
+                        (Expr::Identifier(left_ident), Expr::Identifier(right_ident)) => {
+                            let left_col = left_ident.value.clone();
+                            let left_col_idx = table_obj.map.get(&left_col).unwrap();
+                            let right_col = right_ident.value.clone();
+                            let right_col_idx = table_obj.map.get(&right_col).unwrap();
+                            let rows_iter = table_obj.table_obj.get_all_rows()?;
+                            let mut rows = vec![];
+                            for row in rows_iter {
+                                let row = row?;
+                                if row[*left_col_idx] <= row[*right_col_idx] {
+                                    rows.push(row);
+                                }
+                            }
+                            Ok(rows)
+                        },
+                        _ => {
+                            Err(RsqlError::ExecutionError(format!("Unsupported filter expression: {:?}", predicate)))
+                        }
+                    }
                 },
                 BinaryOperator::GtEq => {
-                    todo!("Implement GtEq filter expression")
+                    match (&**left, &**right) {
+                        (Expr::Identifier(ident), Expr::Value(value)) => {
+                            match &value.value {
+                                Number(n, _) =>{
+                                    let col = ident.value.clone();
+                                    let col_idx = table_obj.map.get(&col).unwrap();
+                                    let number_value = parse_number(n)?;
+                                    if table_obj.indexed_cols.contains(&col) {
+                                        let col_max = DataItem::Integer(2147483647);
+                                        let rows_iter = table_obj.table_obj.get_rows_by_range_indexed_col(&col, &number_value, &col_max)?;
+                                        let mut rows = vec![];
+                                        for row in rows_iter {
+                                            let row = row?;
+                                            rows.push(row);
+                                        }
+                                        Ok(rows)
+                                    }else {
+                                        let rows_iter = table_obj.table_obj.get_all_rows()?;
+                                        let mut rows = vec![];
+                                        for row in rows_iter {
+                                            let row = row?;
+                                            if row[*col_idx] >= number_value {
+                                                rows.push(row);
+                                            }
+                                        }
+                                        Ok(rows)
+                                    }
+                                },
+                                _ => {
+                                    Err(RsqlError::ExecutionError(format!("Unsupported filter expression: {:?}", predicate)))
+                                }
+                            }
+                        },
+                        (Expr::Identifier(left_ident), Expr::Identifier(right_ident)) => {
+                            let left_col = left_ident.value.clone();
+                            let left_col_idx = table_obj.map.get(&left_col).unwrap();
+                            let right_col = right_ident.value.clone();
+                            let right_col_idx = table_obj.map.get(&right_col).unwrap();
+                            let rows_iter = table_obj.table_obj.get_all_rows()?;
+                            let mut rows = vec![];
+                            for row in rows_iter {
+                                let row = row?;
+                                if row[*left_col_idx] >= row[*right_col_idx] {
+                                    rows.push(row);
+                                }
+                            }
+                            Ok(rows)
+                        },
+                        _ => {
+                            Err(RsqlError::ExecutionError(format!("Unsupported filter expression: {:?}", predicate)))
+                        }
+                    }
                 },
                 BinaryOperator::Lt => {
-                    todo!("Implement Lt filter expression")
+                    match (&**left, &**right) {
+                        (Expr::Identifier(ident), Expr::Value(value)) => {
+                            match &value.value {
+                                Number(n, _) => {
+                                    let col = ident.value.clone();
+                                    let col_idx = table_obj.map.get(&col).unwrap();
+                                    let number_value = parse_number(n)?;
+                                    if table_obj.indexed_cols.contains(&col) {
+                                        let col_min = DataItem::Integer(-2147483647);
+                                        let rows_iter = table_obj.table_obj.get_rows_by_range_indexed_col(&col, &col_min, &number_value)?;
+                                        let mut rows = vec![];
+                                        for row in rows_iter {
+                                            let row = row?;
+                                            if row[*col_idx] < number_value {
+                                                rows.push(row);
+                                            }
+                                        }
+                                        Ok(rows)
+                                    }else {
+                                        let rows_iter = table_obj.table_obj.get_all_rows()?;
+                                        let mut rows = vec![];
+                                        for row in rows_iter {
+                                            let row = row?;
+                                            if row[*col_idx] < number_value {
+                                                rows.push(row);
+                                            }
+                                        }
+                                        Ok(rows)
+                                    }
+                                },
+                                _ => {
+                                    Err(RsqlError::ExecutionError(format!("Unsupported filter expression: {:?}", predicate)))
+                                }
+                            }
+                        },
+                        (Expr::Identifier(left_ident), Expr::Identifier(right_ident)) => {
+                            let left_col = left_ident.value.clone();
+                            let left_col_idx = table_obj.map.get(&left_col).unwrap();
+                            let right_col = right_ident.value.clone();
+                            let right_col_idx = table_obj.map.get(&right_col).unwrap();
+                            let rows_iter = table_obj.table_obj.get_all_rows()?;
+                            let mut rows = vec![];
+                            for row in rows_iter {
+                                let row = row?;
+                                if row[*left_col_idx] < row[*right_col_idx] {
+                                    rows.push(row);
+                                }
+                            }
+                            Ok(rows)
+                        },
+                        _ => {
+                            Err(RsqlError::ExecutionError(format!("Unsupported filter expression: {:?}", predicate)))
+                        }
+                    }
                 },
                 BinaryOperator::Gt => {
-                    todo!("Implement Gt filter expression")
+                    match (&**left, &**right) {
+                        (Expr::Identifier(ident), Expr::Value(value)) => {
+                            match &value.value {
+                                Number(n, _) => {
+                                    let col = ident.value.clone();
+                                    let col_idx = table_obj.map.get(&col).unwrap();
+                                    let number_value = parse_number(n)?;
+                                    if table_obj.indexed_cols.contains(&col) {
+                                        let col_max = DataItem::Integer(2147483647);
+                                        let rows_iter = table_obj.table_obj.get_rows_by_range_indexed_col(&col, &number_value, &col_max)?;
+                                        let mut rows = vec![];
+                                        for row in rows_iter {
+                                            let row = row?;
+                                            if row[*col_idx] > number_value {
+                                                rows.push(row);
+                                            }
+                                        }
+                                        Ok(rows)
+                                    }else {
+                                        let rows_iter = table_obj.table_obj.get_all_rows()?;
+                                        let mut rows = vec![];
+                                        for row in rows_iter {
+                                            let row = row?;
+                                            if row[*col_idx] > number_value {
+                                                rows.push(row);
+                                            }
+                                        }
+                                        Ok(rows)
+                                    }
+                                },
+                                _ => {
+                                    Err(RsqlError::ExecutionError(format!("Unsupported filter expression: {:?}", predicate)))
+                                }
+                            }
+                        },
+                        (Expr::Identifier(left_ident), Expr::Identifier(right_ident)) => {
+                            let left_col = left_ident.value.clone();
+                            let left_col_idx = table_obj.map.get(&left_col).unwrap();
+                            let right_col = right_ident.value.clone();
+                            let right_col_idx = table_obj.map.get(&right_col).unwrap();
+                            let rows_iter = table_obj.table_obj.get_all_rows()?;
+                            let mut rows = vec![];
+                            for row in rows_iter {
+                                let row = row?;
+                                if row[*left_col_idx] > row[*right_col_idx] {
+                                    rows.push(row);
+                                }
+                            }
+                            Ok(rows)
+                        },
+                        _ => {
+                            Err(RsqlError::ExecutionError(format!("Unsupported filter expression: {:?}", predicate)))
+                        }
+                    }
                 },
                 _ => {
                     Err(RsqlError::ExecutionError(format!("Unsupported filter expression: {:?}", predicate)))

@@ -3,7 +3,7 @@ use super::super::sql_parser::{Plan, plan};
 use super::handler::execute_plan_node;
 use tracing::info;
 
-pub fn execute(sql: &str) -> RsqlResult<()> {
+pub fn execute(sql: &str, connection_id: u64) -> RsqlResult<()> {
     info!("Executing SQL: {}", sql);
     
     info!("Parsing SQL...");
