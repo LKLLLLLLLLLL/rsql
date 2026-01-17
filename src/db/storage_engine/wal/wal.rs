@@ -106,6 +106,8 @@ impl WAL {
     /// - append_page(table_id) -> new_page_id: function to append a new page to storage, returns new page_id
     /// - trunc_page(table_id): function to truncate the last page from storage
     /// - max_page_idx(table_id) -> max_page_id: function to get the current max page index in storage
+    /// Returns:
+    /// - RsqlResult<u64>: The maximum transaction ID found in the log
     pub fn recovery_with_instance(
         wal: Arc<WAL>,
         write_page: &mut impl FnMut(u64, u64, Vec<u8>) -> RsqlResult<()>,
@@ -113,7 +115,7 @@ impl WAL {
         append_page: &mut impl FnMut(u64) -> RsqlResult<u64>,
         trunc_page: &mut impl FnMut(u64) -> RsqlResult<()>,
         max_page_idx: &mut impl FnMut(u64) -> RsqlResult<u64>,
-    ) -> RsqlResult<()> {
+    ) -> RsqlResult<u64> {
         info!("Starting WAL recovery");
         let buf = {
             let mut file = wal.log_file.lock().unwrap();
@@ -132,7 +134,7 @@ impl WAL {
         if entrys.is_empty() {
             HAS_RECOVERED.get_or_init(|| ());
             info!("WAL recovery: no entries to process");
-            return Ok(());
+            return Ok(0);
         }
         // 2. find nearest checkpoint
         let mut checkpoint_index = None;
@@ -248,18 +250,33 @@ impl WAL {
                 _ => {},
             }
         }
+        // 6. find max tnx id
+        let max_tnx_id = entrys.iter().filter_map(|entry| {
+            match entry {
+                WALEntry::OpenTnx { tnx_id }
+                | WALEntry::CommitTnx { tnx_id }
+                | WALEntry::RollbackTnx { tnx_id }
+                | WALEntry::NewPage { tnx_id, .. }
+                | WALEntry::UpdatePage { tnx_id, .. }
+                | WALEntry::DeletePage { tnx_id, .. } => Some(*tnx_id),
+                _ => None,
+            }
+        }).max().unwrap_or(0);
         info!("WAL recovery completed, {} operations applied", recover_num);
         HAS_RECOVERED.get_or_init(|| ());
-        Ok(())
+        Ok(max_tnx_id)
     }
 
+    /// Recovery the database to a consistent state using the WAL log.
+    /// Returns:
+    /// - RsqlResult<u64>: The maximum transaction ID found in the log
     pub fn recovery(
         write_page: &mut impl FnMut(u64, u64, Vec<u8>) -> RsqlResult<()>,
         update_page: &mut impl FnMut(u64, u64, u64, u64, Vec<u8>) -> RsqlResult<()>,
         append_page: &mut impl FnMut(u64) -> RsqlResult<u64>,
         trunc_page: &mut impl FnMut(u64) -> RsqlResult<()>,
         max_page_idx: &mut impl FnMut(u64) -> RsqlResult<u64>,
-    ) -> RsqlResult<()> {
+    ) -> RsqlResult<u64> {
         Self::recovery_with_instance(WAL::global(), write_page, update_page, append_page, trunc_page, max_page_idx)
     }
 
