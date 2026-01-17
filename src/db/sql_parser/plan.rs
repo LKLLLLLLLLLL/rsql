@@ -426,10 +426,59 @@ impl Plan {
     // ==================== DDL / INSERT / UPDATE / DELETE ====================
     fn from_ddl_ast(stmt: &Statement) -> RsqlResult<PlanNode> {
         match stmt {
-            Statement::CreateTable(create) => Ok(PlanNode::CreateTable {
-                table_name: create.name.to_string(),
-                columns: create.columns.clone(),
-            }),
+            Statement::CreateTable(create) => {
+                // ========== Validation logic ==========
+                use sqlparser::ast::{ColumnOption, DataType};
+                for col in &create.columns {
+                    let mut has_primary = false;
+                    let mut has_unique = false;
+                    let mut has_not_null = false;
+                    let mut has_null = false;
+                    for opt in &col.options {
+                        match &opt.option {
+                            ColumnOption::PrimaryKey(_) => {
+                                has_primary = true;
+                            }
+                            ColumnOption::Unique(_) => {
+                                has_unique = true;
+                            }
+                            ColumnOption::NotNull => {
+                                has_not_null = true;
+                            }
+                            ColumnOption::Null => {
+                                has_null = true;
+                            }
+                            _ => {}
+                        }
+                    }
+                    // Only when both PRIMARY KEY and NULL are specified, it's an error.
+                    if has_primary && has_null {
+                        return Err(RsqlError::ParserError(format!(
+                            "Column `{}` cannot be both PRIMARY KEY and NULL",
+                            col.name
+                        )));
+                    }
+                    // 2. VARCHAR-like columns cannot be PRIMARY KEY or UNIQUE.
+                    match &col.data_type {
+                        DataType::Varchar(_)
+                        | DataType::Char(_)
+                        | DataType::Character(_)
+                        | DataType::CharacterVarying(_) => {
+                            if has_primary || has_unique {
+                                return Err(RsqlError::ParserError(format!(
+                                    "VARCHAR column `{}` cannot be PRIMARY KEY or UNIQUE",
+                                    col.name
+                                )));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                Ok(PlanNode::CreateTable {
+                    table_name: create.name.to_string(),
+                    columns: create.columns.clone(),
+                })
+            },
             Statement::AlterTable(alter) => {
                 if alter.operations.len() == 1 {
                     Ok(PlanNode::AlterTable { table_name: alter.name.to_string(), operation: alter.operations[0].clone() })
@@ -640,13 +689,14 @@ impl Plan {
                 PlanNode::Projection { exprs, .. } => format!("Projection [{}]", fmt_exprs(exprs)),
                 PlanNode::Join { join_type, on, .. } => format!("Join [{:?}, on: {}]", join_type, on.as_ref().map_or("None".to_string(), |e| format!("{}", e))),
                 PlanNode::CreateTable { table_name, columns } => {
-                    // Enhanced: show column constraints (UNIQUE, NOT NULL, NULL) for each column
+                    // Enhanced: show column constraints (PRIMARY KEY, UNIQUE, NOT NULL, NULL) for each column
                     let mut col_labels = Vec::new();
                     for col in columns {
                         let mut constraints = Vec::new();
                         for opt in &col.options {
-                            use sqlparser::ast::{ColumnOption, ColumnOptionDef};
+                            use sqlparser::ast::ColumnOption;
                             match &opt.option {
+                                ColumnOption::PrimaryKey { .. } => constraints.push("PRIMARY KEY"),
                                 ColumnOption::Unique { .. } => constraints.push("UNIQUE"),
                                 ColumnOption::NotNull => constraints.push("NOT NULL"),
                                 ColumnOption::Null => constraints.push("NULL"),
@@ -830,6 +880,7 @@ impl Plan {
                             use sqlparser::ast::ColumnOption;
                             let opt_path = format!("(PlanNode::CreateTable.columns[{}].options[{}].option)", i, j);
                             let constraint = match &opt.option {
+                                ColumnOption::PrimaryKey { .. } => "PRIMARY KEY",
                                 ColumnOption::Unique { .. } => "UNIQUE",
                                 ColumnOption::NotNull => "NOT NULL",
                                 ColumnOption::Null => "NULL",
@@ -971,7 +1022,7 @@ impl Plan {
                     for col in columns {
                         let mut constraints = Vec::new();
                         for opt in &col.options {
-                            use sqlparser::ast::{ColumnOption, ColumnOptionDef};
+                            use sqlparser::ast::ColumnOption;
                             match &opt.option {
                                 ColumnOption::Unique { .. } => constraints.push("UNIQUE"),
                                 ColumnOption::NotNull => constraints.push("NOT NULL"),
