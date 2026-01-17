@@ -35,14 +35,13 @@ pub fn init_log() {
         .with_level(true);
 
     tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::new("info"))
+        .with(tracing_subscriber::EnvFilter::new(config::LOG_LEVEL))
         .with(stdout_log)
         .with(file_log)
         .init();
 }
 
 pub fn run() {
-    
     init_log();
     server::daemon::daemon();
 }

@@ -4,9 +4,6 @@ use super::entry_utils::{Bitmap, EntryPage};
 use crate::common::RsqlResult;
 use crate::storage::consist_storage::ConsistStorageEngine;
 
-
-const MAGIC_NUMBER: u32 = 0x4c515352; // 'RSQL' in little endian hex
-
 /// Help stuct for page management and allocation
 /// This allocator implement a disk page allocater.
 /// It supports fixed size entry allocation and variable size heap allocation.
