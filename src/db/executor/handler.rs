@@ -239,7 +239,16 @@ pub fn execute_plan_node(node: &PlanNode, tnx_id: u64) -> RsqlResult<ExecutionRe
             }
         }
         PlanNode::Delete { input } => {
-            todo!("Implement Delete execution")
+            let input_result = execute_plan_node(input, tnx_id)?;
+            if let TableWithFilter{mut table_obj, rows} = input_result {
+                for row in rows.iter() {
+                    let pk_col_idx = table_obj.map.get(&table_obj.pk_col.0).unwrap();
+                    table_obj.table_obj.delete_row(&row[*pk_col_idx], tnx_id)?;
+                }
+                Ok(Mutation)
+            }else {
+                Err(RsqlError::ExecutionError(format!("Delete input must be a TableWithFilter")))
+            }
         }
         PlanNode::Update { input, assignments } => {
             todo!("Implement Update execution")
