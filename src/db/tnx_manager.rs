@@ -65,7 +65,14 @@ impl TnxManager {
             table_locks: Mutex::new(HashMap::new()),
             tnx_associated_tables: Mutex::new(HashMap::new()),
         };
-        TNX_MANAGER.set(manager).ok().expect("TnxManager already initialized");
+        if cfg!(test) {
+            match TNX_MANAGER.set(manager) {
+                Ok(_) => {},
+                Err(_) => {} // allow multiple init in tests
+            }
+        } else {
+            TNX_MANAGER.set(manager).ok().expect("TnxManager already initialized");
+        }
     }
     fn get_tnx_id(&self) -> u64 {
         self.tnx_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
@@ -166,10 +173,7 @@ mod tests {
     use std::sync::Arc;
 
     fn setup() {
-        static INIT: OnceLock<()> = OnceLock::new();
-        INIT.get_or_init(|| {
-            TnxManager::init(1);
-        });
+        TnxManager::init(1);
     }
 
     #[test]

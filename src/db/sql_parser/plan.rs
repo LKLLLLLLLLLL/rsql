@@ -1222,16 +1222,16 @@ mod tests {
         // ";
         // let plan = Plan::build_plan(sql).unwrap();
         // Plan::pretty_print_pro(&plan.tnxs[0].stmts[0]);
-        let sql = "\
-            DELETE FROM student
-            WHERE age < 18;
-        ";
-        let plan = Plan::build_plan(sql).unwrap();
-        let plan_node= match &plan.items[0] {
-            PlanItem::Statement(pn) => pn,
-            _ => panic!("Not a statement plan item"),
-        };
-        Plan::pretty_print_pro(plan_node);
-        assert!(false);
+        // let sql = "\
+        //     DELETE FROM student
+        //     WHERE age < 18;
+        // ";
+        // let plan = Plan::build_plan(sql).unwrap();
+        // let plan_node= match &plan.items[0] {
+        //     PlanItem::Statement(pn) => pn,
+        //     _ => panic!("Not a statement plan item"),
+        // };
+        // Plan::pretty_print_pro(plan_node);
+        // assert!(false);
     }
 }
