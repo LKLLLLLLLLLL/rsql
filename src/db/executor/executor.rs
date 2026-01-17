@@ -1,4 +1,4 @@
-use super::super::errors::RsqlResult;
+use super::super::common::RsqlResult;
 use super::super::sql_parser::{Plan, plan};
 use super::handler::execute_plan_node;
 use tracing::info;

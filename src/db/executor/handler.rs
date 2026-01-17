@@ -1,4 +1,4 @@
-use super::super::errors::{RsqlResult, RsqlError};
+use super::super::common::{RsqlResult, RsqlError};
 use super::super::sql_parser::plan::{PlanNode, JoinType};
 use crate::db::data_item::{DataItem};
 use crate::db::table_schema::{TableSchema, ColType, TableColumn};
@@ -49,9 +49,7 @@ pub fn execute_plan_node(node: &PlanNode) -> RsqlResult<ExecutionResult> {
                 index: true,
                 unique: false, // TODO: not implemented
             };
-            let table_obj = Table::from(0, TableSchema {
-                columns: vec![table_column],
-            })?;
+            let table_obj = Table::from(0, TableSchema::new(vec![table_column])?)?;
             let table_schema = table_obj.get_schema();
             // 2. construct TableObject
             let mut map = HashMap::new();
@@ -59,7 +57,7 @@ pub fn execute_plan_node(node: &PlanNode) -> RsqlResult<ExecutionResult> {
             let mut cols_type = vec![];
             let mut pk_col_name = String::new();
             let mut pk_col_type = ColType::Integer;
-            for (idx, col) in table_schema.columns.iter().enumerate() {
+            for (idx, col) in table_schema.get_columns().iter().enumerate() {
                 map.insert(col.name.clone(), idx);
                 cols_name.push(col.name.clone());
                 cols_type.push(col.data_type.clone());

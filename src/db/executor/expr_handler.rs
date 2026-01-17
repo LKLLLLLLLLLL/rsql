@@ -1,4 +1,4 @@
-use super::super::errors::{RsqlResult, RsqlError};
+use super::super::common::{RsqlResult, RsqlError};
 use super::super::sql_parser::plan::{JoinType};
 use crate::db::data_item::{DataItem};
 use crate::db::table_schema::{ColType};
@@ -85,7 +85,8 @@ pub fn handle_table_obj_filter_expr(table_obj: &TableObject, predicate: &Expr) -
                                         }
                                     }else if table_obj.indexed_cols.contains(&col) {
                                         let number_value = parse_number(n)?;
-                                        let rows_iter = table_obj.table_obj.get_rows_by_range_indexed_col(&col, &number_value, &number_value)?;
+                                        let some_number_value = Some(number_value.clone());
+                                        let rows_iter = table_obj.table_obj.get_rows_by_range_indexed_col(&col, &some_number_value, &some_number_value)?;
                                         let mut rows = vec![];
                                         for row in rows_iter {
                                             let row = row?;
@@ -114,6 +115,7 @@ pub fn handle_table_obj_filter_expr(table_obj: &TableObject, predicate: &Expr) -
                                         ColType::Chars(size) => DataItem::Chars{len: size as u64, value: s.clone()},
                                         _ => return Err(RsqlError::ExecutionError(format!("Unsupported char type on table {col}")))
                                     };
+                                    let some_string_value = Some(string_value.clone());
                                     if col == table_obj.pk_col.0 {
                                         let row = table_obj.table_obj.get_row_by_pk(&string_value)?;
                                         if let Some(r) = row {
@@ -122,7 +124,7 @@ pub fn handle_table_obj_filter_expr(table_obj: &TableObject, predicate: &Expr) -
                                             Ok(vec![])
                                         }
                                     }else if table_obj.indexed_cols.contains(&col) {
-                                        let rows_iter = table_obj.table_obj.get_rows_by_range_indexed_col(&col, &string_value, &string_value)?;
+                                        let rows_iter = table_obj.table_obj.get_rows_by_range_indexed_col(&col, &some_string_value, &some_string_value)?;
                                         let mut rows = vec![];
                                         for row in rows_iter {
                                             let row = row?;
@@ -174,9 +176,10 @@ pub fn handle_table_obj_filter_expr(table_obj: &TableObject, predicate: &Expr) -
                                     let col = ident.value.clone();
                                     let col_idx = table_obj.map.get(&col).unwrap();
                                     let number_value = parse_number(n)?;
+                                    let some_number_value = Some(number_value.clone());
                                     if table_obj.indexed_cols.contains(&col) {
-                                        let col_min = DataItem::Integer(-2147483647);
-                                        let rows_iter = table_obj.table_obj.get_rows_by_range_indexed_col(&col, &col_min, &number_value)?;
+                                        let col_min = None;
+                                        let rows_iter = table_obj.table_obj.get_rows_by_range_indexed_col(&col, &col_min, &some_number_value)?;
                                         let mut rows = vec![];
                                         for row in rows_iter {
                                             let row = row?;
@@ -228,9 +231,10 @@ pub fn handle_table_obj_filter_expr(table_obj: &TableObject, predicate: &Expr) -
                                     let col = ident.value.clone();
                                     let col_idx = table_obj.map.get(&col).unwrap();
                                     let number_value = parse_number(n)?;
+                                    let some_number_value = Some(number_value.clone());
                                     if table_obj.indexed_cols.contains(&col) {
-                                        let col_max = DataItem::Integer(2147483647);
-                                        let rows_iter = table_obj.table_obj.get_rows_by_range_indexed_col(&col, &number_value, &col_max)?;
+                                        let col_max = None;
+                                        let rows_iter = table_obj.table_obj.get_rows_by_range_indexed_col(&col, &some_number_value, &col_max)?;
                                         let mut rows = vec![];
                                         for row in rows_iter {
                                             let row = row?;
@@ -282,9 +286,10 @@ pub fn handle_table_obj_filter_expr(table_obj: &TableObject, predicate: &Expr) -
                                     let col = ident.value.clone();
                                     let col_idx = table_obj.map.get(&col).unwrap();
                                     let number_value = parse_number(n)?;
+                                    let some_number_value = Some(number_value.clone());
                                     if table_obj.indexed_cols.contains(&col) {
-                                        let col_min = DataItem::Integer(-2147483647);
-                                        let rows_iter = table_obj.table_obj.get_rows_by_range_indexed_col(&col, &col_min, &number_value)?;
+                                        let col_min = None;
+                                        let rows_iter = table_obj.table_obj.get_rows_by_range_indexed_col(&col, &col_min, &some_number_value)?;
                                         let mut rows = vec![];
                                         for row in rows_iter {
                                             let row = row?;
@@ -338,9 +343,10 @@ pub fn handle_table_obj_filter_expr(table_obj: &TableObject, predicate: &Expr) -
                                     let col = ident.value.clone();
                                     let col_idx = table_obj.map.get(&col).unwrap();
                                     let number_value = parse_number(n)?;
+                                    let some_number_value = Some(number_value.clone());
                                     if table_obj.indexed_cols.contains(&col) {
-                                        let col_max = DataItem::Integer(2147483647);
-                                        let rows_iter = table_obj.table_obj.get_rows_by_range_indexed_col(&col, &number_value, &col_max)?;
+                                        let col_max = None;
+                                        let rows_iter = table_obj.table_obj.get_rows_by_range_indexed_col(&col, &some_number_value, &col_max)?;
                                         let mut rows = vec![];
                                         for row in rows_iter {
                                             let row = row?;
