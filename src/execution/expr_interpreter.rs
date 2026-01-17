@@ -2,7 +2,7 @@ use crate::common::{RsqlResult, RsqlError};
 use crate::sql::plan::{JoinType};
 use crate::common::data_item::{DataItem};
 use crate::catalog::table_schema::{ColType};
-use super::handler::{TableObject};
+use super::result::{TableObject};
 use sqlparser::ast::{Expr, BinaryOperator, Value::{Number, SingleQuotedString, Boolean}};
 
 fn parse_number(s: &str) -> RsqlResult<DataItem> {
