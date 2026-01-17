@@ -489,9 +489,35 @@ impl Plan {
                 })
             },
             Statement::AlterTable(alter) => {
-                if alter.operations.len() == 1 {
-                    Ok(PlanNode::AlterTable { table_name: alter.name.to_string(), operation: alter.operations[0].clone() })
-                } else { Err(RsqlError::ParserError("Multiple ALTER TABLE operations not supported".to_string())) }
+                if alter.operations.len() != 1 {
+                    return Err(RsqlError::ParserError("Multiple ALTER TABLE operations not supported".to_string()));
+                }
+                let op = &alter.operations[0];
+                use sqlparser::ast::{AlterTableOperation, RenameTableNameKind};
+                match op {
+                    AlterTableOperation::RenameTable { table_name: new_name } => {
+                        // For RENAME TABLE, keep RenameTableNameKind::To(obj_name) as is
+                        Ok(PlanNode::AlterTable {
+                            table_name: alter.name.to_string(),
+                            operation: AlterTableOperation::RenameTable {
+                                table_name: new_name.clone(),
+                            },
+                        })
+                    }
+                    AlterTableOperation::AddColumn { .. } => {
+                        Err(RsqlError::ParserError("ALTER TABLE ADD COLUMN is not supported".to_string()))
+                    }
+                    AlterTableOperation::DropColumn { .. } => {
+                        Err(RsqlError::ParserError("ALTER TABLE DROP COLUMN is not supported".to_string()))
+                    }
+                    AlterTableOperation::RenameColumn { .. } => {
+                        Err(RsqlError::ParserError("ALTER TABLE RENAME COLUMN is not supported".to_string()))
+                    }
+                    AlterTableOperation::AlterColumn { op: sqlparser::ast::AlterColumnOperation::SetDataType { .. }, .. } => {
+                        Err(RsqlError::ParserError("ALTER TABLE ALTER COLUMN TYPE is not supported".to_string()))
+                    }
+                    _ => Err(RsqlError::ParserError("ALTER TABLE operation is not supported".to_string())),
+                }
             }
             Statement::Drop { object_type, names, if_exists, .. } => {
                 if *object_type == ObjectType::Table && names.len() == 1 {
@@ -631,7 +657,7 @@ impl Plan {
             exprs.iter().map(|e| format!("{}", e)).collect::<Vec<_>>().join(", ")
         }
 
-        fn fmt_alter_op(op: &AlterTableOperation) -> String {
+        fn fmt_alter_op(op: &AlterTableOperation, table_name: &str) -> String {
             match op {
                 AlterTableOperation::AddColumn { column_def, .. } => {
                     format!(
@@ -652,7 +678,6 @@ impl Plan {
                         format!("DROP COLUMN {}", cols)
                     }
                 }
-                // Handle RENAME COLUMN at the correct enum level (see below for new branch)
                 AlterTableOperation::RenameColumn {
                     old_column_name,
                     new_column_name,
@@ -662,6 +687,10 @@ impl Plan {
                         old_column_name,
                         new_column_name
                     )
+                }
+                AlterTableOperation::RenameTable { table_name: new_name } => {
+                    // Only print the new table name (do not include "TO" or old name here)
+                    format!("{}", new_name)
                 }
                 AlterTableOperation::AlterColumn { column_name, op } => {
                     match op {
@@ -734,7 +763,16 @@ impl Plan {
                     }
                     format!("CreateTable [{}] cols={}", table_name, col_labels.join(", "))
                 }
-                PlanNode::AlterTable { table_name, operation } => format!("AlterTable [{}] {}", table_name, fmt_alter_op(operation)),
+                PlanNode::AlterTable { table_name, operation } => {
+                    use sqlparser::ast::AlterTableOperation;
+                    match operation {
+                        AlterTableOperation::RenameTable { table_name: new_name } => {
+                            // Only print both old and new table names, no "TO"
+                            format!("AlterTable [{}] RENAME TABLE {} {}", table_name, table_name, new_name)
+                        }
+                        _ => format!("AlterTable [{}] {}", table_name, fmt_alter_op(operation, table_name)),
+                    }
+                }
                 PlanNode::DropTable { table_name, if_exists } => {
                     if *if_exists { format!("DropTable [{}] IF EXISTS", table_name) } else { format!("DropTable [{}]", table_name) }
                 }
@@ -787,7 +825,8 @@ impl Plan {
             exprs.iter().map(|e| format!("{}", e)).collect::<Vec<_>>().join(", ")
         }
 
-        fn fmt_alter_op(op: &AlterTableOperation) -> String {
+        fn fmt_alter_op(op: &AlterTableOperation, old_table_name: &str) -> String {
+            use sqlparser::ast::RenameTableNameKind;
             match op {
                 AlterTableOperation::AddColumn { column_def, .. } => {
                     format!(
@@ -817,6 +856,18 @@ impl Plan {
                         old_column_name,
                         new_column_name
                     )
+                }
+                AlterTableOperation::RenameTable { table_name: new_name_kind } => {
+                    // Print as: RENAME TABLE <old> TO <new>
+                    match new_name_kind {
+                        RenameTableNameKind::To(obj_name) => {
+                            format!("RENAME TABLE {} TO {}", old_table_name, obj_name)
+                        }
+                        _ => {
+                            // fallback
+                            format!("RENAME TABLE {} TO {:?}", old_table_name, new_name_kind)
+                        }
+                    }
                 }
                 AlterTableOperation::AlterColumn { column_name, op } => {
                     match op {
@@ -859,6 +910,7 @@ impl Plan {
 
         // Print all expression fields of a PlanNode, with their field paths.
         fn print_plan_expr_paths(plan: &PlanNode, prefix: &str, plan_path: &str) {
+            use sqlparser::ast::{AlterTableOperation, RenameTableNameKind};
             match plan {
                 PlanNode::Filter { predicate, .. } => {
                     let path = format!("(PlanNode::Filter.predicate)");
@@ -927,6 +979,33 @@ impl Plan {
                     for (i, col) in columns.iter().enumerate() {
                         let path_col = format!("(PlanNode::CreateIndex.columns[{}])", i);
                         println!("{}{} -> {}", prefix, path_col, col);
+                    }
+                }
+                PlanNode::AlterTable { table_name, operation } => {
+                    // Print table_name and operation as detailed fields
+                    let path_table = "(PlanNode::AlterTable.table_name)";
+                    println!("{}{} -> {}", prefix, path_table, table_name);
+                    match operation {
+                        AlterTableOperation::RenameTable { table_name: new_name_kind } => {
+                            // Print as two fields: old_table_name and new_table_name (only table names)
+                            let old_path = "(PlanNode::AlterTable.operation.old_table_name)";
+                            let new_path = "(PlanNode::AlterTable.operation.new_table_name)";
+                            println!("{}{} -> {}", prefix, old_path, table_name);
+                            match new_name_kind {
+                                RenameTableNameKind::To(obj_name) => {
+                                    println!("{}{} -> {}", prefix, new_path, obj_name);
+                                }
+                                _ => {
+                                    println!("{}{} -> {:?}", prefix, new_path, new_name_kind);
+                                }
+                            }
+                        }
+                        _ => {
+                            let path_op = "(PlanNode::AlterTable.operation)";
+                            // Format operation as a string, e.g., "ADD COLUMN ..."
+                            let op_str = fmt_alter_op(operation, table_name);
+                            println!("{}{} -> {}", prefix, path_op, op_str);
+                        }
                     }
                 }
                 _ => {}
@@ -1078,7 +1157,10 @@ impl Plan {
                     }
                     format!("CreateTable [{}] cols={}", table_name, col_labels.join(", "))
                 }
-                PlanNode::AlterTable { table_name, operation } => format!("AlterTable [{}] {}", table_name, fmt_alter_op(operation)),
+                PlanNode::AlterTable { table_name, operation } => {
+                    // For pretty_print_pro, print RENAME TABLE with old and new table names as separate fields
+                    format!("AlterTable [{}] {}", table_name, fmt_alter_op(operation, table_name))
+                }
                 PlanNode::DropTable { table_name, if_exists } => {
                     if *if_exists { format!("DropTable [{}] IF EXISTS", table_name) } else { format!("DropTable [{}]", table_name) }
                 }
