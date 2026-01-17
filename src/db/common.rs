@@ -11,6 +11,9 @@ pub enum RsqlError {
     #[error("Parser Error: {0}")]
     ParserError(String),
 
+    #[error("Execution Error: {0}")]
+    ExecutionError(String),
+
     #[error("WAL Error: {0}")]
     WalError(String),
 
