@@ -882,6 +882,192 @@ fn handle_temp_table_filter_expr(cols: &Vec<String>, cols_type: &Vec<ColType>, r
     }
 }
 
+fn handle_on_expr(left_null_row: &Vec<DataItem>, right_null_row: &Vec<DataItem>, extended_cols: &Vec<String>, extended_rows: &Vec<Vec<DataItem>>, join_type: &JoinType, on: &Option<Expr>) -> RsqlResult<Vec<Vec<DataItem>>> {
+    match join_type {
+        JoinType::Inner => {
+            if let Some(on) = on {
+                match on {
+                    Expr::BinaryOp { left, op, right } => {
+                        match op {
+                            BinaryOperator::Eq => {
+                                match (&**left, &**right) {
+                                    (Expr::CompoundIdentifier(left_ident), Expr::CompoundIdentifier(right_ident)) => {
+                                        let left_col = left_ident[1].value.clone();
+                                        let left_col_idx = extended_cols.iter().position(|col| col == &left_col).unwrap();
+                                        let right_col = right_ident[1].value.clone();
+                                        let right_col_idx = extended_cols.iter().rposition(|col| col == &right_col).unwrap();
+                                        let mut filtered_rows = vec![];
+                                        for row in extended_rows.iter() {
+                                            if row[left_col_idx] == row[right_col_idx] {
+                                                filtered_rows.push(row.clone());
+                                            }
+                                        }
+                                        Ok(filtered_rows)
+                                    },
+                                    _ => {
+                                        Err(RsqlError::ExecutionError(format!("On clause must be a binary expression with Eq operator between two identifiers")))
+                                    }
+                                }
+                            },
+                            _ => {
+                                Err(RsqlError::ExecutionError(format!("On clause must be a binary expression with Eq operator")))
+                            }
+                        }
+                    },
+                    _ => {
+                        Err(RsqlError::ExecutionError(format!("On clause must be a binary expression")))
+                    }
+                }
+            }else {
+                Err(RsqlError::ExecutionError(format!("Join type Inner must have on clause")))
+            }
+        },
+        JoinType::Left => {
+            if let Some(on) = on {
+                match on {
+                    Expr::BinaryOp { left, op, right } => {
+                        match op {
+                            BinaryOperator::Eq => {
+                                match (&**left, &**right) {
+                                    (Expr::CompoundIdentifier(left_ident), Expr::CompoundIdentifier(right_ident)) => {
+                                        let left_col = left_ident[1].value.clone();
+                                        let left_col_idx = extended_cols.iter().position(|col| col == &left_col).unwrap();
+                                        let right_col = right_ident[1].value.clone();
+                                        let right_col_idx = extended_cols.iter().rposition(|col| col == &right_col).unwrap();
+                                        let mut filtered_rows = vec![];
+                                        for row in extended_rows.iter() {
+                                            if row[left_col_idx] == row[right_col_idx] {
+                                                filtered_rows.push(row.clone());
+                                            }else {
+                                                let left_table_cols_len = left_null_row.len(); 
+                                                let mut new_row = row.clone();
+                                                new_row.truncate(left_table_cols_len);  // remove right table cols from the extended cols
+                                                new_row.extend(right_null_row.clone()); // append right null row
+                                                filtered_rows.push(new_row);
+                                            }
+                                        }
+                                        Ok(filtered_rows)
+                                    },
+                                    _ => {
+                                        Err(RsqlError::ExecutionError(format!("On clause must be a binary expression with Eq operator between two identifiers")))
+                                    }
+                                }
+                            },
+                            _ => {
+                                Err(RsqlError::ExecutionError(format!("On clause must be a binary expression with Eq operator")))
+                            }
+                        }
+                    },
+                    _ => {
+                        Err(RsqlError::ExecutionError(format!("On clause must be a binary expression")))
+                    }
+                }
+            }else {
+                Err(RsqlError::ExecutionError(format!("Join type Left must have on clause")))
+            }
+        },
+        JoinType::Right => {
+            if let Some(on) = on {
+                match on {
+                    Expr::BinaryOp { left, op, right } => {
+                        match op {
+                            BinaryOperator::Eq => {
+                                match (&**left, &**right) {
+                                    (Expr::CompoundIdentifier(left_ident), Expr::CompoundIdentifier(right_ident)) => {
+                                        let left_col = left_ident[1].value.clone();
+                                        let left_col_idx = extended_cols.iter().position(|col| col == &left_col).unwrap();
+                                        let right_col = right_ident[1].value.clone();
+                                        let right_col_idx = extended_cols.iter().rposition(|col| col == &right_col).unwrap();
+                                        let mut filtered_rows = vec![];
+                                        for row in extended_rows.iter() {
+                                            if row[left_col_idx] == row[right_col_idx] {
+                                                filtered_rows.push(row.clone());
+                                            }else {
+                                                let left_table_cols_len = left_null_row.len();
+                                                let mut right_table_row = row.clone();
+                                                right_table_row.drain(0..left_table_cols_len); // keep right table cols from the extended cols
+                                                let mut new_row = left_null_row.clone(); // create a new row with left null row
+                                                new_row.extend(right_table_row); // append right table row
+                                                filtered_rows.push(new_row);
+                                            }
+                                        }
+                                        Ok(filtered_rows)
+                                    },
+                                    _ => {
+                                        Err(RsqlError::ExecutionError(format!("On clause must be a binary expression with Eq operator between two identifiers")))
+                                    }
+                                }
+                            },
+                            _ => {
+                                Err(RsqlError::ExecutionError(format!("On clause must be a binary expression with Eq operator")))
+                            }
+                        }
+                    },
+                    _ => {
+                        Err(RsqlError::ExecutionError(format!("On clause must be a binary expression")))
+                    }
+                }
+            }else {
+                Err(RsqlError::ExecutionError(format!("Join type Right must have on clause")))
+            }
+        },
+        JoinType::Full => {
+            if let Some(on) = on {
+                match on {
+                    Expr::BinaryOp { left, op, right } => {
+                        match op {
+                            BinaryOperator::Eq => {
+                                match (&**left, &**right) {
+                                    (Expr::CompoundIdentifier(left_ident), Expr::CompoundIdentifier(right_ident)) => {
+                                        let left_col = left_ident[1].value.clone();
+                                        let left_col_idx = extended_cols.iter().position(|col| col == &left_col).unwrap();
+                                        let right_col = right_ident[1].value.clone();
+                                        let right_col_idx = extended_cols.iter().rposition(|col| col == &right_col).unwrap();
+                                        let mut filtered_rows = vec![];
+                                        for row in extended_rows.iter() {
+                                            if row[left_col_idx] == row[right_col_idx] {
+                                                filtered_rows.push(row.clone());
+                                            }else {
+                                                let left_table_cols_len = left_null_row.len();
+                                                let mut left_join_new_row = row.clone();
+                                                // 1. left join
+                                                left_join_new_row.truncate(left_table_cols_len);  // remove right table cols from the extended cols
+                                                left_join_new_row.extend(right_null_row.clone()); // append right null row
+                                                filtered_rows.push(left_join_new_row);
+                                                // 2. right join
+                                                let mut right_table_row = row.clone();
+                                                right_table_row.drain(0..left_table_cols_len); // keep right table cols from the extended cols
+                                                let mut right_join_new_row = left_null_row.clone(); // create a new row with left null row
+                                                right_join_new_row.extend(right_table_row); // append right table row
+                                                filtered_rows.push(right_join_new_row);
+                                            }
+                                        }
+                                        Ok(filtered_rows)
+                                    },
+                                    _ => {
+                                        Err(RsqlError::ExecutionError(format!("On clause must be a binary expression with Eq operator between two identifiers")))
+                                    }
+                                }
+                            },
+                            _ => {
+                                Err(RsqlError::ExecutionError(format!("On clause must be a binary expression with Eq operator")))
+                            }
+                        }
+                    },
+                    _ => {
+                        Err(RsqlError::ExecutionError(format!("On clause must be a binary expression")))
+                    }
+                }
+            }else {
+                Err(RsqlError::ExecutionError(format!("Join type Full must have on clause")))
+            }
+        },
+        JoinType::Cross => {
+            Ok(extended_rows.clone())
+        },
+    }
+}
+
 fn handle_join(left_table_obj: &TableObject, right_table_obj: &TableObject, join_type: &JoinType, on: &Option<Expr>) -> RsqlResult<((Vec<String>, Vec<ColType>), Vec<Vec<DataItem>>)> {
     let mut extended_cols = left_table_obj.cols.0.clone();
     let mut extended_cols_type = left_table_obj.cols.1.clone();
@@ -899,25 +1085,46 @@ fn handle_join(left_table_obj: &TableObject, right_table_obj: &TableObject, join
             extended_rows.push(extended_row);
         }
     } // extend the left table with right table
-    match join_type {
-        JoinType::Inner => {
-            //================ todo: handle on ====================
-            Ok(((extended_cols, extended_cols_type), extended_rows))
-        },
-        JoinType::Left => {
-            //================ todo: handle on ====================
-            Ok(((extended_cols, extended_cols_type), extended_rows))
-        },
-        JoinType::Right => {
-            //================ todo: handle on ====================
-            Ok(((extended_cols, extended_cols_type), extended_rows))
-        },
-        JoinType::Full => {
-            //================ todo: handle on ====================
-            Ok(((extended_cols, extended_cols_type), extended_rows))
-        },
-        JoinType::Cross => {
-            Ok(((extended_cols, extended_cols_type), extended_rows))
-        },
+    let mut left_null_row = vec![];
+    let mut right_null_row = vec![];
+    for col_type in left_table_obj.cols.1.iter() {
+        match col_type {
+            ColType::Integer => {
+                left_null_row.push(DataItem::NullInt);
+            },
+            ColType::Float => {
+                left_null_row.push(DataItem::NullFloat);
+            },
+            ColType::Chars(size) => {
+                left_null_row.push(DataItem::NullChars { len: *size as u64 });
+            },
+            ColType::Bool => {
+                left_null_row.push(DataItem::NullBool);
+            },
+            ColType::VarChar(_) => {
+                left_null_row.push(DataItem::NullVarChar);
+            }
+        }
     }
+    for col_type in right_table_obj.cols.1.iter() {
+        match col_type {
+            ColType::Integer => {
+                right_null_row.push(DataItem::NullInt);
+            },
+            ColType::Float => {
+                right_null_row.push(DataItem::NullFloat);
+            },
+            ColType::Chars(size) => {
+                right_null_row.push(DataItem::NullChars { len: *size as u64 });
+            },
+            ColType::Bool => {
+                right_null_row.push(DataItem::NullBool);
+            },
+            ColType::VarChar(_) => {
+                right_null_row.push(DataItem::NullVarChar);
+            }
+        }
+    }
+    let join_result = handle_on_expr(&left_null_row, &right_null_row, &extended_cols, &extended_rows, join_type, on)?;
+    Ok(((extended_cols, extended_cols_type), join_result))
 }
