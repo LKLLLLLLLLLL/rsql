@@ -1,3 +1,5 @@
+use core::panic;
+
 use crate::db::data_item;
 use crate::db::common::{RsqlResult, RsqlError};
 use super::super::consist_storage::ConsistStorageEngine;
@@ -9,8 +11,8 @@ use super::btree_node;
 /// Return: (page_num, page_offset)
 pub struct RangeIterator<'a>
 {
-    current_index: data_item::DataItem,
-    end_index: data_item::DataItem,
+    // current_index: data_item::DataItem,
+    end_index: Option<data_item::DataItem>,
     storage: &'a ConsistStorageEngine,
     current_leaf_node: btree_node::BTreeNode,
     current_item_index: usize,
@@ -27,8 +29,14 @@ impl<'a> Iterator for RangeIterator<'a>
                 if self.current_item_index >= items.len() {
                     if *next_page_num == 0 { return None; }
                     
-                    let next_page = self.storage.read(*next_page_num).ok()?;
-                    self.current_leaf_node = btree_node::BTreeNode::from_page(&next_page).ok()?;
+                    let next_page = match self.storage.read(*next_page_num){
+                        Ok(p) => p,
+                        Err(e) => return Some(Err(e)),
+                    };
+                    self.current_leaf_node = match btree_node::BTreeNode::from_page(&next_page) {
+                        Ok(n) => n,
+                        Err(e) => return Some(Err(e)),
+                    };
                     self.current_item_index = 0;
                     return self.next(); // recursive call to get next item
                 }
@@ -36,8 +44,10 @@ impl<'a> Iterator for RangeIterator<'a>
                 let item = &items[self.current_item_index];
                 
                 // if item.key > end_index, stop iteration
-                if item.key > self.end_index {
-                    return None;
+                if let Some(ref end_idx) = self.end_index {
+                    if item.key > *end_idx {
+                        return None;
+                    }
                 }
 
                 self.current_item_index += 1;
@@ -73,7 +83,9 @@ impl BTreeIndex {
     pub fn root_page_num(&self) -> u64 {
         self.root
     }
-    /// Helper function to find leaf node containing the index_item 
+    /// Helper function to find the leaf node and position for a given index.
+    /// returns the position which's key >= index if find_first is true,
+    /// otherwise returns the position which's key > index.
     /// Returns (LeafNode, PositionInNode, PageNum, PathToRoot)
     fn find_leaf_pos(
         &self,
@@ -90,7 +102,15 @@ impl BTreeIndex {
         loop {
             match current_node {
                 btree_node::BTreeNode::Leaf { ref items, .. } => {
-                    let pos = items.iter().position(|it| &it.key >= index).unwrap_or(items.len());
+                    let pos = items.iter()
+                        .position(|it| {
+                            if find_first {
+                                index <= &it.key
+                            } else {
+                                index < &it.key
+                            }
+                        })
+                        .unwrap_or(items.len());
                     return Ok((current_node, pos, current_page_num, path));
                 }
                 btree_node::BTreeNode::Internal { ref items, next_page_num } => {
@@ -98,9 +118,9 @@ impl BTreeIndex {
                     let mut page_num = next_page_num;
                     for item in items {
                         let condition = if find_first {
-                             index <= &item.key
+                            index <= &item.key
                         } else {
-                             index < &item.key
+                            index < &item.key
                         };
                         if condition {
                             page_num = item.child_page_num;
@@ -114,12 +134,86 @@ impl BTreeIndex {
             }
         }
     }
+    /// Find the smallest leaf node in the B-Tree.
+    /// Returns (LeafNode, PageNum)
+    fn find_smallest_leaf(
+        &self,
+        storage: &ConsistStorageEngine,
+    ) -> RsqlResult<(btree_node::BTreeNode, u64)> {
+        let mut current_page_num = self.root;
+        let mut current_node = {
+            let root_page = storage.read(self.root)?;
+            btree_node::BTreeNode::from_page(&root_page)?
+        };
+        loop {
+            match current_node {
+                btree_node::BTreeNode::Leaf { .. } => {
+                    return Ok((current_node, current_page_num));
+                }
+                btree_node::BTreeNode::Internal { ref items, next_page_num } => {
+                    let mut page_num = next_page_num;
+                    if !items.is_empty() {
+                        page_num = items[0].child_page_num;
+                    }
+                    let child_page = storage.read(page_num)?;
+                    current_node = btree_node::BTreeNode::from_page(&child_page)?;
+                    current_page_num = page_num;
+                }
+            }
+        }
+    }
+    /// Find the largest leaf node in the B-Tree.
+    /// Returns (LeafNode, PageNum)
+    fn find_largest_leaf(
+        &self,
+        storage: &ConsistStorageEngine,
+    ) -> RsqlResult<(btree_node::BTreeNode, u64)> {
+        let mut current_page_num = self.root;
+        let mut current_node = {
+            let root_page = storage.read(self.root)?;
+            btree_node::BTreeNode::from_page(&root_page)?
+        };
+        loop {
+            match current_node {
+                btree_node::BTreeNode::Leaf { .. } => {
+                    return Ok((current_node, current_page_num));
+                }
+                btree_node::BTreeNode::Internal { ref items, next_page_num } => {
+                    let mut page_num = next_page_num;
+                    if !items.is_empty() {
+                        page_num = items[items.len() - 1].child_page_num;
+                    }
+                    let child_page = storage.read(page_num)?;
+                    current_node = btree_node::BTreeNode::from_page(&child_page)?;
+                    current_page_num = page_num;
+                }
+            }
+        }
+    } 
+
+    /// Check if the given index already exists in the B-Tree.
+    pub fn check_exists(
+        &self,
+        index: data_item::DataItem,
+        storage: &ConsistStorageEngine,
+    ) -> RsqlResult<bool> {
+        let (node, pos, _, _) = self.find_leaf_pos(&index, storage, true)?;
+        if let btree_node::BTreeNode::Leaf { items, .. } = node {
+            if pos < items.len() && items[pos].key == index {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Find the first entry matching the given index.
+    /// Returns (page_num, page_offset) if found.
     pub fn find_entry(
         &self,
         index: data_item::DataItem,
         storage: &ConsistStorageEngine,
     ) -> RsqlResult<Option<(u64, u64)>> {
-        let (node, pos, _, _) = self.find_leaf_pos(&index, storage, false)?;
+        let (node, pos, _, _) = self.find_leaf_pos(&index, storage, true)?;
         if let btree_node::BTreeNode::Leaf { items, .. } = node {
             if pos < items.len() && items[pos].key == index {
                 return Ok(Some((items[pos].child_page_num, items[pos].page_offset)));
@@ -127,15 +221,24 @@ impl BTreeIndex {
         }
         Ok(None)
     }
+
     pub fn find_range_entry<'a>(
         &self,
-        start_index: data_item::DataItem,
-        end_index: data_item::DataItem,
+        start_index: Option<data_item::DataItem>,
+        end_index: Option<data_item::DataItem>,
         storage: &'a ConsistStorageEngine,
     ) -> RsqlResult<RangeIterator<'a>> {
-        let (leaf_node, start_pos, _, _) = self.find_leaf_pos(&start_index, storage, true)?;
+        let (leaf_node, start_pos) = match start_index {
+            Some(idx) => {
+                let (node, pos, _, _) = self.find_leaf_pos(&idx, storage, true)?;
+                (node, pos)
+            },
+            None => {
+                let (node, page_num) = self.find_smallest_leaf(storage)?;
+                (node, 0)
+            }
+        };
         Ok(RangeIterator {
-            current_index: start_index,
             end_index,
             storage,
             current_leaf_node: leaf_node,

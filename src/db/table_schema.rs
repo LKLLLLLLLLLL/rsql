@@ -18,12 +18,12 @@ pub struct TableColumn {
     pub pk: bool,
     pub nullable: bool,
     pub index: bool,
-    pub unique: bool, // TODO: not implemented
+    pub unique: bool,
 }
 
 #[derive(Clone)]
 pub struct TableSchema {
-    pub columns: Vec<TableColumn>,
+    columns: Vec<TableColumn>,
 }
 
 impl TableSchema {
@@ -179,13 +179,13 @@ impl TableSchema {
         }
         Ok(())
     }
-    pub fn new(columns: Vec<TableColumn>) -> Self {
+    pub fn new(columns: Vec<TableColumn>) -> RsqlResult<Self> {
         // check if the varchar columns is indexed
         for col in &columns {
             if col.index {
                 match col.data_type {
                     ColType::VarChar(_) => {
-                        panic!("VarChar column {} cannot be indexed", col.name);
+                        return Err(RsqlError::InvalidInput(format!("VarChar column {} cannot be indexed", col.name)));
                     },
                     _ => {},
                 }
@@ -196,13 +196,49 @@ impl TableSchema {
             match col.data_type {
                 ColType::VarChar(size) => {
                     if size > MAX_VARCHAR_SIZE {
-                        panic!("VarChar column {} size {} exceeds max {}", col.name, size, MAX_VARCHAR_SIZE);
+                        return Err(RsqlError::InvalidInput(format!("VarChar column {} size {} exceeds max {}", col.name, size, MAX_VARCHAR_SIZE)));
                     }
                 },
                 _ => {},
             }
         }
-        Self { columns }
+        // check if the unique columns are indexed
+        for col in &columns {
+            if col.unique && !col.index {
+                return Err(RsqlError::InvalidInput(format!("Unique column {} must be indexed", col.name)));
+            }
+        }
+        // check if primary key columns are indexed and not null
+        for col in &columns {
+            if col.pk {
+                if !col.index {
+                    return Err(RsqlError::InvalidInput(format!("Primary key column {} must be indexed", col.name)));
+                }
+                if col.nullable {
+                    return Err(RsqlError::InvalidInput(format!("Primary key column {} cannot be nullable", col.name)));
+                }
+            }
+        }
+        // check if column name length exceeds max
+        for col in &columns {
+            if col.name.len() > MAX_COL_NAME_SIZE {
+                return Err(RsqlError::InvalidInput(format!("Column name {} exceeds max length {}", col.name, MAX_COL_NAME_SIZE)));
+            }
+        }
+        // check if there are duplicate column names
+        let mut name_set = std::collections::HashSet::new();
+        for col in &columns {
+            if name_set.contains(&col.name) {
+                return Err(RsqlError::InvalidInput(format!("Duplicate column name {}", col.name)));
+            }
+            name_set.insert(col.name.clone());
+        }
+        // check if there are multiple primary key columns
+        let pk_count = columns.iter().filter(|col| col.pk).count();
+        if pk_count > 1 {
+            return Err(RsqlError::InvalidInput("Multiple primary key columns found".to_string()));
+        }
+        Ok(Self { columns })
     }
     pub fn get_sizes(&self) -> Vec<usize> {
         let mut sizes = vec![];
@@ -210,5 +246,8 @@ impl TableSchema {
             sizes.push(DataItem::cal_size_from_coltype(&col.data_type));
         };
         sizes
+    }
+    pub fn get_columns(&self) -> &Vec<TableColumn> {
+        &self.columns
     }
 }

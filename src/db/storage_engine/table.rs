@@ -118,7 +118,7 @@ impl Table {
 
     /// Helper function to load and deallocate a VarChar data item
     fn del_varchar(&mut self, varchar_head: &DataItem, tnx_id: u64) -> RsqlResult<()> {
-        let DataItem::VarChar { head: varchar_head, value } = varchar_head else {
+        let DataItem::VarChar { head: varchar_head, ..} = varchar_head else {
             panic!("load_varchar called with non-varchar data item");
         };
         if let None = varchar_head.page_ptr {
@@ -187,7 +187,7 @@ impl Table {
             indexes.insert(col_name, btree_index);
         };
         // 5. check if indexes compatible with schema
-        if indexes.len() != schema.columns.iter().filter(|col| col.index).count() {
+        if indexes.len() != schema.get_columns().iter().filter(|col| col.index).count() {
             panic!("Incompatible index count between schema and table file {}", path);
         }
         // 6. construct allocator
@@ -214,7 +214,7 @@ impl Table {
         let mut storage = ConsistStorageEngine::new(&path, id)?;
         // 1. collect indexes info
         let mut index_cols = HashSet::new();
-        for col in &schema.columns {
+        for col in schema.get_columns() {
             if col.index {
                 index_cols.insert(col.name.clone());
             }
@@ -252,7 +252,7 @@ impl Table {
         // 4. construct allocator
         // calculate entry size
         let mut entry_size = 0u64;
-        for col in &schema.columns {
+        for col in schema.get_columns() {
             entry_size += DataItem::cal_size_from_coltype(&col.data_type) as u64;
         }
         let allocator = Allocator::create(entry_size, offset as u64);
@@ -284,7 +284,7 @@ impl Table {
     }
     fn get_row_ptr_by_pk(&self, pk: &DataItem) -> RsqlResult<Option<(u64, u64)>> {
         // find the primary key column
-        let pk_col = self.schema.columns.iter().find(|col| col.pk);
+        let pk_col = self.schema.get_columns().iter().find(|col| col.pk);
         if pk_col.is_none() {
             return Err(RsqlError::InvalidInput("Table has no primary key".to_string()));
         }
@@ -309,36 +309,19 @@ impl Table {
         let row = self.read_row_at(match_page, match_offset)?;
         Ok(Some(row))
     }
-    pub fn get_row_by_indexed_col(&self, col_name: &str, value: &DataItem) -> RsqlResult<Option<Vec<DataItem>>> {
-        // get index
-        let index = self.indexes.get(col_name);
-        if index.is_none() {
-            panic!("Column {} is not indexed, cannot search", col_name);
-        };
-        let index = index.unwrap();
-        // search the index
-        let pair_opt = index.find_entry(value.clone(), &self.storage)?;
-        let (match_page, match_offset) = match pair_opt {
-            Some(pair) => pair,
-            None => return Ok(None),
-        };
-        // read the row from data page
-        let row = self.read_row_at(match_page, match_offset)?;
-        Ok(Some(row))
-    }
     /// Get rows by range on an indexed column
     /// returns entry in [start, end]
     pub fn get_rows_by_range_indexed_col(
         &self,
         col_name: &str,
-        start: &DataItem,
-        end: &DataItem,
+        start: &Option<DataItem>,
+        end: &Option<DataItem>,
     ) -> RsqlResult<impl Iterator<Item = RsqlResult<Vec<DataItem>>>> {
         // get index
         let index = self.indexes.get(col_name).ok_or(RsqlError::InvalidInput(
             format!("Column {} is not indexed, cannot search", col_name)
         ))?;
-        // get iterator from index (注意 unwrap Result)
+        // get iterator from index
         let entry_iter = index.find_range_entry(start.clone(), end.clone(), &self.storage)?;
 
         // map to row iterator
@@ -352,7 +335,7 @@ impl Table {
     }
     pub fn get_all_rows(&self) -> RsqlResult<impl Iterator<Item = RsqlResult<Vec<DataItem>>>> {
         // find primary key column
-        let pk_col = self.schema.columns.iter().find(|col| col.pk);
+        let pk_col = self.schema.get_columns().iter().find(|col| col.pk);
         if pk_col.is_none() {
             panic!("Table has no primary key column, cannot get all rows");
         }
@@ -378,6 +361,18 @@ impl Table {
     pub fn insert_row(&mut self, data: Vec<DataItem>, tnx_id: u64) -> RsqlResult<()> {
         // 1. check if data satisfies schema
         self.schema.satisfy(&data)?;
+        // check unique constraints separately
+        // the pk must be unique, so no need to check again
+        for (i, col) in self.schema.get_columns().iter().enumerate() {
+            if col.unique {
+                let index = self.indexes.get(&col.name).unwrap();
+                let existing = index.check_exists(data[i].clone(), &self.storage)?;
+                if existing {
+                    return Err(RsqlError::InvalidInput(
+                        format!("Unique constraint violation on column {}", col.name)));
+                }
+            }
+        }
         // 2. allocate entry
         let (entry_page_idx, entry_offset) = self.allocator.alloc_entry(tnx_id, &mut self.storage)?;
         // 3. store VarChar data if any
@@ -392,7 +387,7 @@ impl Table {
         let entry_bytes = Self::row_to_bytes(&data)?;
         self.storage.write_bytes(tnx_id, entry_page_idx, entry_offset as usize, &entry_bytes)?;
         // 5. write index entries
-        for (i, col) in self.schema.columns.iter().enumerate() {
+        for (i, col) in self.schema.get_columns().iter().enumerate() {
             if col.index {
                 let index = self.indexes.get_mut(&col.name).unwrap();
                 index.insert_entry(
@@ -431,7 +426,7 @@ impl Table {
             }
         }
         // 5. delete from indexes
-        for (i, col) in self.schema.columns.iter().enumerate() {
+        for (i, col) in self.schema.get_columns().iter().enumerate() {
             if col.index {
                 let index = self.indexes.get_mut(&col.name).unwrap();
                 index.delete_entry(
@@ -454,8 +449,7 @@ mod tests {
     use std::fs;
 
     fn setup_schema() -> TableSchema {
-        TableSchema {
-            columns: vec![
+        let columns = vec![
                 TableColumn {
                     name: "id".to_string(),
                     data_type: ColType::Integer,
@@ -472,8 +466,8 @@ mod tests {
                     index: false,
                     unique: false,
                 },
-            ],
-        }
+            ];
+        TableSchema::new(columns).unwrap()
     }
 
     fn make_chars(s: &str, len: usize) -> String {
@@ -501,7 +495,7 @@ mod tests {
             // 1. Create table
             let table = Table::create(table_id, schema.clone(), tnx_id).expect("Failed to create table");
             assert_eq!(table.id, table_id);
-            assert_eq!(table.get_schema().columns.len(), 2);
+            assert_eq!(table.get_schema().get_columns().len(), 2);
         }
 
         {
@@ -518,8 +512,7 @@ mod tests {
         let db_dir = config::DB_DIR;
         let _ = fs::create_dir_all(db_dir);
         let table_id = 2000;
-        let schema = TableSchema {
-            columns: vec![
+        let columns = vec![
                 TableColumn {
                     name: "id".to_string(),
                     data_type: ColType::Integer,
@@ -536,8 +529,8 @@ mod tests {
                     index: false,
                     unique: false,
                 },
-            ],
-        };
+            ];
+        let schema = TableSchema::new(columns).unwrap();
         let tnx_id = 1;
         let path = format!("{}/{}.dbt", db_dir, table_id);
         let _ = fs::remove_file(&path);
@@ -628,8 +621,8 @@ mod tests {
         // 2. Range scan [2, 4]
         let range_rows: Vec<_> = table.get_rows_by_range_indexed_col(
             "id", 
-            &DataItem::Integer(2), 
-            &DataItem::Integer(4)
+            &Some(DataItem::Integer(2)), 
+            &Some(DataItem::Integer(4))
         ).expect("Range scan failed")
         .collect::<RsqlResult<Vec<_>>>().expect("Iterator error");
         
