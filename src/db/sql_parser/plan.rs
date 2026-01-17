@@ -1064,9 +1064,8 @@ mod tests {
         // let plan = Plan::build_plan(sql).unwrap();
         // Plan::pretty_print_pro(&plan.tnxs[0].stmts[0]);
         let sql = "\
-            SELECT  a
-            FROM TA
-            JOIN TB ON TA.b = TB.b
+            DELETE FROM student
+            WHERE age < 18;
         ";
         let plan = Plan::build_plan(sql).unwrap();
         Plan::pretty_print_pro(&plan.tnxs[0].stmts[0]);
