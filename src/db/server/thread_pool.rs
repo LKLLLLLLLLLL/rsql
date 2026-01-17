@@ -4,7 +4,7 @@ use tracing::{error};
 use futures::channel::oneshot;
 
 use crate::{config::THREAD_MAXNUM};
-use crate::db::errors::{ RsqlResult};
+use crate::db::common::{ RsqlResult};
 use super::types::{ RayonQueryRequest };
 use super::super::executor;
 

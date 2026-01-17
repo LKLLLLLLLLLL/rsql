@@ -1,14 +1,15 @@
 use std::sync::OnceLock;
 use std::sync::Mutex;
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
 use super::storage::Page;
 use crate::config;
-use crate::db::errors::{RsqlError, RsqlResult};
+use crate::db::common::{RsqlError, RsqlResult};
 use crate::db::data_item::{DataItem, VarCharHead};
 use super::btree_index;
 use super::consist_storage::ConsistStorageEngine;
-use crate::db::table_schema::{ColType, TableSchema};
+use crate::db::table_schema::TableSchema;
 
 use super::allocator::Allocator;
 
@@ -92,7 +93,7 @@ impl Table {
         let new_head = VarCharHead {
             max_len: head.max_len,
             len: heap_len,
-            page_ptr: pack_ptr(heap_page_idx, heap_offset),
+            page_ptr: Some(pack_ptr(heap_page_idx, heap_offset)),
         };
         Ok(DataItem::VarChar { head: new_head, value })
     }
@@ -105,7 +106,10 @@ impl Table {
         if value.len() != 0 {
             panic!("load_varchar called with non-empty value");
         }
-        let (heap_page_idx, heap_offset) = unpack_ptr(varchar_head.page_ptr);
+        if let None = varchar_head.page_ptr {
+            return Err(RsqlError::StorageError("Cannot load varchar with empty pointer".to_string()));
+        };
+        let (heap_page_idx, heap_offset) = unpack_ptr(varchar_head.page_ptr.unwrap());
         let heap_data = self.storage.read_bytes(heap_page_idx, heap_offset as usize, varchar_head.len as usize)?;
         Ok(DataItem::VarChar {
             head: varchar_head.clone(),
@@ -115,10 +119,13 @@ impl Table {
 
     /// Helper function to load and deallocate a VarChar data item
     fn del_varchar(&mut self, varchar_head: &DataItem, tnx_id: u64) -> RsqlResult<()> {
-        let DataItem::VarChar { head: varchar_head, value } = varchar_head else {
+        let DataItem::VarChar { head: varchar_head, ..} = varchar_head else {
             panic!("load_varchar called with non-varchar data item");
         };
-        let (heap_page_idx, heap_offset) = unpack_ptr(varchar_head.page_ptr);
+        if let None = varchar_head.page_ptr {
+            return Err(RsqlError::StorageError("Cannot delete varchar with empty pointer".to_string()));
+        };
+        let (heap_page_idx, heap_offset) = unpack_ptr(varchar_head.page_ptr.unwrap());
         // free heap
         self.allocator.free_heap(tnx_id, heap_page_idx, heap_offset, &mut self.storage)?;
         Ok(())
@@ -148,8 +155,9 @@ impl Table {
         }
         guard.insert(id);
         // 2. open table file
-        let path = config::DB_DIR.to_string() + "/" + &id.to_string() + ".dbt"; // .dbt for database table
-        let storage = ConsistStorageEngine::new(&path, id)?;
+        let path = get_table_path(id);
+        let path_str = path.to_str().unwrap();
+        let storage = ConsistStorageEngine::new(path_str, id)?;
         if let None = storage.max_page_index() {
             return Err(RsqlError::StorageError(format!("Table {id} file is empty, maybe corrupted")));
         };
@@ -181,8 +189,8 @@ impl Table {
             indexes.insert(col_name, btree_index);
         };
         // 5. check if indexes compatible with schema
-        if indexes.len() != schema.columns.iter().filter(|col| col.index).count() {
-            panic!("Incompatible index count between schema and table file {}", path);
+        if indexes.len() != schema.get_columns().iter().filter(|col| col.index).count() {
+            panic!("Incompatible index count between schema and table file {:?}", path);
         }
         // 6. construct allocator
         let allocator = Allocator::from(&header_page, offset as u64)?;
@@ -204,11 +212,12 @@ impl Table {
         }
         guard.insert(id);
         // create table file
-        let path = config::DB_DIR.to_string() + "/" + &id.to_string() + ".dbt"; // .dbt for database table
-        let mut storage = ConsistStorageEngine::new(&path, id)?;
+        let path = get_table_path(id);
+        let path_str = path.to_str().unwrap();
+        let mut storage = ConsistStorageEngine::new(path_str, id)?;
         // 1. collect indexes info
         let mut index_cols = HashSet::new();
-        for col in &schema.columns {
+        for col in schema.get_columns() {
             if col.index {
                 index_cols.insert(col.name.clone());
             }
@@ -246,7 +255,7 @@ impl Table {
         // 4. construct allocator
         // calculate entry size
         let mut entry_size = 0u64;
-        for col in &schema.columns {
+        for col in schema.get_columns() {
             entry_size += DataItem::cal_size_from_coltype(&col.data_type) as u64;
         }
         let allocator = Allocator::create(entry_size, offset as u64);
@@ -278,7 +287,7 @@ impl Table {
     }
     fn get_row_ptr_by_pk(&self, pk: &DataItem) -> RsqlResult<Option<(u64, u64)>> {
         // find the primary key column
-        let pk_col = self.schema.columns.iter().find(|col| col.pk);
+        let pk_col = self.schema.get_columns().iter().find(|col| col.pk);
         if pk_col.is_none() {
             return Err(RsqlError::InvalidInput("Table has no primary key".to_string()));
         }
@@ -303,36 +312,19 @@ impl Table {
         let row = self.read_row_at(match_page, match_offset)?;
         Ok(Some(row))
     }
-    pub fn get_row_by_indexed_col(&self, col_name: &str, value: &DataItem) -> RsqlResult<Option<Vec<DataItem>>> {
-        // get index
-        let index = self.indexes.get(col_name);
-        if index.is_none() {
-            panic!("Column {} is not indexed, cannot search", col_name);
-        };
-        let index = index.unwrap();
-        // search the index
-        let pair_opt = index.find_entry(value.clone(), &self.storage)?;
-        let (match_page, match_offset) = match pair_opt {
-            Some(pair) => pair,
-            None => return Ok(None),
-        };
-        // read the row from data page
-        let row = self.read_row_at(match_page, match_offset)?;
-        Ok(Some(row))
-    }
     /// Get rows by range on an indexed column
     /// returns entry in [start, end]
     pub fn get_rows_by_range_indexed_col(
         &self,
         col_name: &str,
-        start: &DataItem,
-        end: &DataItem,
+        start: &Option<DataItem>,
+        end: &Option<DataItem>,
     ) -> RsqlResult<impl Iterator<Item = RsqlResult<Vec<DataItem>>>> {
         // get index
         let index = self.indexes.get(col_name).ok_or(RsqlError::InvalidInput(
             format!("Column {} is not indexed, cannot search", col_name)
         ))?;
-        // get iterator from index (注意 unwrap Result)
+        // get iterator from index
         let entry_iter = index.find_range_entry(start.clone(), end.clone(), &self.storage)?;
 
         // map to row iterator
@@ -346,7 +338,7 @@ impl Table {
     }
     pub fn get_all_rows(&self) -> RsqlResult<impl Iterator<Item = RsqlResult<Vec<DataItem>>>> {
         // find primary key column
-        let pk_col = self.schema.columns.iter().find(|col| col.pk);
+        let pk_col = self.schema.get_columns().iter().find(|col| col.pk);
         if pk_col.is_none() {
             panic!("Table has no primary key column, cannot get all rows");
         }
@@ -372,6 +364,18 @@ impl Table {
     pub fn insert_row(&mut self, data: Vec<DataItem>, tnx_id: u64) -> RsqlResult<()> {
         // 1. check if data satisfies schema
         self.schema.satisfy(&data)?;
+        // check unique constraints separately
+        // the pk must be unique, so no need to check again
+        for (i, col) in self.schema.get_columns().iter().enumerate() {
+            if col.unique {
+                let index = self.indexes.get(&col.name).unwrap();
+                let existing = index.check_exists(data[i].clone(), &self.storage)?;
+                if existing {
+                    return Err(RsqlError::InvalidInput(
+                        format!("Unique constraint violation on column {}", col.name)));
+                }
+            }
+        }
         // 2. allocate entry
         let (entry_page_idx, entry_offset) = self.allocator.alloc_entry(tnx_id, &mut self.storage)?;
         // 3. store VarChar data if any
@@ -386,7 +390,7 @@ impl Table {
         let entry_bytes = Self::row_to_bytes(&data)?;
         self.storage.write_bytes(tnx_id, entry_page_idx, entry_offset as usize, &entry_bytes)?;
         // 5. write index entries
-        for (i, col) in self.schema.columns.iter().enumerate() {
+        for (i, col) in self.schema.get_columns().iter().enumerate() {
             if col.index {
                 let index = self.indexes.get_mut(&col.name).unwrap();
                 index.insert_entry(
@@ -425,7 +429,7 @@ impl Table {
             }
         }
         // 5. delete from indexes
-        for (i, col) in self.schema.columns.iter().enumerate() {
+        for (i, col) in self.schema.get_columns().iter().enumerate() {
             if col.index {
                 let index = self.indexes.get_mut(&col.name).unwrap();
                 index.delete_entry(
@@ -441,6 +445,16 @@ impl Table {
     }
 }
 
+/// Get the file path for a table given its ID
+/// For tests, use temp directory
+fn get_table_path(id: u64) -> PathBuf {
+    if cfg!(test) {
+        std::env::temp_dir().join(format!("rsql_test_table_{}.dbt", id))
+    } else {
+        std::path::Path::new(config::DB_DIR).join(format!("{}.dbt", id))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -448,8 +462,7 @@ mod tests {
     use std::fs;
 
     fn setup_schema() -> TableSchema {
-        TableSchema {
-            columns: vec![
+        let columns = vec![
                 TableColumn {
                     name: "id".to_string(),
                     data_type: ColType::Integer,
@@ -466,8 +479,8 @@ mod tests {
                     index: false,
                     unique: false,
                 },
-            ],
-        }
+            ];
+        TableSchema::new(columns).unwrap()
     }
 
     fn make_chars(s: &str, len: usize) -> String {
@@ -481,21 +494,19 @@ mod tests {
 
     #[test]
     fn test_table_create_and_open() {
-        let db_dir = config::DB_DIR;
-        let _ = fs::create_dir_all(db_dir);
         let table_id = 999;
         let schema = setup_schema();
         let tnx_id = 1;
 
         // cleanup if exists
-        let path = format!("{}/{}.dbt", db_dir, table_id);
+        let path = get_table_path(table_id);
         let _ = fs::remove_file(&path);
 
         {
             // 1. Create table
             let table = Table::create(table_id, schema.clone(), tnx_id).expect("Failed to create table");
             assert_eq!(table.id, table_id);
-            assert_eq!(table.get_schema().columns.len(), 2);
+            assert_eq!(table.get_schema().get_columns().len(), 2);
         }
 
         {
@@ -509,11 +520,8 @@ mod tests {
 
     #[test]
     fn test_table_crud_operations() {
-        let db_dir = config::DB_DIR;
-        let _ = fs::create_dir_all(db_dir);
         let table_id = 2000;
-        let schema = TableSchema {
-            columns: vec![
+        let columns = vec![
                 TableColumn {
                     name: "id".to_string(),
                     data_type: ColType::Integer,
@@ -530,10 +538,10 @@ mod tests {
                     index: false,
                     unique: false,
                 },
-            ],
-        };
+            ];
+        let schema = TableSchema::new(columns).unwrap();
         let tnx_id = 1;
-        let path = format!("{}/{}.dbt", db_dir, table_id);
+        let path = get_table_path(table_id);
         let _ = fs::remove_file(&path);
 
         let mut table = Table::create(table_id, schema, tnx_id).expect("Failed to create table");
@@ -543,7 +551,7 @@ mod tests {
         let dummy_row = vec![
             DataItem::Integer(999),
             DataItem::VarChar {
-                head: VarCharHead { max_len: 64, len: 5, page_ptr: 0 }, 
+                head: VarCharHead { max_len: 64, len: 5, page_ptr: Some(0) }, 
                 value: "dummy".to_string(),
             },
         ];
@@ -553,7 +561,7 @@ mod tests {
         let row1 = vec![
             DataItem::Integer(1),
             DataItem::VarChar {
-                head: VarCharHead { max_len: 64, len: 11, page_ptr: 0 }, 
+                head: VarCharHead { max_len: 64, len: 11, page_ptr: Some(0) }, 
                 value: "Hello World".to_string(),
             },
         ];
@@ -574,7 +582,7 @@ mod tests {
         let row1_updated = vec![
             DataItem::Integer(1),
             DataItem::VarChar {
-                head: VarCharHead { max_len: 64, len: 3, page_ptr: 0 },
+                head: VarCharHead { max_len: 64, len: 3, page_ptr: Some(0) },
                 value: "Bye".to_string(),
             },
         ];
@@ -595,12 +603,10 @@ mod tests {
 
     #[test]
     fn test_table_scans() {
-        let db_dir = config::DB_DIR;
-        let _ = fs::create_dir_all(db_dir);
         let table_id = 2001;
         let schema = setup_schema();
         let tnx_id = 1;
-        let path = format!("{}/{}.dbt", db_dir, table_id);
+        let path = get_table_path(table_id);
         let _ = fs::remove_file(&path);
 
         let mut table = Table::create(table_id, schema, tnx_id).expect("Failed to create table");
@@ -622,8 +628,8 @@ mod tests {
         // 2. Range scan [2, 4]
         let range_rows: Vec<_> = table.get_rows_by_range_indexed_col(
             "id", 
-            &DataItem::Integer(2), 
-            &DataItem::Integer(4)
+            &Some(DataItem::Integer(2)), 
+            &Some(DataItem::Integer(4))
         ).expect("Range scan failed")
         .collect::<RsqlResult<Vec<_>>>().expect("Iterator error");
         
@@ -636,12 +642,10 @@ mod tests {
 
     #[test]
     fn test_get_row_by_pk_empty() {
-        let db_dir = config::DB_DIR;
-        let _ = fs::create_dir_all(db_dir);
         let table_id = 1000;
         let schema = setup_schema();
         let tnx_id = 1;
-        let path = format!("{}/{}.dbt", db_dir, table_id);
+        let path = get_table_path(table_id);
         let _ = fs::remove_file(&path);
 
         let table = Table::create(table_id, schema, tnx_id).expect("Failed to create table");
@@ -655,12 +659,10 @@ mod tests {
 
     #[test]
     fn test_get_all_rows_empty() {
-        let db_dir = config::DB_DIR;
-        let _ = fs::create_dir_all(db_dir);
         let table_id = 1001;
         let schema = setup_schema();
         let tnx_id = 1;
-        let path = format!("{}/{}.dbt", db_dir, table_id);
+        let path = get_table_path(table_id);
         let _ = fs::remove_file(&path);
 
         let table = Table::create(table_id, schema, tnx_id).expect("Failed to create table");

@@ -1,5 +1,5 @@
 use crate::db::data_item;
-use crate::db::errors::{RsqlResult};
+use crate::db::common::{RsqlResult};
 use super::super::storage;
 
 #[derive(Clone)]

@@ -1,6 +1,7 @@
 mod btree_index;
 mod storage;
-pub mod table;
 mod wal;
 mod allocator;
 mod consist_storage;
+pub mod table;
+pub use table::Table;

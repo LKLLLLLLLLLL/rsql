@@ -1,5 +1,5 @@
 use crate::config::{PAGE_SIZE_BYTES, MAX_PAGE_CACHE_BYTES};
-use crate::db::errors::{RsqlError, RsqlResult};
+use crate::db::common::{RsqlError, RsqlResult};
 use super::cache::LRUCache;
 use std::sync::{RwLock, Mutex, Arc, OnceLock};
 use std::fs::{self, OpenOptions, File};
@@ -251,17 +251,16 @@ impl Drop for StorageManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
+    use tempfile::tempdir;
 
     #[test]
     fn test_storage_basic_write_read() {
-        let file_path = "test_storage_basic.db";
-        if Path::new(file_path).exists() {
-            fs::remove_file(file_path).unwrap();
-        }
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("test_storage_basic.db");
+        let file_path_str = file_path.to_str().unwrap();
 
         {
-            let mut storage = StorageManager::new(file_path).unwrap();
+            let mut storage = StorageManager::new(file_path_str).unwrap();
             let (page_idx, mut page) = storage.new_page().unwrap();
             assert_eq!(page_idx, 0);
             
@@ -274,23 +273,20 @@ mod tests {
 
         // persistence check
         {
-            let storage = StorageManager::new(file_path).unwrap();
+            let storage = StorageManager::new(file_path_str).unwrap();
             let read_page = storage.read_page(0).unwrap();
             assert_eq!(read_page.data[0], 42);
         }
-
-        fs::remove_file(file_path).unwrap();
     }
 
     #[test]
     fn test_storage_multi_pages() {
-        let file_path = "test_storage_multi.db";
-        if Path::new(file_path).exists() {
-            fs::remove_file(file_path).unwrap();
-        }
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("test_storage_multi.db");
+        let file_path_str = file_path.to_str().unwrap();
 
         {
-            let mut storage = StorageManager::new(file_path).unwrap();
+            let mut storage = StorageManager::new(file_path_str).unwrap();
             for i in 0..5 {
                 let (idx, mut page) = storage.new_page().unwrap();
                 assert_eq!(idx, i);
@@ -303,19 +299,16 @@ mod tests {
                 assert_eq!(page.data[0], i as u8);
             }
         }
-
-        fs::remove_file(file_path).unwrap();
     }
 
     #[test]
     fn test_storage_free_page() {
-        let file_path = "test_storage_free.db";
-        if Path::new(file_path).exists() {
-            fs::remove_file(file_path).unwrap();
-        }
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("test_storage_free.db");
+        let file_path_str = file_path.to_str().unwrap();
 
         {
-            let mut storage = StorageManager::new(file_path).unwrap();
+            let mut storage = StorageManager::new(file_path_str).unwrap();
             storage.new_page().unwrap(); // 0
             storage.new_page().unwrap(); // 1
             storage.new_page().unwrap(); // 2
@@ -331,7 +324,5 @@ mod tests {
             storage.free().unwrap();
             assert_eq!(storage.max_page_index(), None);
         }
-
-        fs::remove_file(file_path).unwrap();
     }
 }
