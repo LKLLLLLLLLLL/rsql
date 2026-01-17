@@ -15,8 +15,8 @@ pub struct WebsocketActor{
     working_thread_pool: Arc<WorkingThreadPool>,
     working_query: Arc<AtomicU64>,
     current_connection_id: u64,
-    authenticated: bool,
     username: String,
+    password: String,
 }
 
 impl Actor for WebsocketActor{
@@ -24,14 +24,14 @@ impl Actor for WebsocketActor{
 
     //start the websocket connection
     fn started(&mut self, ctx: &mut Self::Context) {
-        info!("WebSocket connection established, connection_id: {}, username: {}, authenticated: {}", 
-              self.current_connection_id, self.username, self.authenticated);
+        info!("WebSocket connection established, connection_id: {}, username: {}", 
+              self.current_connection_id, self.username);
         
-        // send confimation message to the front-end
+        // send confimation message to the front-end with connection_id
         let welcome_msg = WebsocketResponse {
             rayon_response: RayonQueryResponse {
-                response_content: format!("Connection established. Connection ID: {}", 
-                                         self.current_connection_id),
+                response_content: format!("Connection established. Connection ID: {}, User: {}", 
+                                         self.current_connection_id, self.username),
                 error: String::new(),
                 execution_time: 0,
             },
@@ -50,7 +50,7 @@ impl Actor for WebsocketActor{
 
     //stop the websocket connection
     fn stopped(&mut self, _ctx: &mut Self::Context) {
-        info!("WebSocket connection closed, connection_id: {}, username: {}", self.current_connection_id, self.username);
+        info!("WebSocket connection closed");
         self.working_thread_pool.rollback_sync(self.current_connection_id).unwrap();
     }
 }
@@ -185,15 +185,15 @@ impl WebsocketActor{
         working_thread_pool: Arc<WorkingThreadPool>,
         working_query: Arc<AtomicU64>,
         current_connection_id: u64,
-        authenticated: bool,
         username: String,
+        password: String,
     ) -> Self{
         Self{
             working_thread_pool,
             working_query,
             current_connection_id,
-            authenticated,
-            username
+            username,
+            password,
         }
     }
 }

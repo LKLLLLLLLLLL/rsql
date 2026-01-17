@@ -6,10 +6,10 @@ use std::path::PathBuf;
 use super::storage::Page;
 use crate::config;
 use crate::common::{RsqlError, RsqlResult};
-use crate::common::{DataItem, VarCharHead};
+use crate::common::data_item::{DataItem, VarCharHead};
 use super::btree_index;
 use super::consist_storage::ConsistStorageEngine;
-use crate::catalog::TableSchema;
+use crate::catalog::table_schema::TableSchema;
 use crate::utils;
 
 use super::allocator::Allocator;
@@ -214,8 +214,12 @@ impl Table {
             panic!("Table {} already opened in this process", id);
         }
         guard.insert(id);
-        // create table file
+        // create table file - delete old file if exists
         let path = get_table_path(id, is_sys);
+        if path.exists() {
+            std::fs::remove_file(&path)
+                .map_err(|e| RsqlError::StorageError(format!("Failed to delete existing table file: {}", e)))?;
+        }
         let path_str = path.to_str().unwrap();
         let mut storage = ConsistStorageEngine::new(path_str, id)?;
         // 1. collect indexes info

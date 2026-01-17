@@ -380,7 +380,12 @@ const dropModalVisible = ref(false)
 const pendingDropTable = ref('')
 
 // WebSocket 相关状态
-const wsUrl = 'ws://127.0.0.1:4455/ws'
+// ============ 关键配置 ============
+// 使用相对协议，自动根据当前页面协议选择 ws 或 wss
+// 这样支持：
+// 1. 生产环境：使用Rust服务器 http://localhost:4456 -> ws://localhost:4456/ws
+// 2. 开发环境：Vite代理到后端 -> ws://localhost:5173/ws（代理到后端）
+const wsUrl = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`
 const wsRef = ref(null)
 const connected = ref(false)
 const codeInput = ref('')
@@ -1366,8 +1371,8 @@ onMounted(() => {
 
     if (submitInsertBtn) {
         submitInsertBtn.addEventListener('click', () => {
-            const currentTableEl = document.getElementById('current-table')
-            const tableName = currentTableEl ? currentTableEl.textContent : ''
+            // Use reactive state as the single source of truth for current table name
+            const tableName = (currentTableName.value || '').trim()
             
             if (!insertRowsContainer) return
             
@@ -1375,6 +1380,11 @@ onMounted(() => {
             
             if (dataRows.length === 0) {
                 alert('请至少添加一行数据')
+                return
+            }
+
+            if (!tableName) {
+                alert('未获取到表名，无法生成插入语句，请先选择表')
                 return
             }
 

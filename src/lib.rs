@@ -45,3 +45,4 @@ pub fn run() {
     init_log();
     server::daemon::daemon();
 }
+
