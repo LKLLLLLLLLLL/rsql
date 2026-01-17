@@ -1,6 +1,6 @@
-use super::super::data_item;
+use crate::db::data_item;
+use crate::db::errors::{RsqlResult};
 use super::super::storage;
-use super::super::errors::RsqlResult;
 
 #[derive(Clone)]
 pub struct IndexItem {

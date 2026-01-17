@@ -21,7 +21,7 @@
 						:style="{ height: `${rowHeight}px` }"
 					>
 						<template v-for="(_, leadIdx) in leadingHeaders" :key="`lead-c-${leadIdx}`">
-							<td>
+							<td class="leading-cell">
 								<slot
 									name="leading-cell"
 									:row="row"
@@ -62,16 +62,18 @@ const props = defineProps({
 	rows: { type: Array, default: () => [] },
 	rowHeight: { type: Number, default: 48 },
 	visibleCount: { type: Number, default: 12 },
-	leadingHeaders: { type: Array, default: () => [] }
+	leadingHeaders: { type: Array, default: () => [] },
+	maxHeight: { type: Number, default: '720' }, // 控制表格纵向长度
+	buffer: { type: Number, default: 4 } // 配置渲染缓冲区大小（上下各 buffer 行），提升快速滚动的流畅度
 })
 
 const scrollRef = ref(null)
 const startIndex = ref(0)
-const maxHeightPx = computed(() => `${props.visibleCount * props.rowHeight}px`)
+const maxHeightPx = computed(() => props.maxHeight != null ? `${props.maxHeight}px` : `${props.visibleCount * props.rowHeight}px`)
 const totalColumns = computed(() => props.headers.length + props.leadingHeaders.length)
-const buffer = 4
-const safeStart = computed(() => Math.max(startIndex.value - buffer, 0))
-const endIndex = computed(() => Math.min(startIndex.value + props.visibleCount + buffer, props.rows.length))
+const bufferSize = computed(() => Number.isFinite(props.buffer) ? props.buffer : 4)
+const safeStart = computed(() => Math.max(startIndex.value - bufferSize.value, 0))
+const endIndex = computed(() => Math.min(startIndex.value + props.visibleCount + bufferSize.value, props.rows.length))
 const renderStart = computed(() => safeStart.value)
 const visibleRows = computed(() => props.rows.slice(safeStart.value, endIndex.value))
 const paddingTop = computed(() => safeStart.value * props.rowHeight)
@@ -119,8 +121,34 @@ onBeforeUnmount(() => {
 }
 
 .virtual-table {
-	width: 100%;
+	width: max-content; /* 让列多时自然撑开，配合横向滚动条 */
+	min-width: 100%;
 	border-collapse: collapse;
+	table-layout: fixed; /* 固定布局避免列宽抖动 */
+}
+
+.leading-cell {
+	min-width: 20px;
+	max-width: 60px;
+	width: 20px; /* 索引列固定更窄，与数据列区分 */
+	text-align: left;
+	font-variant-numeric: tabular-nums;
+}
+
+.virtual-table th,
+.virtual-table td {
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* 仅数据列使用较大的最小宽度，索引列保持窄宽度 */
+
+.virtual-table td:not(.leading-cell),
+.virtual-table th:not(.leading-cell) {
+	min-width: 140px;
+	max-width: 240px;
+	width: 160px;
 }
 
 .virtual-table .spacer td {

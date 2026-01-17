@@ -1,8 +1,7 @@
 pub mod server;
-pub mod executor;
-mod wal;
-mod btree_index;
+mod executor;
 mod data_item;
-pub mod errors;
+mod errors;
 mod sql_parser;
-pub mod storage;
+mod storage_engine;
+mod table_schema;
