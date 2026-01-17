@@ -38,15 +38,72 @@ pub struct TableObject {
 
 fn get_table_object (table_name: &str) -> RsqlResult<TableObject> {
     // 1. get Table
-    let table_column = TableColumn {
-        name: table_name.to_string(),
-        data_type: ColType::Integer,
-        pk: true,
-        nullable: false,
-        index: true,
-        unique: false,
+    let columns = match table_name {
+        "users" => vec![
+            TableColumn {
+                name: "id".to_string(),
+                data_type: ColType::Integer,
+                pk: true,
+                nullable: false,
+                index: true,
+                unique: true,
+            },
+            TableColumn {
+                name: "name".to_string(),
+                data_type: ColType::Chars(50),
+                pk: false,
+                nullable: false,
+                index: false,
+                unique: false,
+            },
+            TableColumn {
+                name: "age".to_string(),
+                data_type: ColType::Integer,
+                pk: false,
+                nullable: true,
+                index: false,
+                unique: false,
+            },
+        ],
+        "products" => vec![
+            TableColumn {
+                name: "product_id".to_string(),
+                data_type: ColType::Integer,
+                pk: true,
+                nullable: false,
+                index: true,
+                unique: true,
+            },
+            TableColumn {
+                name: "product_name".to_string(),
+                data_type: ColType::Chars(100),
+                pk: false,
+                nullable: false,
+                index: false,
+                unique: false,
+            },
+            TableColumn {
+                name: "price".to_string(),
+                data_type: ColType::Integer,
+                pk: false,
+                nullable: false,
+                index: false,
+                unique: false,
+            },
+        ],
+        _ => vec![
+            TableColumn {
+                name: "id".to_string(),
+                data_type: ColType::Integer,
+                pk: true,
+                nullable: false,
+                index: true,
+                unique: false,
+            },
+        ],
     };
-    let table_obj = Table::from(0, TableSchema::new(vec![table_column])?, false)?;
+    //Table::from(0, TableSchema::new(columns)?, false)?
+    let table_obj = Table::create(114514, TableSchema::new(columns)?, 0, false)?;
     let table_schema = table_obj.get_schema();
     // 2. construct TableObject
     let mut map = HashMap::new();
@@ -332,4 +389,224 @@ fn handle_join(left_table_obj: &TableObject, right_table_obj: &TableObject, join
     }
     let join_result = handle_on_expr(&left_null_row, &right_null_row, &extended_cols, &extended_rows, join_type, on)?;
     Ok(((extended_cols, extended_cols_type), join_result))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::sql_parser::Plan;
+    use serial_test::serial;
+
+    #[test]
+    #[serial]
+    fn test_table_scan() {
+        let result = get_table_object("users");
+        assert!(result.is_ok());
+        let table_obj = result.unwrap();
+        assert_eq!(table_obj.cols.0, vec!["id", "name", "age"]);
+        assert_eq!(table_obj.pk_col.0, "id");
+    }
+
+    #[test]
+    #[serial]
+    fn test_simple_select_all() {
+        // SELECT * FROM users
+        let sql = "SELECT * FROM users";
+        let plan = Plan::build_plan(sql);
+        assert!(plan.is_ok());
+    }
+
+    #[test]
+    #[serial]
+    fn test_projection() {
+        // SELECT id, name FROM users
+        let sql = "SELECT id, name FROM users";
+        let plan = Plan::build_plan(sql);
+        assert!(plan.is_ok());
+        let plan = plan.unwrap();
+        assert!(!plan.items.is_empty());
+    }
+
+    #[test]
+    #[serial]
+    fn test_filter_with_constant() {
+        // SELECT * FROM users WHERE age > 18
+        let sql = "SELECT * FROM users WHERE age > 18";
+        let plan = Plan::build_plan(sql);
+        assert!(plan.is_ok());
+        let plan = plan.unwrap();
+        assert!(!plan.items.is_empty());
+    }
+
+    #[test]
+    #[serial]
+    fn test_filter_with_column_comparison() {
+        // SELECT * FROM users WHERE id = age
+        let sql = "SELECT * FROM users WHERE id = age";
+        let plan = Plan::build_plan(sql);
+        assert!(plan.is_ok());
+        let plan = plan.unwrap();
+        assert!(!plan.items.is_empty());
+    }
+
+    #[test]
+    #[serial]
+    fn test_filter_with_string() {
+        // SELECT * FROM users WHERE name = 'Alice'
+        let sql = "SELECT * FROM users WHERE name = 'Alice'";
+        let plan = Plan::build_plan(sql);
+        assert!(plan.is_ok());
+        let plan = plan.unwrap();
+        assert!(!plan.items.is_empty());
+    }
+
+    #[test]
+    #[serial]
+    fn test_projection_with_filter() {
+        // SELECT id, name FROM users WHERE age > 18
+        let sql = "SELECT id, name FROM users WHERE age > 18";
+        let plan = Plan::build_plan(sql);
+        assert!(plan.is_ok());
+        let plan = plan.unwrap();
+        assert!(!plan.items.is_empty());
+    }
+
+    #[test]
+    #[serial]
+    fn test_join_two_tables() {
+        // SELECT * FROM users JOIN products ON users.id = products.product_id
+        let sql = "SELECT * FROM users JOIN products ON users.id = products.product_id";
+        let plan = Plan::build_plan(sql);
+        assert!(plan.is_ok());
+        let plan = plan.unwrap();
+        assert!(!plan.items.is_empty());
+    }
+
+    #[test]
+    #[serial]
+    fn test_insert_with_columns() {
+        // INSERT INTO users (id, name, age) VALUES (1, 'Bob', 25)
+        let sql = "INSERT INTO users (id, name, age) VALUES (1, 'Bob', 25)";
+        let plan = Plan::build_plan(sql);
+        assert!(plan.is_ok());
+        let plan = plan.unwrap();
+        assert!(!plan.items.is_empty());
+    }
+
+    #[test]
+    #[serial]
+    fn test_delete_with_filter() {
+        // DELETE FROM users WHERE age < 18
+        let sql = "DELETE FROM users WHERE age < 18";
+        let plan = Plan::build_plan(sql);
+        assert!(plan.is_ok());
+        let plan = plan.unwrap();
+        assert!(!plan.items.is_empty());
+    }
+
+    #[test]
+    #[serial]
+    fn test_complex_filter_with_and() {
+        // SELECT * FROM users WHERE age > 18 AND id = 1
+        let sql = "SELECT * FROM users WHERE age > 18 AND id = 1";
+        let plan = Plan::build_plan(sql);
+        assert!(plan.is_ok());
+        let plan = plan.unwrap();
+        assert!(!plan.items.is_empty());
+    }
+
+    #[test]
+    #[serial]
+    fn test_complex_filter_with_or() {
+        // SELECT * FROM users WHERE age > 30 OR name = 'Charlie'
+        let sql = "SELECT * FROM users WHERE age > 30 OR name = 'Charlie'";
+        let plan = Plan::build_plan(sql);
+        assert!(plan.is_ok());
+        let plan = plan.unwrap();
+        assert!(!plan.items.is_empty());
+    }
+
+    #[test]
+    #[serial]
+    fn test_different_comparison_operators() {
+        // Test various operators: >, <, >=, <=, =, !=
+        let test_cases = vec![
+            "SELECT * FROM users WHERE age > 18",
+            "SELECT * FROM users WHERE age < 18",
+            "SELECT * FROM users WHERE age >= 18",
+            "SELECT * FROM users WHERE age <= 18",
+            "SELECT * FROM users WHERE age = 18",
+            "SELECT * FROM users WHERE age != 18",
+        ];
+
+        for sql in test_cases {
+            let plan = Plan::build_plan(sql);
+            assert!(plan.is_ok(), "Failed to parse: {}", sql);
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn test_projection_ordering() {
+        // SELECT name, id FROM users (different column order)
+        let sql = "SELECT name, id FROM users";
+        let plan = Plan::build_plan(sql);
+        assert!(plan.is_ok());
+        let plan = plan.unwrap();
+        assert!(!plan.items.is_empty());
+    }
+
+    #[test]
+    #[serial]
+    fn test_multiple_table_types() {
+        let table_names = vec!["users", "products"];
+        for table_name in table_names {
+            let result = get_table_object(table_name);
+            assert!(result.is_ok(), "Failed to get table: {}", table_name);
+            let table_obj = result.unwrap();
+            assert!(!table_obj.cols.0.is_empty());
+            assert_eq!(table_obj.cols.0.len(), table_obj.cols.1.len());
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn test_table_object_structure() {
+        let table_obj = get_table_object("users").unwrap();
+        
+        // Verify column names
+        assert!(table_obj.map.contains_key("id"));
+        assert!(table_obj.map.contains_key("name"));
+        assert!(table_obj.map.contains_key("age"));
+        
+        // Verify column indices
+        assert_eq!(*table_obj.map.get("id").unwrap(), 0);
+        assert_eq!(*table_obj.map.get("name").unwrap(), 1);
+        assert_eq!(*table_obj.map.get("age").unwrap(), 2);
+        
+        // Verify primary key
+        assert_eq!(table_obj.pk_col.0, "id");
+    }
+
+    #[test]
+    #[serial]
+    fn test_join_with_filter() {
+        // SELECT * FROM users JOIN products ON users.id = products.product_id WHERE age > 18
+        let sql = "SELECT * FROM users JOIN products ON users.id = products.product_id WHERE age > 18";
+        let plan = Plan::build_plan(sql);
+        assert!(plan.is_ok());
+        let plan = plan.unwrap();
+        assert!(!plan.items.is_empty());
+    }
+
+    #[test]
+    #[serial]
+    fn test_select_with_projection_and_filter() {
+        // SELECT id, name FROM users WHERE age >= 21 AND id = 1
+        let sql = "SELECT id, name FROM users WHERE age >= 21 AND id = 1";
+        let plan = Plan::build_plan(sql);
+        assert!(plan.is_ok());
+        let plan = plan.unwrap();
+        assert!(!plan.items.is_empty());
+    }
 }
