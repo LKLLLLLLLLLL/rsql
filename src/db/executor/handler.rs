@@ -46,7 +46,7 @@ fn get_table_object (table_name: &str) -> RsqlResult<TableObject> {
         index: true,
         unique: false,
     };
-    let table_obj = Table::from(0, TableSchema::new(vec![table_column])?)?;
+    let table_obj = Table::from(0, TableSchema::new(vec![table_column])?, false)?;
     let table_schema = table_obj.get_schema();
     // 2. construct TableObject
     let mut map = HashMap::new();
@@ -258,7 +258,10 @@ pub fn execute_plan_node(node: &PlanNode, tnx_id: u64) -> RsqlResult<ExecutionRe
         }
         PlanNode::DropTable { table_name, if_exists } => {
             todo!("Implement DropTable execution")
-        }
+        },
+        PlanNode::CreateIndex {index_name, table_name, columns, unique} => {
+            todo!("Implement CreateIndex execution")
+        },
         PlanNode::Apply { input, subquery, apply_type } => {
             // it depends
             todo!("Implement Apply execution")

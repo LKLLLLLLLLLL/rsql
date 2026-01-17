@@ -1,5 +1,5 @@
 use super::super::common::RsqlResult;
-use super::super::sql_parser::{Plan, plan};
+use super::super::sql_parser::{Plan, plan::{PlanItem}};
 use super::handler::execute_plan_node;
 use tracing::info;
 
@@ -8,28 +8,23 @@ pub fn execute(sql: &str, connection_id: u64) -> RsqlResult<()> {
     
     info!("Parsing SQL...");
     let plan = Plan::build_plan(sql)?;
-    
-    info!("Opening transaction...");
-    for (idx, tnx) in plan.tnxs.iter().enumerate() {
-        info!("Processing transaction: {}", idx);
-        
-        // execute plan_nodes in the transaction
-        for stmt in &tnx.stmts {
-            info!("Executing statement: {:?}", stmt);
-            execute_plan_node(stmt, connection_id)?;
-        }
-        
-        // 根据事务状态决定提交或回滚
-        match &tnx.commit_stat {
-            plan::TnxState::Commit => {
-                info!("Committing transaction {}", idx);
-            }
-            plan::TnxState::Rollback => {
-                info!("Rolling back transaction {}", idx);
-            }
+    for item in plan.items.iter() {
+        match item {
+            PlanItem::Begin => {
+                info!("Begin transaction");
+            },
+            PlanItem::Commit => {
+                info!("Commit transaction");
+            },
+            PlanItem::Rollback => {
+                info!("Rollback transaction");
+            },
+            PlanItem::Statement(plan_node) => {
+                info!("Executing statement: {:?}", plan_node);
+                execute_plan_node(plan_node, connection_id)?;
+            },
         }
     }
-
     info!("SQL executed successfully.");
     Ok(())
 }
