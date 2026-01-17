@@ -23,19 +23,6 @@ use sqlparser::parser::Parser;
 use crate::db::sql_parser::utils::is_aggregate_expr;
 use crate::db::errors::{RsqlResult, RsqlError};
 
-// Represents the state of a transaction.
-#[derive(Debug)]
-pub enum TnxState {
-    Commit,
-    Rollback,
-}
-
-#[derive(Debug)]
-pub struct Tnx {
-    pub stmts: Vec<PlanNode>,
-    pub commit_stat: TnxState,
-}
-
 /// Represents the type of join operation.
 #[derive(Debug, Clone, Copy)]
 pub enum JoinType {
@@ -133,114 +120,47 @@ pub enum PlanNode {
     },
 }
 
-/// SQL -> LogicalPlan(IR)
+#[derive(Debug)]
+pub enum PlanItem {
+    Statement(PlanNode),
+    Begin,
+    Commit,
+    Rollback,
+}
+
 #[derive(Debug)]
 pub struct Plan {
-    pub tnxs: Vec<Tnx>,
+    pub items: Vec<PlanItem>,
 }
 
 impl Plan {
     /// Builds a logical plan from a SQL string.
-    /// Handles multi-statement SQL and transaction boundaries.
+    /// Flattens all statements into Plan.items, including transaction boundaries.
     pub fn build_plan(sql: &str) -> RsqlResult<Plan> {
         use sqlparser::ast::Statement::*;
         let dialect = GenericDialect {};
         let ast = Parser::parse_sql(&dialect, sql)
             .map_err(|e| RsqlError::ParserError(format!("{e}")))?;
+
         if ast.is_empty() {
             return Err(RsqlError::ParserError("Empty SQL".to_string()));
         }
 
-        let mut tnxs: Vec<Tnx> = Vec::new();
-        let mut curr_stmts: Vec<PlanNode> = Vec::new();
-        let mut in_explicit_tnx = false;
-        let mut curr_commit_stat = TnxState::Commit;
-        let mut has_explicit_tnx = false;
+        let mut items = Vec::new();
 
         for stmt in ast.iter() {
             match stmt {
-                StartTransaction { .. } => {
-                    // Start a new transaction
-                    if in_explicit_tnx {
-                        return Err(RsqlError::ParserError(
-                            "Nested BEGIN detected, a transaction is already open".to_string()
-                        ));
-                    }
-                    in_explicit_tnx = true;
-                    has_explicit_tnx = true;
-                    curr_stmts.clear();
-                    curr_commit_stat = TnxState::Commit;
-                }
-                Commit { .. } => {
-                    if in_explicit_tnx {
-                        tnxs.push(Tnx {
-                            stmts: std::mem::take(&mut curr_stmts),
-                            commit_stat: TnxState::Commit,
-                        });
-                        in_explicit_tnx = false;
-                        curr_commit_stat = TnxState::Commit;
-                    } else {
-                        // COMMIT without BEGIN: treat as single transaction
-                        tnxs.push(Tnx {
-                            stmts: std::mem::take(&mut curr_stmts),
-                            commit_stat: TnxState::Commit,
-                        });
-                        curr_commit_stat = TnxState::Commit;
-                    }
-                }
-                Rollback { .. } => {
-                    if in_explicit_tnx {
-                        tnxs.push(Tnx {
-                            stmts: std::mem::take(&mut curr_stmts),
-                            commit_stat: TnxState::Rollback,
-                        });
-                        in_explicit_tnx = false;
-                        curr_commit_stat = TnxState::Commit;
-                    } else {
-                        // ROLLBACK without BEGIN: treat as single transaction
-                        tnxs.push(Tnx {
-                            stmts: std::mem::take(&mut curr_stmts),
-                            commit_stat: TnxState::Rollback,
-                        });
-                        curr_commit_stat = TnxState::Commit;
-                    }
-                }
+                StartTransaction { .. } => items.push(PlanItem::Begin),
+                Commit { .. } => items.push(PlanItem::Commit),
+                Rollback { .. } => items.push(PlanItem::Rollback),
                 _ => {
-                    // Normal SQL statement
-                    let plan_node = Self::from_ast(stmt)?;
-                    curr_stmts.push(plan_node);
+                    let node = Self::from_ast(stmt)?;
+                    items.push(PlanItem::Statement(node));
                 }
             }
         }
 
-        // If any statements remain, wrap them as a transaction.
-        if in_explicit_tnx {
-            return Err(RsqlError::ParserError(
-                "Explicit transaction not closed, missing COMMIT or ROLLBACK".to_string()
-            ));
-        }
-
-        if !curr_stmts.is_empty() {
-            tnxs.push(Tnx {
-                stmts: std::mem::take(&mut curr_stmts),
-                commit_stat: curr_commit_stat,
-            });
-        }
-
-        // If there were no explicit transactions, but statements exist and no tnxs added, wrap all as one tnx.
-        if tnxs.is_empty() && !curr_stmts.is_empty() {
-            tnxs.push(Tnx {
-                stmts: std::mem::take(&mut curr_stmts),
-                commit_stat: TnxState::Commit,
-            });
-        }
-
-        // If there were no explicit transactions (no BEGIN/COMMIT/ROLLBACK), but statements exist, wrap all as a default transaction.
-        if !has_explicit_tnx && !tnxs.is_empty() {
-            // Already handled by above, do nothing.
-        }
-
-        Ok(Plan { tnxs })
+        Ok(Plan { items })
     }
 
     /// AST -> LogicalPlan
@@ -719,7 +639,29 @@ impl Plan {
                 }
                 PlanNode::Projection { exprs, .. } => format!("Projection [{}]", fmt_exprs(exprs)),
                 PlanNode::Join { join_type, on, .. } => format!("Join [{:?}, on: {}]", join_type, on.as_ref().map_or("None".to_string(), |e| format!("{}", e))),
-                PlanNode::CreateTable { table_name, columns } => format!("CreateTable [{}] cols={}", table_name, columns.iter().map(|c| c.name.to_string()).collect::<Vec<_>>().join(", ")),
+                PlanNode::CreateTable { table_name, columns } => {
+                    // Enhanced: show column constraints (UNIQUE, NOT NULL, NULL) for each column
+                    let mut col_labels = Vec::new();
+                    for col in columns {
+                        let mut constraints = Vec::new();
+                        for opt in &col.options {
+                            use sqlparser::ast::{ColumnOption, ColumnOptionDef};
+                            match &opt.option {
+                                ColumnOption::Unique { .. } => constraints.push("UNIQUE"),
+                                ColumnOption::NotNull => constraints.push("NOT NULL"),
+                                ColumnOption::Null => constraints.push("NULL"),
+                                _ => {}
+                            }
+                        }
+                        let col_str = if constraints.is_empty() {
+                            format!("{}", col.name)
+                        } else {
+                            format!("{} [{}]", col.name, constraints.join(", "))
+                        };
+                        col_labels.push(col_str);
+                    }
+                    format!("CreateTable [{}] cols={}", table_name, col_labels.join(", "))
+                }
                 PlanNode::AlterTable { table_name, operation } => format!("AlterTable [{}] {}", table_name, fmt_alter_op(operation)),
                 PlanNode::DropTable { table_name, if_exists } => {
                     if *if_exists { format!("DropTable [{}] IF EXISTS", table_name) } else { format!("DropTable [{}]", table_name) }
@@ -879,6 +821,24 @@ impl Plan {
                         print_expr_with_path(expr, prefix, &path);
                     }
                 }
+                PlanNode::CreateTable { columns, .. } => {
+                    // For each column, print its name and constraints
+                    for (i, col) in columns.iter().enumerate() {
+                        let name_path = format!("(PlanNode::CreateTable.columns[{}].name)", i);
+                        println!("{}{} -> {}", prefix, name_path, col.name);
+                        for (j, opt) in col.options.iter().enumerate() {
+                            use sqlparser::ast::ColumnOption;
+                            let opt_path = format!("(PlanNode::CreateTable.columns[{}].options[{}].option)", i, j);
+                            let constraint = match &opt.option {
+                                ColumnOption::Unique { .. } => "UNIQUE",
+                                ColumnOption::NotNull => "NOT NULL",
+                                ColumnOption::Null => "NULL",
+                                _ => continue,
+                            };
+                            println!("{}{} -> {}", prefix, opt_path, constraint);
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -1005,7 +965,29 @@ impl Plan {
                 }
                 PlanNode::Projection { exprs, .. } => format!("Projection [{}]", fmt_exprs(exprs)),
                 PlanNode::Join { join_type, on, .. } => format!("Join [{:?}, on: {}]", join_type, on.as_ref().map_or("None".to_string(), |e| format!("{}", e))),
-                PlanNode::CreateTable { table_name, columns } => format!("CreateTable [{}] cols={}", table_name, columns.iter().map(|c| c.name.to_string()).collect::<Vec<_>>().join(", ")),
+                PlanNode::CreateTable { table_name, columns } => {
+                    // Enhanced: show column constraints (UNIQUE, NOT NULL, NULL) for each column
+                    let mut col_labels = Vec::new();
+                    for col in columns {
+                        let mut constraints = Vec::new();
+                        for opt in &col.options {
+                            use sqlparser::ast::{ColumnOption, ColumnOptionDef};
+                            match &opt.option {
+                                ColumnOption::Unique { .. } => constraints.push("UNIQUE"),
+                                ColumnOption::NotNull => constraints.push("NOT NULL"),
+                                ColumnOption::Null => constraints.push("NULL"),
+                                _ => {}
+                            }
+                        }
+                        let col_str = if constraints.is_empty() {
+                            format!("{}", col.name)
+                        } else {
+                            format!("{} [{}]", col.name, constraints.join(", "))
+                        };
+                        col_labels.push(col_str);
+                    }
+                    format!("CreateTable [{}] cols={}", table_name, col_labels.join(", "))
+                }
                 PlanNode::AlterTable { table_name, operation } => format!("AlterTable [{}] {}", table_name, fmt_alter_op(operation)),
                 PlanNode::DropTable { table_name, if_exists } => {
                     if *if_exists { format!("DropTable [{}] IF EXISTS", table_name) } else { format!("DropTable [{}]", table_name) }
