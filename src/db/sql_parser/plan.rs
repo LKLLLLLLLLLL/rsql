@@ -101,6 +101,14 @@ pub enum PlanNode {
         table_name: String,
         if_exists: bool,
     },
+    /// Creates an index on a table.
+    /// Represents a CREATE INDEX statement.
+    CreateIndex {
+        index_name: String,
+        table_name: String,
+        columns: Vec<String>,
+        unique: bool,
+    },
     /// Inserts data into a table.
     /// If `input` is Some, it represents an INSERT ... SELECT subquery plan.
     Insert {
@@ -172,7 +180,8 @@ impl Plan {
             | Statement::Delete { .. }
             | Statement::CreateTable { .. }
             | Statement::Drop { .. }
-            | Statement::AlterTable { .. } => Self::from_ddl_ast(stmt),
+            | Statement::AlterTable { .. }
+            | Statement::CreateIndex { .. } => Self::from_ddl_ast(stmt),
             // Transaction statements are handled in build_plan, so treat as error here.
             Statement::StartTransaction { .. }
             | Statement::Commit { .. }
@@ -489,6 +498,19 @@ impl Plan {
                     Ok(PlanNode::DropTable { table_name: names[0].to_string(), if_exists: *if_exists })
                 } else { Err(RsqlError::ParserError("Only DROP TABLE supported".to_string())) }
             }
+            Statement::CreateIndex(create_index) => {
+                // Build a logical plan node for CREATE INDEX with safe unwrap for Option<ObjectName>
+                let index_name = match &create_index.name {
+                    Some(name) => name.to_string(),
+                    None => return Err(RsqlError::ParserError("CREATE INDEX must have a name".to_string())),
+                };
+                Ok(PlanNode::CreateIndex {
+                    index_name,
+                    table_name: create_index.table_name.to_string(),
+                    columns: create_index.columns.iter().map(|c| c.to_string()).collect(),
+                    unique: create_index.unique,
+                })
+            }
             Statement::Insert(insert) => {
                 if let Some(source) = &insert.source {
                     match &*source.body {
@@ -716,6 +738,11 @@ impl Plan {
                 PlanNode::DropTable { table_name, if_exists } => {
                     if *if_exists { format!("DropTable [{}] IF EXISTS", table_name) } else { format!("DropTable [{}]", table_name) }
                 }
+                PlanNode::CreateIndex { index_name, table_name, columns, unique } => {
+                    // Pretty print for CREATE INDEX logical plan node
+                    let uniq_str = if *unique { "UNIQUE " } else { "" };
+                    format!("CreateIndex [{}{}] on [{}] cols=[{}]", uniq_str, index_name, table_name, columns.join(", "))
+                }
                 PlanNode::Insert { table_name, columns, values, input } => {
                     if let Some(_) = input {
                         format!("Insert [{}] cols={:?} [Subquery]", table_name, columns)
@@ -890,6 +917,18 @@ impl Plan {
                         }
                     }
                 }
+                PlanNode::CreateIndex { index_name, table_name, columns, unique } => {
+                    let path_index = "(PlanNode::CreateIndex.index_name)";
+                    println!("{}{} -> {}", prefix, path_index, index_name);
+                    let path_table = "(PlanNode::CreateIndex.table_name)";
+                    println!("{}{} -> {}", prefix, path_table, table_name);
+                    let path_unique = "(PlanNode::CreateIndex.unique)";
+                    println!("{}{} -> {}", prefix, path_unique, unique);
+                    for (i, col) in columns.iter().enumerate() {
+                        let path_col = format!("(PlanNode::CreateIndex.columns[{}])", i);
+                        println!("{}{} -> {}", prefix, path_col, col);
+                    }
+                }
                 _ => {}
             }
         }
@@ -1042,6 +1081,11 @@ impl Plan {
                 PlanNode::AlterTable { table_name, operation } => format!("AlterTable [{}] {}", table_name, fmt_alter_op(operation)),
                 PlanNode::DropTable { table_name, if_exists } => {
                     if *if_exists { format!("DropTable [{}] IF EXISTS", table_name) } else { format!("DropTable [{}]", table_name) }
+                }
+                PlanNode::CreateIndex { index_name, table_name, columns, unique } => {
+                    // Pretty print for CREATE INDEX logical plan node (pro version)
+                    let uniq_str = if *unique { "UNIQUE " } else { "" };
+                    format!("CreateIndex [{}{}] on [{}] cols=[{}]", uniq_str, index_name, table_name, columns.join(", "))
                 }
                 PlanNode::Insert { table_name, columns, values, input } => {
                     if let Some(_) = input {
