@@ -1,6 +1,6 @@
 use rayon::ThreadPoolBuilder;
 use num_cpus;
-use tracing::{error};
+use tracing::{error, info};
 use futures::channel::oneshot;
 
 use crate::{config::THREAD_MAXNUM};
@@ -71,7 +71,7 @@ impl WorkingThreadPool{
     }
 
     pub fn show_info(&self){
-        println!("max thread num: {}", self.max_thread_num);
-        println!("thread pool:{:?}",self.thread_pool)
+        info!("max thread num: {}", self.max_thread_num);
+        info!("thread pool:{:?}",self.thread_pool)
     }
 }

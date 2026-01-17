@@ -10,6 +10,7 @@ use tracing::{warn, info};
 
 use crate::config::{DB_DIR, MAX_WAL_SIZE};
 use crate::db::common::{RsqlError, RsqlResult};
+use crate::db::utils;
 
 use super::wal_entry::WALEntry;
 
@@ -59,7 +60,7 @@ impl WAL {
         // initialize log file
         let log_path = if cfg!(test) {
             // for multi-threaded tests
-            std::env::temp_dir().join(format!("wal_{}.log", rand::random::<u64>()))
+            utils::test_dir("wal".to_string())
         } else {
             std::path::Path::new(DB_DIR).join("wal.log")
         };

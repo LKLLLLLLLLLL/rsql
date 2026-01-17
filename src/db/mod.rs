@@ -7,3 +7,4 @@ mod storage_engine;
 mod table_schema;
 mod system_catalog;
 mod tnx_manager;
+mod utils;

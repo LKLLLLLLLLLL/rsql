@@ -79,10 +79,12 @@ impl DataItem {
             DataItem::Chars {len, value} => {
                 let mut bytes = vec![self.tag_to_byte()];
                 bytes.extend_from_slice(&len.to_le_bytes());
-                if *len as usize != value.len() {
+                if value.len() > *len as usize {
                     return Err(RsqlError::Unknown("Length of Chars does not match the actual value length".to_string()));
                 }
+                // fill padding with zeros if necessary
                 bytes.extend_from_slice(value.as_bytes());
+                bytes.resize(1 + 8 + *len as usize, 0);
                 Ok((bytes, None))
             },
             DataItem::VarChar {head, value} => {
@@ -173,7 +175,11 @@ impl DataItem {
                 if head_bytes.len() < expected_len {
                     return Err(RsqlError::Unknown("Invalid bytes length for Chars value".to_string()));
                 }
-                let value = String::from_utf8(head_bytes[9..expected_len].to_vec()).map_err(|e| RsqlError::ParserError(e.to_string()))?;
+                // truncate trailing zeros
+                let value = String::from_utf8(head_bytes[9..expected_len].to_vec())
+                    .map_err(|e| RsqlError::ParserError(e.to_string()))?
+                    .trim_matches('\0')
+                    .to_string();
                 Ok(DataItem::Chars {len, value})
             },
             4 => {
