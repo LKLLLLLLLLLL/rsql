@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::db::errors::RsqlResult;
+use crate::db::common::RsqlResult;
 
 use super::storage::{StorageManager, Page};
 use super::wal::WAL;
@@ -97,23 +97,18 @@ impl ConsistStorageEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::DB_DIR;
     use std::fs;
-    use std::path::Path;
+    use tempfile::tempdir;
 
     #[test]
     fn test_consist_storage_new_write_and_persistence() {
-        let file_path = "./data/test_consist_storage.db";
-        // cleanup
-        let wal_path = Path::new(DB_DIR).join("wal.log");
-        let _ = fs::remove_file(&wal_path);
-        if Path::new(file_path).exists() {
-            fs::remove_file(file_path).unwrap();
-        }
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("test_consist_storage.db");
+        let file_path_str = file_path.to_str().unwrap();
 
         // create engine and new page, then write
         {
-            let mut engine = ConsistStorageEngine::new(file_path, 777).unwrap();
+            let mut engine = ConsistStorageEngine::new(file_path_str, 777).unwrap();
             let tnx = 1u64;
             let (pid, mut page) = engine.new_page(tnx).unwrap();
             assert_eq!(pid, 0);
@@ -123,11 +118,9 @@ mod tests {
 
         // reopen and read
         {
-            let engine = ConsistStorageEngine::new(file_path, 777).unwrap();
+            let engine = ConsistStorageEngine::new(file_path_str, 777).unwrap();
             let p = engine.read(0).unwrap();
             assert_eq!(p.data[0], 99);
         }
-
-        let _ = fs::remove_file(file_path);
     }
 }

@@ -3,12 +3,14 @@ use std::collections::HashSet;
 use std::fs;
 use std::io::Seek;
 use std::io::{Read, Write};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock, atomic::{AtomicU64, Ordering}};
 
 use tracing::{warn, info};
 
 use crate::config::{DB_DIR, MAX_WAL_SIZE};
-use crate::db::errors::{RsqlError, RsqlResult};
+use crate::db::common::{RsqlError, RsqlResult};
+use crate::db::utils;
 
 use super::wal_entry::WALEntry;
 
@@ -31,6 +33,7 @@ pub struct WAL {
     log_file: Arc<Mutex<fs::File>>,
     active_tnx_ids: Arc<Mutex<Vec<u64>>>,
     length: AtomicU64,
+    log_path: PathBuf,
 }
 
 impl WAL {
@@ -55,10 +58,17 @@ impl WAL {
     }
     fn new() -> RsqlResult<Self> {
         // initialize log file
-        let log_path = std::path::Path::new(DB_DIR).join("wal.log");
+        let log_path = if cfg!(test) {
+            // for multi-threaded tests
+            utils::test_dir("wal".to_string())
+        } else {
+            std::path::Path::new(DB_DIR).join("wal.log")
+        };
         if !log_path.exists() {
             // not exists, create new file with header
-            fs::create_dir_all(DB_DIR)?;
+            if let Some(parent) = log_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
             let mut file = fs::File::create(&log_path)?;
             Self::init_header(&mut file)?;
         }
@@ -85,6 +95,7 @@ impl WAL {
             active_tnx_ids: Arc::new(Mutex::new(Vec::new())),
             log_file: Arc::new(Mutex::new(log_file)),
             length: AtomicU64::new(length),
+            log_path,
         })
     }
     /// Recovery the database to a consistent state using the WAL log.
@@ -305,8 +316,9 @@ impl WAL {
         new_entrys.push(WALEntry::Checkpoint { active_tnx_ids: active_tnx_ids.clone() });
 
         // 3. write new wal log
+        let tmp_path = self.log_path.with_extension("log.tmp");
         {
-            let mut new_log_file = fs::File::create(std::path::Path::new(DB_DIR).join("wal.log.tmp"))?;
+            let mut new_log_file = fs::File::create(&tmp_path)?;
             Self::init_header(&mut new_log_file)?;
             for entry in new_entrys {
                 let entry_bytes = entry.to_bytes();
@@ -317,12 +329,12 @@ impl WAL {
         }
         // 4. rename new log file to current log file
         // THIS MUST BE ATOMIC OPERATION
-        fs::rename(std::path::Path::new(DB_DIR).join("wal.log.tmp"), std::path::Path::new(DB_DIR).join("wal.log"))?;
+        fs::rename(&tmp_path, &self.log_path)?;
         // 5. update self handle
         *log_file = fs::OpenOptions::new()
             .read(true)
             .append(true)
-            .open(std::path::Path::new(DB_DIR).join("wal.log"))?;
+            .open(&self.log_path)?;
         log_file.seek(std::io::SeekFrom::End(0))?; 
         self.length.store(log_file.metadata()?.len(), Ordering::SeqCst); 
         
@@ -583,14 +595,11 @@ mod tests {
 
     #[test]
     fn test_wal_checkpoint() {
-        // cleanup
-        let wal_path = Path::new(DB_DIR).join("wal.log");
-        let _ = fs::remove_file(&wal_path);
-
         // mark recovered
         let _ = HAS_RECOVERED.get_or_init(|| ());
 
         let wal = Arc::new(WAL::new().expect("Failed to init WAL"));
+        let wal_path = wal.log_path.clone();
 
         // 1. Committed transaction t1
         wal.open_tnx(1).unwrap();

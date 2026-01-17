@@ -2,7 +2,7 @@ use core::panic;
 use std::mem::size_of;
 use std::cmp::Ordering;
 
-use super::errors::{RsqlError, RsqlResult};
+use super::common::{RsqlError, RsqlResult};
 use super::table_schema;
 
 /// Data item representation in one block in table.
@@ -25,7 +25,7 @@ pub enum DataItem {
 pub struct VarCharHead {
     pub max_len: u64,
     pub len: u64,
-    pub page_ptr: u64,
+    pub page_ptr: Option<u64>,
 }
 
 impl DataItem {
@@ -79,26 +79,32 @@ impl DataItem {
             DataItem::Chars {len, value} => {
                 let mut bytes = vec![self.tag_to_byte()];
                 bytes.extend_from_slice(&len.to_le_bytes());
-                if *len as usize != value.len() {
+                if value.len() > *len as usize {
                     return Err(RsqlError::Unknown("Length of Chars does not match the actual value length".to_string()));
                 }
+                // fill padding with zeros if necessary
                 bytes.extend_from_slice(value.as_bytes());
+                bytes.resize(1 + 8 + *len as usize, 0);
                 Ok((bytes, None))
             },
             DataItem::VarChar {head, value} => {
                 if value.len() > head.max_len as usize {
                     return Err(RsqlError::Unknown("Value length exceeds maximum length for VarChar".to_string()));
-                }
+                };
                 if value.len() as u64 != head.len {
                     return Err(RsqlError::Unknown("Length of VarChar does not match the actual value length".to_string()));
-                }
-                if head.page_ptr == 0 {
+                };
+                if let None = head.page_ptr {
+                    return Err(RsqlError::Unknown("VarChar with None pointer cannot be serialized".to_string()));
+                };
+                if let Some(0) = head.page_ptr {
                     return Err(RsqlError::Unknown("VarChar head page pointer cannot be zero".to_string()));
-                }
+                };
+                let ptr = head.page_ptr.unwrap();
                 let mut head_bytes = vec![self.tag_to_byte()];
                 head_bytes.extend_from_slice(&head.max_len.to_le_bytes());
                 head_bytes.extend_from_slice(&head.len.to_le_bytes());
-                head_bytes.extend_from_slice(&head.page_ptr.to_le_bytes());
+                head_bytes.extend_from_slice(&ptr.to_le_bytes());
                 let body_bytes = value.as_bytes().to_vec();
                 Ok((head_bytes, Some(body_bytes)))
             },
@@ -169,7 +175,11 @@ impl DataItem {
                 if head_bytes.len() < expected_len {
                     return Err(RsqlError::Unknown("Invalid bytes length for Chars value".to_string()));
                 }
-                let value = String::from_utf8(head_bytes[9..expected_len].to_vec()).map_err(|e| RsqlError::ParserError(e.to_string()))?;
+                // truncate trailing zeros
+                let value = String::from_utf8(head_bytes[9..expected_len].to_vec())
+                    .map_err(|e| RsqlError::ParserError(e.to_string()))?
+                    .trim_matches('\0')
+                    .to_string();
                 Ok(DataItem::Chars {len, value})
             },
             4 => {
@@ -195,7 +205,7 @@ impl DataItem {
                     },
                     None => String::new(), // empty string if body not provided
                 };
-                Ok(DataItem::VarChar {head: VarCharHead {max_len, len, page_ptr}, value})
+                Ok(DataItem::VarChar {head: VarCharHead {max_len, len, page_ptr: Some(page_ptr)}, value})
             },
             5 => {
                 if head_bytes.len() < 2 {
