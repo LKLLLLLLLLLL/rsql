@@ -521,6 +521,9 @@ impl Table {
         index.drop(tnx_id, &mut self.storage)?;
         Ok(())
     }
+    pub fn get_storage(&mut self) -> &mut ConsistStorageEngine {
+        &mut self.storage
+    }
 }
 
 /// Get the file path for a table given its ID

@@ -182,6 +182,8 @@ static SYS_TABLE_INSTANCE: OnceLock<SysCatalog> = OnceLock::new();
 /// Some special tables to store metadata about database objects
 /// Singleton struct
 pub struct SysCatalog {
+    // The consistence is guaranteed by TnxManager locks.
+    // This Mutex is only used to protect concurrent access.
     table: Mutex<Table>,
     column: Mutex<Table>,
     sequence: Mutex<Table>,
@@ -196,10 +198,17 @@ impl SysCatalog {
     /// Should be called only once when the database is created
     pub fn init() -> RsqlResult<()> {
         let tnx_id = TnxManager::global()
-            .begin_transaction(0, 
-                &vec![], 
-                &vec![SYS_TABLE_ID, SYS_COLUMN_ID, SYS_SEQUENCE_ID, SYS_USER_ID]
-            );
+            .begin_transaction(0); // connection id 0 for privileged operations
+        let table_ids = vec![
+            SYS_TABLE_ID,
+            SYS_COLUMN_ID,
+            SYS_SEQUENCE_ID,
+            SYS_USER_ID,
+        ];
+        TnxManager::global().acquire_read_locks(
+            tnx_id, 
+            &table_ids
+        ).unwrap(); // should not fail
         // sys_table
         let table_schema = sys_table_schema();
         let _ = Table::create(SYS_TABLE_ID, table_schema, tnx_id, true)?;
@@ -210,7 +219,7 @@ impl SysCatalog {
         let sequence_schema = sys_sequence_schema();
         let mut sequence = Table::create(SYS_SEQUENCE_ID, sequence_schema, tnx_id, true)?;
         // insert default sequences
-        let init_table_id = vec![SYS_TABLE_ID, SYS_SEQUENCE_ID, SYS_COLUMN_ID, SYS_USER_ID].iter().max().unwrap() + 1;
+        let init_table_id = table_ids.iter().max().unwrap() + 1;
         sequence.insert_row( // table_id
             vec![
                 DataItem::Chars { 
@@ -266,7 +275,9 @@ impl SysCatalog {
     }
     /// Query the table schema from system catalog
     /// Input a table id, return the TableSchema of the table
-    pub fn get_table_schema(&self, table_id: u64) -> Option<TableSchema> {
+    pub fn get_table_schema(&self, tnx_id: u64, table_id: u64) -> RsqlResult<TableSchema> {
+        let read_table = vec![SYS_COLUMN_ID];
+        TnxManager::global().acquire_read_locks(tnx_id, &read_table)?;
         // query sys_column to get columns
         let column_guard = self.column.lock().unwrap();
         let pk = DataItem::Integer(table_id as i64);
@@ -318,19 +329,26 @@ impl SysCatalog {
                 index: *index,
             });
         };
-        Some(TableSchema::new(columns).unwrap())
+        Ok(TableSchema::new(columns).unwrap())
     }
-    pub fn get_table_name(&self, table_id: u64) -> Option<String> {
+    pub fn get_table_name(&self, table_id: u64, tnx_id: u64) -> RsqlResult<Option<String>> {
+        let read_table = vec![SYS_TABLE_ID];
+        TnxManager::global().acquire_read_locks(tnx_id, &read_table)?;
         // query sys_table to get table name
         let table_guard = self.table.lock().unwrap();
         let pk = DataItem::Integer(table_id as i64);
-        let table_row = table_guard.get_row_by_pk(&pk).unwrap()?;
+        let table_row = match table_guard.get_row_by_pk(&pk).unwrap() {
+            Some(row) => row,
+            None => return Ok(None),
+        };
         let DataItem::VarChar { value: name, .. } = &table_row[1] else {
             panic!("table_name column is not VarChar");
         };
-        Some(name.clone())
+        Ok(Some(name.clone()))
     }
-    pub fn get_table_id(&self, table_name: &str) -> Option<u64> {
+    pub fn get_table_id(&self, tnx_id: u64, table_name: &str) -> RsqlResult<Option<u64>> {
+        let read_table = vec![SYS_TABLE_ID];
+        TnxManager::global().acquire_read_locks(tnx_id, &read_table)?;
         // query sys_table to get table id
         let table_guard = self.table.lock().unwrap();
         let index = DataItem::VarChar {
@@ -345,14 +363,20 @@ impl SysCatalog {
         let table_row = table_guard
             .get_rows_by_range_indexed_col("table_name", &key, &key)
             .unwrap()
-            .next()?
-            .unwrap();
+            .next()
+            .transpose()?;
+        let table_row = match table_row {
+            Some(row) => row,
+            None => return Ok(None),
+        };
         let DataItem::Integer(table_id) = &table_row[0] else {
             panic!("table_id column is not Integer");
         };
-        Some(*table_id as u64)
+        Ok(Some(*table_id as u64))
     }
-    fn get_autoincrement(&self, sequence_name: &str, tnx_id: u64) -> RsqlResult<Option<u64>> {
+    fn get_autoincrement(&self, tnx_id: u64, sequence_name: &str) -> RsqlResult<Option<u64>> {
+        let read_table = vec![SYS_SEQUENCE_ID];
+        TnxManager::global().acquire_read_locks(tnx_id, &read_table)?;
         let mut sequence_guard = self.sequence.lock().unwrap();
         let index = DataItem::Chars { 
             len: MAX_COL_NAME_SIZE as u64, 
@@ -392,10 +416,12 @@ impl SysCatalog {
         table_name: &str,
         schema: &TableSchema
     ) -> RsqlResult<u64> {
+        let write_table = vec![SYS_TABLE_ID, SYS_COLUMN_ID];
+        TnxManager::global().acquire_write_locks(tnx_id, &write_table)?;
         let mut table_guard = self.table.lock().unwrap();
         let mut column_guard = self.column.lock().unwrap();
         // get table id
-        let table_id = self.get_autoincrement("table_id", tnx_id);
+        let table_id = self.get_autoincrement(tnx_id, "table_id");
         let table_id = match table_id? {
             Some(id) => id,
             None => panic!("Failed to get autoincrement for table_id"),
@@ -454,6 +480,8 @@ impl SysCatalog {
         tnx_id: u64,
         table_id: u64,
     ) -> RsqlResult<()> {
+        let write_table = vec![SYS_TABLE_ID, SYS_COLUMN_ID];
+        TnxManager::global().acquire_write_locks(tnx_id, &write_table)?;
         let mut table_guard = self.table.lock().unwrap();
         let mut column_guard = self.column.lock().unwrap();
         // delete from sys_table
@@ -477,6 +505,8 @@ impl SysCatalog {
         table_id: u64,
         new_table_name: &str,
     ) -> RsqlResult<()> {
+        let write_table = vec![SYS_TABLE_ID];
+        TnxManager::global().acquire_write_locks(tnx_id, &write_table)?;
         let mut table_guard = self.table.lock().unwrap();
         let pk = DataItem::Integer(table_id as i64);
         let table_row = table_guard.get_row_by_pk(&pk)?.ok_or(
@@ -507,6 +537,8 @@ impl SysCatalog {
         table_id: u64,
         column_name: &str,
     ) -> RsqlResult<()> {
+        let write_table = vec![SYS_COLUMN_ID];
+        TnxManager::global().acquire_write_locks(tnx_id, &write_table)?;
         let mut column_guard = self.column.lock().unwrap();
         let pk = DataItem::Integer(table_id as i64);
         let key = Some(pk.clone());
@@ -548,6 +580,8 @@ impl SysCatalog {
         table_id: u64,
         column_name: &str,
     ) -> RsqlResult<()> {
+        let write_table = vec![SYS_COLUMN_ID];
+        TnxManager::global().acquire_write_locks(tnx_id, &write_table)?;
         let mut column_guard = self.column.lock().unwrap();
         let pk = DataItem::Integer(table_id as i64);
         let key = Some(pk.clone());
@@ -586,9 +620,12 @@ impl SysCatalog {
 
     pub fn validate_user(
         &self,
+        tnx_id: u64,
         username: &str,
         password: &str,
     ) -> RsqlResult<bool> {
+        let read_table = vec![SYS_USER_ID];
+        TnxManager::global().acquire_read_locks(tnx_id, &read_table)?;
         let user_guard = self.user.lock().unwrap();
         let index = DataItem::Chars { 
             len: MAX_USERNAME_SIZE as u64, 
@@ -616,6 +653,8 @@ impl SysCatalog {
         username: &str,
         password: &str,
     ) -> RsqlResult<()> {
+        let write_table = vec![SYS_USER_ID];
+        TnxManager::global().acquire_write_locks(tnx_id, &write_table)?;
         let mut user_guard = self.user.lock().unwrap();
         let password_hash = hash(password, DEFAULT_COST).unwrap();
         user_guard.insert_row(
@@ -639,6 +678,8 @@ impl SysCatalog {
         tnx_id: u64,
         username: &str,
     ) -> RsqlResult<()> {
+        let write_table = vec![SYS_USER_ID];
+        TnxManager::global().acquire_write_locks(tnx_id, &write_table)?;
         let mut user_guard = self.user.lock().unwrap();
         let index = DataItem::Chars { 
             len: MAX_USERNAME_SIZE as u64, 
@@ -666,12 +707,11 @@ mod tests {
     #[serial]
     fn test_auto_increment() {
         let catalog = setup_test_catalog();
-        let tnx_id = TnxManager::global()
-            .begin_transaction(0, &vec![], &vec![SYS_SEQUENCE_ID]);
+        let tnx_id = TnxManager::global().begin_transaction(0);
 
-        let first_id = catalog.get_autoincrement("table_id", tnx_id).unwrap().unwrap();
-        let second_id = catalog.get_autoincrement("table_id", tnx_id).unwrap().unwrap();
-        let third_id = catalog.get_autoincrement("table_id", tnx_id).unwrap().unwrap();
+        let first_id = catalog.get_autoincrement(tnx_id, "table_id").unwrap().unwrap();
+        let second_id = catalog.get_autoincrement(tnx_id, "table_id").unwrap().unwrap();
+        let third_id = catalog.get_autoincrement(tnx_id, "table_id").unwrap().unwrap();
 
         assert_eq!(first_id + 1, second_id);
         assert_eq!(second_id + 1, third_id);
@@ -682,8 +722,7 @@ mod tests {
     #[serial]
     fn test_reg_table() {
         let catalog = setup_test_catalog();
-        let tnx_id = TnxManager::global()
-            .begin_transaction(1, &vec![], &vec![SYS_TABLE_ID, SYS_COLUMN_ID]);
+        let tnx_id = TnxManager::global().begin_transaction(1);
         let columns = vec![
             TableColumn {
                 name: "id".to_string(),
@@ -708,7 +747,7 @@ mod tests {
         let table_id = catalog.register_table(tnx_id, table_name, &schema).unwrap();
         assert!(table_id > SYS_USER_ID);
 
-        let retrieved_schema = catalog.get_table_schema(table_id).unwrap();
+        let retrieved_schema = catalog.get_table_schema(tnx_id, table_id).unwrap();
         assert_eq!(retrieved_schema.get_columns().len(), 2);
         assert_eq!(retrieved_schema.get_columns()[0].name, "id");
         assert_eq!(retrieved_schema.get_columns()[1].name, "name");
@@ -719,8 +758,7 @@ mod tests {
     #[serial]
     fn test_user_management() {
         let catalog = setup_test_catalog();
-        let tnx_id = TnxManager::global()
-            .begin_transaction(2, &vec![], &vec![SYS_USER_ID]);
+        let tnx_id = TnxManager::global().begin_transaction(2);
 
         let username = "testuser";
         let password = "password123";
@@ -729,13 +767,13 @@ mod tests {
         catalog.register_user(tnx_id, username, password).expect("Failed to register user");
 
         // 2. Validate user
-        assert!(catalog.validate_user(username, password).expect("Failed to validate"));
-        assert!(!catalog.validate_user(username, "wrongpassword").expect("Validation should fail"));
-        assert!(!catalog.validate_user("nonexistent", password).expect("Validation should fail"));
+        assert!(catalog.validate_user(tnx_id, username, password).expect("Failed to validate"));
+        assert!(!catalog.validate_user(tnx_id, username, "wrongpassword").expect("Validation should fail"));
+        assert!(!catalog.validate_user(tnx_id, "nonexistent", password).expect("Validation should fail"));
 
         // 3. Unregister user
         catalog.unregister_user(tnx_id, username).expect("Failed to unregister user");
-        assert!(!catalog.validate_user(username, password).expect("User should be gone"));
+        assert!(!catalog.validate_user(tnx_id, username, password).expect("User should be gone"));
         TnxManager::global().end_transaction(2);
     }
 
@@ -743,10 +781,9 @@ mod tests {
     #[serial]
     fn test_system_tables_init() {
         let catalog = setup_test_catalog();
-        let _ = TnxManager::global()
-            .begin_transaction(3, &vec![SYS_USER_ID], &vec![]);
+        let tnx_id = TnxManager::global().begin_transaction(3);
         // Verify admin user
-        assert!(catalog.validate_user(DEFAULT_USERNAME, DEFAULT_PASSWORD).expect("Admin validation failed"));
+        assert!(catalog.validate_user(tnx_id, DEFAULT_USERNAME, DEFAULT_PASSWORD).expect("Admin validation failed"));
         TnxManager::global().end_transaction(3);
     }
 }
