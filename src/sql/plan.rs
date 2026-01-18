@@ -13,15 +13,19 @@ use sqlparser::ast::{
     TableWithJoins,
     TableFactor,
     ObjectType,
+    AlterTableOperation,
     AlterTableOperation as AstAlterTableOperation,
     ColumnDef,
+    RenameTableNameKind,
 };
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
+use sqlparser;
 
 // Internal modules
 use crate::sql::utils::is_aggregate_expr;
 use crate::common::{RsqlResult, RsqlError};
+use crate::catalog::table_schema::{TableSchema, TableColumn, ColType};
 
 /// Represents the type of join operation.
 #[derive(Debug, Clone, Copy)]
@@ -41,8 +45,33 @@ pub enum ApplyType {
     NotIn,   // NOT IN subquery
 }
 
-/// Represents operations for ALTER TABLE.
-pub type AlterTableOperation = AstAlterTableOperation;
+// Removed unused: pub type AlterTableOperation = AstAlterTableOperation;
+
+/// Represents executable DDL operations after AST extraction.
+#[derive(Debug, Clone)]
+pub enum DdlOperation {
+    /// CreateTable now uses TableSchema instead of Vec<ColumnDef>
+    CreateTable {
+        table_name: String,
+        schema: TableSchema,
+        if_not_exists: bool,
+    },
+    DropTable {
+        table_name: String,
+        if_exists: bool,
+    },
+    CreateIndex {
+        index_name: String,
+        table_name: String,
+        columns: Vec<String>,
+        unique: bool,
+        if_not_exists: bool,
+    },
+    RenameTable {
+        old_name: String,
+        new_name: String,
+    },
+}
 
 /// Represents a logical query plan.
 /// Each variant corresponds to a relational algebra operation or DDL/DML/DCL operation.
@@ -86,28 +115,9 @@ pub enum PlanNode {
         join_type: JoinType,
         on: Option<Expr>,
     },
-    /// Creates a new table.
-    CreateTable {
-        table_name: String,
-        columns: Vec<ColumnDef>,
-    },
-    /// Alters an existing table.
-    AlterTable {
-        table_name: String,
-        operation: AlterTableOperation,
-    },
-    /// Drops a table.
-    DropTable {
-        table_name: String,
-        if_exists: bool,
-    },
-    /// Creates an index on a table.
-    /// Represents a CREATE INDEX statement.
-    CreateIndex {
-        index_name: String,
-        table_name: String,
-        columns: Vec<String>,
-        unique: bool,
+    /// DDL operation (fully extracted, AST-free)
+    DDL {
+        op: DdlOperation,
     },
     /// Inserts data into a table.
     /// If `input` is Some, it represents an INSERT ... SELECT subquery plan.
@@ -133,7 +143,6 @@ pub enum PlanNode {
     /// Drops a user.
     DropUser {
         user_name: String,
-        if_exists: bool,
     },
 }
 
@@ -156,7 +165,6 @@ impl Plan {
     /// Builds a logical plan from a SQL string.
     /// Flattens all statements into Plan.items, including transaction boundaries.
     pub fn build_plan(sql: &str) -> RsqlResult<Plan> {
-        use sqlparser::ast::Statement::*;
         let mut items = Vec::new();
 
         // Check for DCL CREATE USER or DROP USER before parsing
@@ -165,10 +173,9 @@ impl Plan {
         // Only handle single statement for DCL shortcut
         if lower.starts_with("create user") {
             // Parse: CREATE USER <user_name>[;]
-            // Accepts: "CREATE USER alice;" or "CREATE USER alice"
-            // Extract user_name
-            let mut rest: &str = &sql_trimmed[("create user".len())..].trim_start();
-            // Ensure rest is &str, not &&str
+            // Accepts: "CREATE USER alice;", etc.
+            let rest: &str = &sql_trimmed[("create user".len())..].trim_start();
+            // Now rest should be user name (possibly followed by ';' or whitespace)
             let user_name = rest
                 .split(|c: char| c == ';' || c.is_whitespace())
                 .next()
@@ -181,14 +188,8 @@ impl Plan {
             items.push(PlanItem::DCL(PlanNode::CreateUser { user_name }));
             return Ok(Plan { items });
         } else if lower.starts_with("drop user") {
-            // Parse: DROP USER [IF EXISTS] <user_name>[;]
-            let mut rest: &str = &sql_trimmed[("drop user".len())..].trim_start();
-            let mut if_exists = false;
-            if rest.to_ascii_lowercase().starts_with("if exists") {
-                if_exists = true;
-                rest = &rest["if exists".len()..].trim_start();
-            }
-            // Now rest is &str
+            // Parse: DROP USER <user_name>[;]
+            let rest: &str = &sql_trimmed[("drop user".len())..].trim_start();
             let user_name = rest
                 .split(|c: char| c == ';' || c.is_whitespace())
                 .next()
@@ -198,7 +199,7 @@ impl Plan {
             if user_name.is_empty() {
                 return Err(RsqlError::ParserError("DROP USER missing user name".to_string()));
             }
-            items.push(PlanItem::DCL(PlanNode::DropUser { user_name, if_exists }));
+            items.push(PlanItem::DCL(PlanNode::DropUser { user_name }));
             return Ok(Plan { items });
         }
 
@@ -222,7 +223,7 @@ impl Plan {
                 | Drop { object_type: ObjectType::Table, .. }
                 | AlterTable { .. }
                 | CreateIndex { .. } => {
-                    let node = Self::from_ast(stmt)?;
+                    let node = Self::from_ast(&stmt)?;
                     items.push(PlanItem::DDL(node));
                 }
                 // DML
@@ -230,18 +231,18 @@ impl Plan {
                 | Update { .. }
                 | Delete { .. }
                 | Query(_) => {
-                    let node = Self::from_ast(stmt)?;
+                    let node = Self::from_ast(&stmt)?;
                     items.push(PlanItem::DML(node));
                 }
                 // DCL
                 CreateUser { .. }
                 | Drop { object_type: ObjectType::User, .. } => {
-                    let node = Self::from_ast(stmt)?;
+                    let node = Self::from_ast(&stmt)?;
                     items.push(PlanItem::DCL(node));
                 }
                 // Fallback for anything else
                 _ => {
-                    let node = Self::from_ast(stmt)?;
+                    let node = Self::from_ast(&stmt)?;
                     // Default: treat as DML if not matched above
                     items.push(PlanItem::DML(node));
                 }
@@ -257,8 +258,9 @@ impl Plan {
             Statement::Query(_) => Self::from_select_ast(stmt),
             Statement::Insert { .. }
             | Statement::Update { .. }
-            | Statement::Delete { .. }
-            | Statement::CreateTable { .. }
+            | Statement::Delete { .. } => Self::from_ddl_ast(stmt),
+
+            Statement::CreateTable { .. }
             | Statement::Drop { .. }
             | Statement::AlterTable { .. }
             | Statement::CreateIndex { .. } => Self::from_ddl_ast(stmt),
@@ -524,106 +526,71 @@ impl Plan {
     fn from_ddl_ast(stmt: &Statement) -> RsqlResult<PlanNode> {
         match stmt {
             Statement::CreateTable(create) => {
-                // ========== Validation logic ==========
-                use sqlparser::ast::{ColumnOption, DataType};
-                for col in &create.columns {
-                    let mut has_primary = false;
-                    let mut has_unique = false;
-                    let mut has_not_null = false;
-                    let mut has_null = false;
-                    for opt in &col.options {
-                        match &opt.option {
-                            ColumnOption::PrimaryKey(_) => {
-                                has_primary = true;
-                            }
-                            ColumnOption::Unique(_) => {
-                                has_unique = true;
-                            }
-                            ColumnOption::NotNull => {
-                                has_not_null = true;
-                            }
-                            ColumnOption::Null => {
-                                has_null = true;
-                            }
-                            _ => {}
-                        }
-                    }
-                    // Only when both PRIMARY KEY and NULL are specified, it's an error.
-                    if has_primary && has_null {
-                        return Err(RsqlError::ParserError(format!(
-                            "Column `{}` cannot be both PRIMARY KEY and NULL",
-                            col.name
-                        )));
-                    }
-                    // 2. VARCHAR-like columns cannot be PRIMARY KEY or UNIQUE.
-                    match &col.data_type {
-                        DataType::Varchar(_)
-                        | DataType::Char(_)
-                        | DataType::Character(_)
-                        | DataType::CharacterVarying(_) => {
-                            if has_primary || has_unique {
-                                return Err(RsqlError::ParserError(format!(
-                                    "VARCHAR column `{}` cannot be PRIMARY KEY or UNIQUE",
-                                    col.name
-                                )));
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                Ok(PlanNode::CreateTable {
-                    table_name: create.name.to_string(),
-                    columns: create.columns.clone(),
+                // Convert Vec<ColumnDef> (AST) to TableSchema.
+                // This will validate and extract all necessary column information.
+                let schema = columns_ast_to_schema(&create.columns)?;
+                Ok(PlanNode::DDL {
+                    op: DdlOperation::CreateTable {
+                        table_name: create.name.to_string(),
+                        schema,
+                        if_not_exists: create.if_not_exists,
+                    },
                 })
-            },
+            }
+            Statement::Drop { object_type, names, if_exists, .. }
+                if *object_type == ObjectType::Table && names.len() == 1 =>
+            {
+                Ok(PlanNode::DDL {
+                    op: DdlOperation::DropTable {
+                        table_name: names[0].to_string(),
+                        if_exists: *if_exists,
+                    },
+                })
+            }
+            Statement::CreateIndex(create_index) => {
+                let index_name = match &create_index.name {
+                    Some(name) => name.to_string(),
+                    None => {
+                        return Err(RsqlError::ParserError(
+                            "CREATE INDEX must have a name".to_string(),
+                        ))
+                    }
+                };
+
+                Ok(PlanNode::DDL {
+                    op: DdlOperation::CreateIndex {
+                        index_name,
+                        table_name: create_index.table_name.to_string(),
+                        columns: create_index
+                            .columns
+                            .iter()
+                            .map(|c| c.to_string())
+                            .collect(),
+                        unique: create_index.unique,
+                        if_not_exists: create_index.if_not_exists,
+                    },
+                })
+            }
             Statement::AlterTable(alter) => {
                 if alter.operations.len() != 1 {
-                    return Err(RsqlError::ParserError("Multiple ALTER TABLE operations not supported".to_string()));
+                    return Err(RsqlError::ParserError(
+                        "Multiple ALTER TABLE operations not supported".to_string(),
+                    ));
                 }
-                let op = &alter.operations[0];
-                use sqlparser::ast::AlterTableOperation;
-                match op {
-                    AlterTableOperation::RenameTable { table_name: new_name } => {
-                        // For RENAME TABLE, keep RenameTableNameKind::To(obj_name) as is
-                        Ok(PlanNode::AlterTable {
-                            table_name: alter.name.to_string(),
-                            operation: AlterTableOperation::RenameTable {
-                                table_name: new_name.clone(),
+
+                match &alter.operations[0] {
+                    AstAlterTableOperation::RenameTable { table_name } => {
+                        Ok(PlanNode::DDL {
+                            op: DdlOperation::RenameTable {
+                                old_name: alter.name.to_string(),
+                                new_name: table_name.to_string(),
                             },
                         })
                     }
-                    AlterTableOperation::AddColumn { .. } => {
-                        Err(RsqlError::ParserError("ALTER TABLE ADD COLUMN is not supported".to_string()))
-                    }
-                    AlterTableOperation::DropColumn { .. } => {
-                        Err(RsqlError::ParserError("ALTER TABLE DROP COLUMN is not supported".to_string()))
-                    }
-                    AlterTableOperation::RenameColumn { .. } => {
-                        Err(RsqlError::ParserError("ALTER TABLE RENAME COLUMN is not supported".to_string()))
-                    }
-                    AlterTableOperation::AlterColumn { op: sqlparser::ast::AlterColumnOperation::SetDataType { .. }, .. } => {
-                        Err(RsqlError::ParserError("ALTER TABLE ALTER COLUMN TYPE is not supported".to_string()))
-                    }
-                    _ => Err(RsqlError::ParserError("ALTER TABLE operation is not supported".to_string())),
+                    _ => Err(RsqlError::ParserError(
+                        "Only ALTER TABLE RENAME TABLE is supported".to_string(),
+                    )),
                 }
-            }
-            Statement::Drop { object_type, names, if_exists, .. } => {
-                if *object_type == ObjectType::Table && names.len() == 1 {
-                    Ok(PlanNode::DropTable { table_name: names[0].to_string(), if_exists: *if_exists })
-                } else { Err(RsqlError::ParserError("Only DROP TABLE supported".to_string())) }
-            }
-            Statement::CreateIndex(create_index) => {
-                // Build a logical plan node for CREATE INDEX with safe unwrap for Option<ObjectName>
-                let index_name = match &create_index.name {
-                    Some(name) => name.to_string(),
-                    None => return Err(RsqlError::ParserError("CREATE INDEX must have a name".to_string())),
-                };
-                Ok(PlanNode::CreateIndex {
-                    index_name,
-                    table_name: create_index.table_name.to_string(),
-                    columns: create_index.columns.iter().map(|c| c.to_string()).collect(),
-                    unique: create_index.unique,
-                })
             }
             Statement::Insert(insert) => {
                 if let Some(source) = &insert.source {
@@ -737,15 +704,15 @@ impl Plan {
             }
             // --- DCL: CREATE USER, DROP USER ---
             Statement::CreateUser(inner) => {
-                // Only support CREATE USER <user_name>
                 Ok(PlanNode::CreateUser {
                     user_name: inner.name.to_string(),
                 })
             }
-            Statement::Drop { object_type, names, if_exists, .. } if *object_type == ObjectType::User && names.len() == 1 => {
+            Statement::Drop { object_type, names, .. }
+                if *object_type == ObjectType::User && names.len() == 1 =>
+            {
                 Ok(PlanNode::DropUser {
                     user_name: names[0].to_string(),
-                    if_exists: *if_exists,
                 })
             }
             _ => Err(RsqlError::ParserError("DDL/DCL not implemented yet".to_string())),
@@ -840,48 +807,25 @@ impl Plan {
                 }
                 PlanNode::Projection { exprs, .. } => format!("Projection [{}]", fmt_exprs(exprs)),
                 PlanNode::Join { join_type, on, .. } => format!("Join [{:?}, on: {}]", join_type, on.as_ref().map_or("None".to_string(), |e| format!("{}", e))),
-                PlanNode::CreateTable { table_name, columns } => {
-                    // Enhanced: show column constraints (PRIMARY KEY, UNIQUE, NOT NULL, NULL) for each column
-                    let mut col_labels = Vec::new();
-                    for col in columns {
-                        let mut constraints = Vec::new();
-                        for opt in &col.options {
-                            use sqlparser::ast::ColumnOption;
-                            match &opt.option {
-                                ColumnOption::PrimaryKey { .. } => constraints.push("PRIMARY KEY"),
-                                ColumnOption::Unique { .. } => constraints.push("UNIQUE"),
-                                ColumnOption::NotNull => constraints.push("NOT NULL"),
-                                ColumnOption::Null => constraints.push("NULL"),
-                                _ => {}
-                            }
-                        }
-                        let col_str = if constraints.is_empty() {
-                            format!("{}", col.name)
+                PlanNode::DDL { op } => match op {
+                    DdlOperation::CreateTable { table_name, .. } => {
+                        format!("CreateTable [{}]", table_name)
+                    }
+                    DdlOperation::DropTable { table_name, if_exists } => {
+                        if *if_exists {
+                            format!("DropTable [{}] IF EXISTS", table_name)
                         } else {
-                            format!("{} [{}]", col.name, constraints.join(", "))
-                        };
-                        col_labels.push(col_str);
-                    }
-                    format!("CreateTable [{}] cols={}", table_name, col_labels.join(", "))
-                }
-                PlanNode::AlterTable { table_name, operation } => {
-                    use sqlparser::ast::AlterTableOperation;
-                    match operation {
-                        AlterTableOperation::RenameTable { table_name: new_name } => {
-                            // Only print both old and new table names, no "TO"
-                            format!("AlterTable [{}] RENAME TABLE {} {}", table_name, table_name, new_name)
+                            format!("DropTable [{}]", table_name)
                         }
-                        _ => format!("AlterTable [{}] {}", table_name, fmt_alter_op(operation, table_name)),
                     }
-                }
-                PlanNode::DropTable { table_name, if_exists } => {
-                    if *if_exists { format!("DropTable [{}] IF EXISTS", table_name) } else { format!("DropTable [{}]", table_name) }
-                }
-                PlanNode::CreateIndex { index_name, table_name, columns, unique } => {
-                    // Pretty print for CREATE INDEX logical plan node
-                    let uniq_str = if *unique { "UNIQUE " } else { "" };
-                    format!("CreateIndex [{}{}] on [{}] cols=[{}]", uniq_str, index_name, table_name, columns.join(", "))
-                }
+                    DdlOperation::CreateIndex { index_name, table_name, unique, .. } => {
+                        let uniq = if *unique { "UNIQUE " } else { "" };
+                        format!("CreateIndex [{}{}] on [{}]", uniq, index_name, table_name)
+                    }
+                    DdlOperation::RenameTable { old_name, new_name } => {
+                        format!("AlterTable [{}] RENAME TO {}", old_name, new_name)
+                    }
+                },
                 PlanNode::Insert { table_name, columns, values, input } => {
                     if let Some(_) = input {
                         format!("Insert [{}] cols={:?} [Subquery]", table_name, columns)
@@ -902,12 +846,8 @@ impl Plan {
                 PlanNode::CreateUser { user_name } => {
                     format!("CreateUser [{}]", user_name)
                 }
-                PlanNode::DropUser { user_name, if_exists } => {
-                    if *if_exists {
-                        format!("DropUser [{}] IF EXISTS", user_name)
-                    } else {
-                        format!("DropUser [{}]", user_name)
-                    }
+                PlanNode::DropUser { user_name } => {
+                    format!("DropUser [{}]", user_name)
                 }
             }
         }
@@ -937,7 +877,6 @@ impl Plan {
         }
 
         fn fmt_alter_op(op: &AlterTableOperation, old_table_name: &str) -> String {
-            use sqlparser::ast::RenameTableNameKind;
             match op {
                 AlterTableOperation::AddColumn { column_def, .. } => {
                     format!(
@@ -1021,7 +960,7 @@ impl Plan {
 
         // Print all expression fields of a PlanNode, with their field paths.
         fn print_plan_expr_paths(plan: &PlanNode, prefix: &str, plan_path: &str) {
-            use sqlparser::ast::{AlterTableOperation, RenameTableNameKind};
+            use sqlparser::ast::AlterTableOperation;
             match plan {
                 PlanNode::Filter { predicate, .. } => {
                     let path = format!("(PlanNode::Filter.predicate)");
@@ -1061,75 +1000,68 @@ impl Plan {
                         print_expr_with_path(expr, prefix, &path);
                     }
                 }
-                PlanNode::CreateTable { columns, .. } => {
-                    // For each column, print its name and constraints
-                    for (i, col) in columns.iter().enumerate() {
-                        let name_path = format!("(PlanNode::CreateTable.columns[{}].name)", i);
-                        println!("{}{} -> {}", prefix, name_path, col.name);
-                        for (j, opt) in col.options.iter().enumerate() {
-                            use sqlparser::ast::ColumnOption;
-                            let opt_path = format!("(PlanNode::CreateTable.columns[{}].options[{}].option)", i, j);
-                            let constraint = match &opt.option {
-                                ColumnOption::PrimaryKey { .. } => "PRIMARY KEY",
-                                ColumnOption::Unique { .. } => "UNIQUE",
-                                ColumnOption::NotNull => "NOT NULL",
-                                ColumnOption::Null => "NULL",
-                                _ => continue,
-                            };
-                            println!("{}{} -> {}", prefix, opt_path, constraint);
-                        }
-                    }
-                }
-                PlanNode::CreateIndex { index_name, table_name, columns, unique } => {
-                    let path_index = "(PlanNode::CreateIndex.index_name)";
-                    println!("{}{} -> {}", prefix, path_index, index_name);
-                    let path_table = "(PlanNode::CreateIndex.table_name)";
-                    println!("{}{} -> {}", prefix, path_table, table_name);
-                    let path_unique = "(PlanNode::CreateIndex.unique)";
-                    println!("{}{} -> {}", prefix, path_unique, unique);
-                    for (i, col) in columns.iter().enumerate() {
-                        let path_col = format!("(PlanNode::CreateIndex.columns[{}])", i);
-                        println!("{}{} -> {}", prefix, path_col, col);
-                    }
-                }
-                PlanNode::AlterTable { table_name, operation } => {
-                    // Print table_name and operation as detailed fields
-                    let path_table = "(PlanNode::AlterTable.table_name)";
-                    println!("{}{} -> {}", prefix, path_table, table_name);
-                    match operation {
-                        AlterTableOperation::RenameTable { table_name: new_name_kind } => {
-                            // Print as two fields: old_table_name and new_table_name (only table names)
-                            let old_path = "(PlanNode::AlterTable.operation.old_table_name)";
-                            let new_path = "(PlanNode::AlterTable.operation.new_table_name)";
-                            println!("{}{} -> {}", prefix, old_path, table_name);
-                            match new_name_kind {
-                                RenameTableNameKind::To(obj_name) => {
-                                    println!("{}{} -> {}", prefix, new_path, obj_name);
-                                }
-                                _ => {
-                                    println!("{}{} -> {:?}", prefix, new_path, new_name_kind);
+                PlanNode::DDL { op } => {
+                    match op {
+                        DdlOperation::CreateTable { table_name, schema, .. } => {
+                            // For each column, print its name and constraints
+                            for (i, col) in schema.get_columns().iter().enumerate() {
+                                let name_path = format!("(PlanNode::DDL.op[CreateTable].columns[{}].name)", i);
+                                println!("{}{} -> {}", prefix, name_path, col.name);
+                                for (i, col) in schema.get_columns().iter().enumerate() {
+                                    let name_path = format!("(PlanNode::DDL.op[CreateTable].columns[{}].name)", i);
+                                    println!("{}{} -> {}", prefix, name_path, col.name);
+
+                                    let pk_path = format!("(PlanNode::DDL.op[CreateTable].columns[{}].pk)", i);
+                                    println!("{}{} -> {}", prefix, pk_path, col.pk);
+
+                                    let nullable_path = format!("(PlanNode::DDL.op[CreateTable].columns[{}].nullable)", i);
+                                    println!("{}{} -> {}", prefix, nullable_path, col.nullable);
+
+                                    let unique_path = format!("(PlanNode::DDL.op[CreateTable].columns[{}].unique)", i);
+                                    println!("{}{} -> {}", prefix, unique_path, col.unique);
+
+                                    let index_path = format!("(PlanNode::DDL.op[CreateTable].columns[{}].index)", i);
+                                    println!("{}{} -> {}", prefix, index_path, col.index);
                                 }
                             }
                         }
-                        _ => {
-                            let path_op = "(PlanNode::AlterTable.operation)";
-                            // Format operation as a string, e.g., "ADD COLUMN ..."
-                            let op_str = fmt_alter_op(operation, table_name);
-                            println!("{}{} -> {}", prefix, path_op, op_str);
+                        DdlOperation::DropTable { table_name, if_exists } => {
+                            let path_table = "(PlanNode::DDL.op[DropTable].table_name)";
+                            println!("{}{} -> {}", prefix, path_table, table_name);
+                            let path_exists = "(PlanNode::DDL.op[DropTable].if_exists)";
+                            println!("{}{} -> {}", prefix, path_exists, if_exists);
+                        }
+                        DdlOperation::CreateIndex { index_name, table_name, columns, unique, if_not_exists } => {
+                            let path_index = "(PlanNode::DDL.op[CreateIndex].index_name)";
+                            println!("{}{} -> {}", prefix, path_index, index_name);
+                            let path_table = "(PlanNode::DDL.op[CreateIndex].table_name)";
+                            println!("{}{} -> {}", prefix, path_table, table_name);
+                            let path_unique = "(PlanNode::DDL.op[CreateIndex].unique)";
+                            println!("{}{} -> {}", prefix, path_unique, unique);
+                            let path_if_not_exists = "(PlanNode::DDL.op[CreateIndex].if_not_exists)";
+                            println!("{}{} -> {}", prefix, path_if_not_exists, if_not_exists);
+                            for (i, col) in columns.iter().enumerate() {
+                                let path_col = format!("(PlanNode::DDL.op[CreateIndex].columns[{}])", i);
+                                println!("{}{} -> {}", prefix, path_col, col);
+                            }
+                        }
+                        DdlOperation::RenameTable { old_name, new_name } => {
+                            let path_old = "(PlanNode::DDL.op[RenameTable].old_name)";
+                            let path_new = "(PlanNode::DDL.op[RenameTable].new_name)";
+                            println!("{}{} -> {}", prefix, path_old, old_name);
+                            println!("{}{} -> {}", prefix, path_new, new_name);
                         }
                     }
                 }
                 // ---- Add pretty print for CreateUser ----
                 PlanNode::CreateUser { user_name } => {
-                    let path = "(PlanNode::CreateUser.user_name)";
-                    println!("{}{} -> {}", prefix, path, user_name);
+                    let path_user = "(PlanNode::CreateUser.user_name)";
+                    println!("{}{} -> {}", prefix, path_user, user_name);
                 }
                 // ---- Add pretty print for DropUser ----
-                PlanNode::DropUser { user_name, if_exists } => {
+                PlanNode::DropUser { user_name } => {
                     let path_user = "(PlanNode::DropUser.user_name)";
                     println!("{}{} -> {}", prefix, path_user, user_name);
-                    let path_exists = "(PlanNode::DropUser.if_exists)";
-                    println!("{}{} -> {}", prefix, path_exists, if_exists);
                 }
                 _ => {}
             }
@@ -1257,41 +1189,25 @@ impl Plan {
                 }
                 PlanNode::Projection { exprs, .. } => format!("Projection [{}]", fmt_exprs(exprs)),
                 PlanNode::Join { join_type, on, .. } => format!("Join [{:?}, on: {}]", join_type, on.as_ref().map_or("None".to_string(), |e| format!("{}", e))),
-                PlanNode::CreateTable { table_name, columns } => {
-                    // Enhanced: show column constraints (UNIQUE, NOT NULL, NULL) for each column
-                    let mut col_labels = Vec::new();
-                    for col in columns {
-                        let mut constraints = Vec::new();
-                        for opt in &col.options {
-                            use sqlparser::ast::ColumnOption;
-                            match &opt.option {
-                                ColumnOption::Unique { .. } => constraints.push("UNIQUE"),
-                                ColumnOption::NotNull => constraints.push("NOT NULL"),
-                                ColumnOption::Null => constraints.push("NULL"),
-                                _ => {}
-                            }
-                        }
-                        let col_str = if constraints.is_empty() {
-                            format!("{}", col.name)
-                        } else {
-                            format!("{} [{}]", col.name, constraints.join(", "))
-                        };
-                        col_labels.push(col_str);
+                PlanNode::DDL { op } => match op {
+                    DdlOperation::CreateTable { table_name, .. } => {
+                        format!("CreateTable [{}]", table_name)
                     }
-                    format!("CreateTable [{}] cols={}", table_name, col_labels.join(", "))
-                }
-                PlanNode::AlterTable { table_name, operation } => {
-                    // For pretty_print_pro, print RENAME TABLE with old and new table names as separate fields
-                    format!("AlterTable [{}] {}", table_name, fmt_alter_op(operation, table_name))
-                }
-                PlanNode::DropTable { table_name, if_exists } => {
-                    if *if_exists { format!("DropTable [{}] IF EXISTS", table_name) } else { format!("DropTable [{}]", table_name) }
-                }
-                PlanNode::CreateIndex { index_name, table_name, columns, unique } => {
-                    // Pretty print for CREATE INDEX logical plan node (pro version)
-                    let uniq_str = if *unique { "UNIQUE " } else { "" };
-                    format!("CreateIndex [{}{}] on [{}] cols=[{}]", uniq_str, index_name, table_name, columns.join(", "))
-                }
+                    DdlOperation::DropTable { table_name, if_exists } => {
+                        if *if_exists {
+                            format!("DropTable [{}] IF EXISTS", table_name)
+                        } else {
+                            format!("DropTable [{}]", table_name)
+                        }
+                    }
+                    DdlOperation::CreateIndex { index_name, table_name, unique, .. } => {
+                        let uniq = if *unique { "UNIQUE " } else { "" };
+                        format!("CreateIndex [{}{}] on [{}]", uniq, index_name, table_name)
+                    }
+                    DdlOperation::RenameTable { old_name, new_name } => {
+                        format!("AlterTable [{}] RENAME TO {}", old_name, new_name)
+                    }
+                },
                 PlanNode::Insert { table_name, columns, values, input } => {
                     if let Some(_) = input {
                         format!("Insert [{}] cols={:?} [Subquery]", table_name, columns)
@@ -1313,12 +1229,8 @@ impl Plan {
                 PlanNode::CreateUser { user_name } => {
                     format!("CreateUser [{}]", user_name)
                 }
-                PlanNode::DropUser { user_name, if_exists } => {
-                    if *if_exists {
-                        format!("DropUser [{}] IF EXISTS", user_name)
-                    } else {
-                        format!("DropUser [{}]", user_name)
-                    }
+                PlanNode::DropUser { user_name } => {
+                    format!("DropUser [{}]", user_name)
                 }
             }
         }
@@ -1340,6 +1252,61 @@ impl Plan {
         }
         inner(plan, "", true);
     }
+}
+
+pub(crate) fn columns_ast_to_schema(
+    columns: &[ColumnDef],
+) -> crate::common::RsqlResult<TableSchema> {
+    let mut table_columns = Vec::new();
+    for col in columns.iter() {
+        let name = col.name.to_string();
+
+        let data_type = match &col.data_type {
+            sqlparser::ast::DataType::Int(_) | sqlparser::ast::DataType::Integer(_) => ColType::Integer,
+            sqlparser::ast::DataType::Float(_) | sqlparser::ast::DataType::Real => ColType::Float,
+            sqlparser::ast::DataType::Double { .. } => ColType::Float,
+
+            sqlparser::ast::DataType::Char(opt_len) => {
+                let size = match opt_len {
+                    Some(sqlparser::ast::CharacterLength::IntegerLength { length, .. }) => *length as usize,
+                    Some(sqlparser::ast::CharacterLength::Max) | None => 1,
+                };
+                ColType::Chars(size)
+            }
+
+            sqlparser::ast::DataType::Varchar(opt_len) => {
+                let size = match opt_len {
+                    Some(sqlparser::ast::CharacterLength::IntegerLength { length, .. }) => *length as usize,
+                    Some(sqlparser::ast::CharacterLength::Max) | None => 255,
+                };
+                ColType::VarChar(size)
+            }
+
+            sqlparser::ast::DataType::Bool => ColType::Bool,
+        
+            _ => return Err(RsqlError::ParserError(format!("Unsupported data type for column {}", name))),
+        };
+
+        let mut pk = false;
+        let mut nullable = true;
+        let mut unique = false;
+        let mut index = false;
+
+        for opt in &col.options {
+            use sqlparser::ast::ColumnOption;
+            match &opt.option {
+                ColumnOption::PrimaryKey { .. } => { pk = true; nullable = false; index = true; unique = true; },
+                ColumnOption::Unique { .. } => { unique = true; index = true; },
+                ColumnOption::NotNull => { nullable = false; },
+                ColumnOption::Null => { nullable = true; },
+                _ => {}
+            }
+        }
+
+        table_columns.push(TableColumn { name, data_type, pk, nullable, unique, index });
+    }
+
+    TableSchema::new(table_columns)
 }
 
 #[cfg(test)]

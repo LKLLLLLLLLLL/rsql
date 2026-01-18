@@ -2,7 +2,7 @@ use crate::common::{RsqlError, RsqlResult};
 use crate::common::DataItem;
 use super::super::config::{MAX_VARCHAR_SIZE, MAX_COL_NAME_SIZE};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum ColType {
     Integer,
     Float,
@@ -11,7 +11,7 @@ pub enum ColType {
     Bool
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TableColumn {
     pub name: String, // fix to MAX_COL_NAME_SIZE bytes
     pub data_type: ColType,
@@ -21,7 +21,7 @@ pub struct TableColumn {
     pub unique: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TableSchema {
     columns: Vec<TableColumn>,
 }
