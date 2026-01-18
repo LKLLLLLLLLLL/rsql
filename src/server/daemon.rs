@@ -8,7 +8,6 @@ use std::env;
 use tracing::info;
 
 use crate::config;
-use super::web_server;
 use super::server;
 use crate::config::{MAX_RESTART_INTERVAL, MAX_RESTART_TIMES, MONITOR_TERM};
 
@@ -109,8 +108,8 @@ impl ManagedProcess {
         
         let mut cmd = Command::new(&self.command);
         cmd.args(&self.args)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
             .kill_on_drop(true);
 
         let mut child = match cmd.spawn() {

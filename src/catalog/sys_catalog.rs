@@ -2,6 +2,7 @@ use std::sync::{OnceLock, Mutex};
 use std::time;
 
 use bcrypt::{hash, DEFAULT_COST};
+use rand::seq::index;
 use tracing::info;
 
 use crate::storage::table;
@@ -24,8 +25,9 @@ use super::table_schema::TableSchema;
 
 pub const SYS_TABLE_ID: u64 = 0;
 pub const SYS_COLUMN_ID: u64 = 1;
-pub const SYS_SEQUENCE_ID: u64 = 2; // for autoincrement
-pub const SYS_USER_ID: u64 = 3;
+pub const SYS_INDEX_ID: u64 = 2; // only for user created indexes
+pub const SYS_SEQUENCE_ID: u64 = 3; // for autoincrement
+pub const SYS_USER_ID: u64 = 4;
 
 pub fn is_sys_table(table_id: u64) -> bool {
     table_id <= SYS_USER_ID
@@ -131,6 +133,36 @@ fn sys_column_schema() -> TableSchema {
     TableSchema::new(columns).unwrap()
 }
 
+fn sys_index_schema() -> TableSchema {
+    let columns = vec![
+        TableColumn {
+            name: "index_name".to_string(),
+            data_type: super::table_schema::ColType::Chars(MAX_COL_NAME_SIZE),
+            pk: true,
+            nullable: false,
+            unique: true,
+            index: true,
+        },
+        TableColumn { // foreign key to sys_table.table_id
+            name: "table_id".to_string(),
+            data_type: super::table_schema::ColType::Integer,
+            pk: false,
+            nullable: false,
+            unique: false,
+            index: true,
+        },
+        TableColumn {
+            name: "column_name".to_string(),
+            data_type: super::table_schema::ColType::Chars(MAX_COL_NAME_SIZE),
+            pk: false,
+            nullable: false,
+            unique: false,
+            index: true,
+        },
+    ];
+    TableSchema::new(columns).unwrap()
+}
+
 fn sys_sequence_schema() -> TableSchema {
     let columns = vec![
         TableColumn {
@@ -193,6 +225,7 @@ pub struct SysCatalog {
     // This Mutex is only used to protect concurrent access.
     table: Mutex<Table>,
     column: Mutex<Table>,
+    index: Mutex<Table>,
     sequence: Mutex<Table>,
     user: Mutex<Table>,
 }
@@ -214,6 +247,7 @@ impl SysCatalog {
         let table_ids = vec![
             SYS_TABLE_ID,
             SYS_COLUMN_ID,
+            SYS_INDEX_ID,
             SYS_SEQUENCE_ID,
             SYS_USER_ID,
         ];
@@ -227,6 +261,9 @@ impl SysCatalog {
         // sys_column
         let column_schema = sys_column_schema();
         let _ = Table::create(SYS_COLUMN_ID, column_schema, tnx_id, true)?;
+        // sys_index
+        let index_schema = sys_index_schema();
+        let _ = Table::create(SYS_INDEX_ID, index_schema, tnx_id, true)?;
         // sys_sequence
         let sequence_schema = sys_sequence_schema();
         let mut sequence = Table::create(SYS_SEQUENCE_ID, sequence_schema, tnx_id, true)?;
@@ -273,6 +310,9 @@ impl SysCatalog {
         // sys_column
         let column_schema = sys_column_schema();
         let column = Table::from(SYS_COLUMN_ID, column_schema, true).unwrap();
+        // sys_index
+        let index_schema = sys_index_schema();
+        let index = Table::from(SYS_INDEX_ID, index_schema, true).unwrap();
         // sys_sequence
         let sequence_schema = sys_sequence_schema();
         let sequence = Table::from(SYS_SEQUENCE_ID, sequence_schema, true).unwrap();
@@ -282,6 +322,7 @@ impl SysCatalog {
         SysCatalog {
             table: Mutex::new(table),
             column: Mutex::new(column),
+            index: Mutex::new(index),
             sequence: Mutex::new(sequence),
             user: Mutex::new(user),
         }
@@ -429,7 +470,7 @@ impl SysCatalog {
         table_name: &str,
         schema: &TableSchema
     ) -> RsqlResult<u64> {
-        let write_table = vec![SYS_TABLE_ID, SYS_COLUMN_ID];
+        let write_table = vec![SYS_TABLE_ID, SYS_INDEX_ID, SYS_COLUMN_ID];
         TnxManager::global().acquire_write_locks(tnx_id, &write_table)?;
         let mut table_guard = self.table.lock().unwrap();
         let mut column_guard = self.column.lock().unwrap();
@@ -486,6 +527,27 @@ impl SysCatalog {
                 tnx_id,
             )?;
         }
+        // register indexes for indexed columns
+        for col in schema.get_columns() {
+            if col.index {
+                let mut index_guard = self.index.lock().unwrap();
+                let index_name = format!("IDX_{}_{}", table_name, col.name);
+                index_guard.insert_row(
+                    vec![
+                        DataItem::Chars { 
+                            len: MAX_COL_NAME_SIZE as u64, 
+                            value: index_name, 
+                        },
+                        DataItem::Integer(table_id as i64),
+                        DataItem::Chars { 
+                            len: MAX_COL_NAME_SIZE as u64, 
+                            value: col.name.clone(), 
+                        },
+                    ],
+                    tnx_id,
+                )?;
+            }
+        }
         Ok(table_id)
     }
     pub fn unregister_table(
@@ -509,6 +571,19 @@ impl SysCatalog {
             let row = row_opt?;
             let index = row[1].clone(); // column_name is the second column
             column_guard.delete_row(&index, tnx_id)?;
+        }
+        // delete from sys_index
+        let mut index_guard = self.index.lock().unwrap();
+        let table_id_item = DataItem::Integer(table_id as i64);
+        let key_start = Some(table_id_item.clone());
+        let key_end = Some(table_id_item.clone());
+        let index_rows: Vec<_> = index_guard
+            .get_rows_by_range_indexed_col("table_id", &key_start, &key_end)?
+            .collect();
+        for row_opt in index_rows {
+            let row = row_opt?;
+            let index = row[0].clone(); // index_name is the first column
+            index_guard.delete_row(&index, tnx_id)?;
         }
         Ok(())
     }
@@ -564,15 +639,19 @@ impl SysCatalog {
         tnx_id: u64,
         table_id: u64,
         column_name: &str,
+        index_name: &str,
+        unique: bool,
     ) -> RsqlResult<()> {
         let write_table = vec![SYS_COLUMN_ID];
         TnxManager::global().acquire_write_locks(tnx_id, &write_table)?;
+        // register to column table
         let mut column_guard = self.column.lock().unwrap();
         let pk = DataItem::Integer(table_id as i64);
         let key = Some(pk.clone());
         let column_rows = column_guard
             .get_rows_by_range_indexed_col("table_id", &key, &key)?
             .collect::<RsqlResult<Vec<_>>>()?;
+        let mut found = false;
         for row in column_rows {
             let row = row;
             let DataItem::Chars{ len: _, value: name} = &row[1] else {
@@ -590,60 +669,63 @@ impl SysCatalog {
                         row[4].clone(),
                         row[5].clone(),
                         DataItem::Bool(true), // set is_indexed to true
-                        row[7].clone(),
+                        DataItem::Bool(unique), // set is_unique
                     ],
                     tnx_id,
                 )?;
-                return Ok(());
+                found = true;
+                break;
             }
-        }
-        Err(RsqlError::Unknown(format!(
-            "Column {} not found in table id {}",
-            column_name, table_id
-        )))
+        };
+        if !found {
+            return Err(RsqlError::Unknown(format!(
+                "Column {} not found in table id {}",
+                column_name, table_id
+            )))
+        };
+        // register to index table
+        let mut index_guard = self.index.lock().unwrap();
+        index_guard.insert_row(
+            vec![
+                DataItem::Chars { 
+                    len: MAX_COL_NAME_SIZE as u64, 
+                    value: index_name.to_string(), 
+                },
+                DataItem::Integer(table_id as i64),
+                DataItem::Chars { 
+                    len: MAX_COL_NAME_SIZE as u64, 
+                    value: column_name.to_string(), 
+                },
+            ],
+            tnx_id,
+        )?;
+        Ok(())
     }
-    pub fn create_index(
-        &self,
-        tnx_id: u64,
-        table_id: u64,
-        column_name: &str,
-    ) -> RsqlResult<()> {
-        let write_table = vec![SYS_COLUMN_ID];
-        TnxManager::global().acquire_write_locks(tnx_id, &write_table)?;
-        let mut column_guard = self.column.lock().unwrap();
-        let pk = DataItem::Integer(table_id as i64);
-        let key = Some(pk.clone());
-        let column_rows = column_guard
-            .get_rows_by_range_indexed_col("table_id", &key, &key)?
+    pub fn get_index_name(&self, tnx_id: u64, table_id: u64, column_name: &str) -> RsqlResult<Option<String>> {
+        let read_table = vec![SYS_INDEX_ID];
+        TnxManager::global().acquire_read_locks(tnx_id, &read_table)?;
+        let index_guard = self.index.lock().unwrap();
+        let mut index_name_opt = None;
+        let table_id_item = DataItem::Integer(table_id as i64);
+        let key_start = Some(table_id_item.clone());
+        let key_end = Some(table_id_item.clone());
+        let index_rows = index_guard
+            .get_rows_by_range_indexed_col("table_id", &key_start, &key_end)?
             .collect::<RsqlResult<Vec<_>>>()?;
-        for row in column_rows {
+        for row in index_rows {
             let row = row;
-            let DataItem::Chars{ len: _, value: name} = &row[1] else {
+            let DataItem::Chars{ len: _, value: col_name} = &row[2] else {
                 panic!("column_name column is not Chars");
             };
-            if name == column_name {
-                // update is_indexed to true
-                column_guard.update_row(
-                    &row[1],
-                    vec![
-                        row[0].clone(),
-                        row[1].clone(),
-                        row[2].clone(),
-                        row[3].clone(),
-                        row[4].clone(),
-                        row[5].clone(),
-                        DataItem::Bool(true), // set is_indexed to true
-                        row[7].clone(),
-                    ],
-                    tnx_id,
-                )?;
-                return Ok(());
+            if col_name == column_name {
+                let DataItem::Chars{ len: _, value: index_name} = &row[0] else {
+                    panic!("index_name column is not Chars");
+                };
+                index_name_opt = Some(index_name.clone());
+                break;
             }
-        }
-        Err(RsqlError::Unknown(format!(
-            "Column {} not found in table id {}",
-            column_name, table_id
-        )))
+        };
+        Ok(index_name_opt)
     }
 
     pub fn validate_user(
@@ -715,6 +797,21 @@ impl SysCatalog {
         };
         user_guard.delete_row(&index, tnx_id)?;
         Ok(())
+    }
+    pub fn get_all_users(&self, tnx_id: u64) -> RsqlResult<Vec<String>> {
+        let read_table = vec![SYS_USER_ID];
+        TnxManager::global().acquire_read_locks(tnx_id, &read_table)?;
+        let user_guard = self.user.lock().unwrap();
+        let mut usernames = vec![];
+        let user_rows = user_guard.get_all_rows()?;
+        for row in user_rows {
+            let row = row?;
+            let DataItem::Chars{ len: _, value: username} = &row[0] else {
+                panic!("username column is not Chars");
+            };
+            usernames.push(username.clone());
+        }
+        Ok(usernames)
     }
 }
 

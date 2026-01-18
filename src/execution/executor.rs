@@ -4,7 +4,7 @@ use std::rc::Rc;
 use std::cell::RefCell;
 use std::thread;
 
-use crate::catalog::{self, SysCatalog};
+use crate::catalog::SysCatalog;
 use crate::common::{RsqlResult, RsqlError};
 use crate::sql::{Plan, plan::{PlanItem}};
 use crate::storage::WAL;
@@ -197,7 +197,7 @@ pub fn checkpoint() -> RsqlResult<()> {
 /// Validate user credentials
 pub fn validate_user(username: &str, password: &str) -> RsqlResult<bool> {
     let tnx_id = TnxManager::global().begin_transaction(1);
-    let is_valid = catalog::SysCatalog::global().validate_user(tnx_id, username, password)?;
+    let is_valid = SysCatalog::global().validate_user(tnx_id, username, password)?;
     TnxManager::global().end_transaction(1);
     Ok(is_valid)
 }

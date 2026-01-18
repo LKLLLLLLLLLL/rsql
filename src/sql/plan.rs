@@ -106,7 +106,7 @@ pub enum PlanNode {
     CreateIndex {
         index_name: String,
         table_name: String,
-        columns: Vec<String>,
+        column: String, // ONLY single column index for now
         unique: bool,
     },
     /// Inserts data into a table.
