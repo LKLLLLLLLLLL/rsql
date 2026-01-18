@@ -312,6 +312,24 @@
         </div>
     </div>
 
+    <!-- 重命名弹窗 -->
+    <div v-if="renameModalVisible" class="modal-overlay">
+        <div class="modal-dialog">
+            <h3><Icon :path="mdiTableEdit" size="18" /> 重命名表</h3>
+            <p>将 <strong>{{ pendingRenameTable }}</strong> 重命名为：</p>
+            <div class="form-row">
+                <label for="rename-table-name">新表名</label>
+                <input id="rename-table-name" type="text" v-model="renameNewName" placeholder="例如：members" />
+            </div>
+            <div class="modal-actions">
+                <button class="modal-cancel" @click="renameModalVisible = false">取消</button>
+                <button class="modal-confirm rename" @click="confirmRenameTable">
+                    <Icon :path="mdiCheckCircleOutline" size="16" /> 确认重命名
+                </button>
+            </div>
+        </div>
+    </div>
+
     <Toast ref="toastRef" :message="toastMessage" :duration="toastDuration" />
     </div>
 </template>
@@ -378,6 +396,11 @@ let currentDisplayHeaders = []
 const dropMode = ref(false)
 const dropModalVisible = ref(false)
 const pendingDropTable = ref('')
+// Rename 模式与弹窗
+const renameMode = ref(false)
+const renameModalVisible = ref(false)
+const pendingRenameTable = ref('')
+const renameNewName = ref('')
 
 // WebSocket 相关状态
 // ============ 关键配置 ============
@@ -586,6 +609,25 @@ function confirmDropTable() {
     setTimeout(() => {
         loadTablesList()
     }, 100)
+}
+
+function confirmRenameTable() {
+    const oldName = (pendingRenameTable.value || '').trim()
+    const newName = (renameNewName.value || '').trim()
+    if (!oldName) { renameModalVisible.value = false; return }
+    if (!newName) { alert('新表名不能为空'); return }
+    if (oldName === newName) { alert('新表名与原表名相同'); return }
+    const sql = `ALTER TABLE ${oldName} RENAME TO ${newName};`
+    sendSqlStatement(sql, '重命名表')
+    renameModalVisible.value = false
+    // 若当前已选表为旧名，则同步更新显示
+    if (currentTableName.value === oldName) {
+        currentTableName.value = newName
+        const headerTitle = document.querySelector('.table-header h3')
+        if (headerTitle) headerTitle.textContent = `${newName} Table Data`
+    }
+    // 刷新列表
+    setTimeout(() => { loadTablesList() }, 100)
 }
 
 function headerPlaceholder(headerName) {
@@ -1007,7 +1049,15 @@ onMounted(() => {
                         删除
                    </button>`
                 : ''
-            return `<div class="table-item"><span>${n}</span>${delBtn}</div>`
+            const renBtn = renameMode.value
+                ? `<button class="table-rename-btn" data-table="${n}">
+                        <svg class="table-rename-svg" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="${mdiTableEdit}" fill="currentColor" />
+                        </svg>
+                        重命名
+                   </button>`
+                : ''
+            return `<div class="table-item"><span>${n}</span>${delBtn}${renBtn}</div>`
         }).join('')
         tablesListEl.innerHTML = header + items
         const countEl = document.getElementById('tables-counts')
@@ -1178,7 +1228,7 @@ onMounted(() => {
         if (item.parentNode) item.parentNode.replaceChild(newItem, item)
         newItem.addEventListener('click', async function (e) {
             // 点击删除按钮时，不触发表项切换
-            if (e && e.target && e.target.classList && e.target.classList.contains('table-delete-btn')) {
+            if (e && e.target && e.target.classList && (e.target.classList.contains('table-delete-btn') || e.target.classList.contains('table-rename-btn'))) {
                 return
             }
             // 点击任意表项时，将顶部四个按钮恢复为未选中（蓝色）
@@ -1221,6 +1271,18 @@ onMounted(() => {
                 if (tn) {
                     pendingDropTable.value = tn
                     dropModalVisible.value = true
+                }
+            })
+        }
+        const renBtn = newItem.querySelector('.table-rename-btn')
+        if (renBtn) {
+            renBtn.addEventListener('click', (ev) => {
+                ev.stopPropagation()
+                const tn = renBtn.getAttribute('data-table') || ''
+                if (tn) {
+                    pendingRenameTable.value = tn
+                    renameNewName.value = ''
+                    renameModalVisible.value = true
                 }
             })
         }
@@ -1602,6 +1664,7 @@ onMounted(() => {
             this.classList.contains('terminal') ? 'Terminal' : 'Unknown'
         if (action === 'Create') {
             dropMode.value = false
+            renameMode.value = false
             loadTablesList()
             document.querySelectorAll('.table-item').forEach((el) => {
                 el.classList.remove('active')
@@ -1610,14 +1673,17 @@ onMounted(() => {
         } else if (action === 'Drop') {
             // 开启删除模式，在列表每个表后显示删除按钮
             dropMode.value = true
+            renameMode.value = false
             loadTablesList()
 
         } else if (action === 'Rename') {
             dropMode.value = false
+            renameMode.value = true
             loadTablesList()
             
         } else if (action === 'Terminal') {
             dropMode.value = false
+            renameMode.value = false
             loadTablesList()
             document.querySelectorAll('.table-item').forEach((el) => {
                 el.classList.remove('active')
@@ -1788,6 +1854,25 @@ body {
     background-color: #c0392b;
 }
 .table-delete-svg {
+    flex-shrink: 0;
+}
+.table-rename-btn {
+    margin-left: auto;
+    background-color: #3498db;
+    color: #fff;
+    border: none;
+    border-radius: 12px;
+    padding: 4px 10px;
+    font-size: 12px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.table-rename-btn:hover {
+    background-color: #217dbb;
+}
+.table-rename-svg {
     flex-shrink: 0;
 }
 
@@ -2259,6 +2344,11 @@ tbody tr:hover {
     justify-content: center;
     z-index: 1000;
 }
+
+.modal-overlay p {
+    margin-bottom: 10px;
+}
+
 .modal-dialog {
     background: #fff;
     border-radius: 8px;
@@ -2295,6 +2385,12 @@ tbody tr:hover {
 }
 .modal-confirm:hover {
     background: #c0392b;
+}
+.modal-confirm.rename {
+    background: #3498db;
+}
+.modal-confirm.rename:hover {
+    background: #217dbb;
 }
 
 .form-row {
