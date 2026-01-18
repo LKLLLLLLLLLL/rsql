@@ -436,36 +436,37 @@ impl WAL {
         self.append_entry(&entry)
     }
 
-    pub fn open_tnx(&self, tnx_id: u64) -> RsqlResult<bool> {
+    pub fn open_tnx(&self, tnx_id: u64) -> RsqlResult<()> {
         check_recovered();
         let entry = WALEntry::OpenTnx {
             tnx_id
         };
         self.active_tnx_ids.lock().unwrap().push(tnx_id);
-        self.append_entry(&entry)
+        self.append_entry(&entry)?;
+        Ok(())
     }
     /// This method will force flush the log after committing
-    pub fn commit_tnx(&self, tnx_id: u64) -> RsqlResult<bool> {
+    pub fn commit_tnx(&self, tnx_id: u64) -> RsqlResult<()> {
         check_recovered();
         // nothing more to do, it's a happy path
         let entry = WALEntry::CommitTnx {
             tnx_id
         };
         self.active_tnx_ids.lock().unwrap().retain(|&id| id != tnx_id);
-        let need_checkpoint = self.append_entry(&entry)?;
+        self.append_entry(&entry)?;
         self.flush()?;
-        Ok(need_checkpoint)
+        Ok(())
     }
     /// This method will force flush the log after rolling back
     pub fn rollback_tnx(
         &self, 
         tnx_id: u64,
-        write_page: &mut dyn FnMut(u64, u64, Vec<u8>) -> RsqlResult<()>,
-        update_page: &mut dyn FnMut(u64, u64, u64, u64, Vec<u8>) -> RsqlResult<()>,
+        write_page: &mut dyn FnMut(u64, u64, &[u8]) -> RsqlResult<()>,
+        update_page: &mut dyn FnMut(u64, u64, u64, u64, &[u8]) -> RsqlResult<()>,
         append_page: &mut dyn FnMut(u64) -> RsqlResult<u64>,
         trunc_page: &mut dyn FnMut(u64) -> RsqlResult<()>,
         max_page_idx: &mut dyn FnMut(u64) -> RsqlResult<u64>,
-    ) -> RsqlResult<bool> {
+    ) -> RsqlResult<()> {
         check_recovered();
         // 1. find all entries related to this transaction
         let undo_entries = {
@@ -489,7 +490,7 @@ impl WAL {
         for entry in undo_entries.iter().rev() {
             match entry {
                 WALEntry::UpdatePage { table_id, page_id, offset, len, old_data, .. } => {
-                    update_page(*table_id, *page_id, *offset, *len, old_data.clone())?;
+                    update_page(*table_id, *page_id, *offset, *len, &old_data)?;
                 },
                 WALEntry::NewPage { table_id, page_id, .. } => {
                     // if too short, append pages until enough
@@ -510,7 +511,7 @@ impl WAL {
                     while max_page_idx(*table_id)? > *page_id {
                         trunc_page(*table_id)?;
                     }
-                    write_page(*table_id, *page_id, old_data.clone())?;
+                    write_page(*table_id, *page_id, &old_data)?;
                 },
                 _ => {},
             }
@@ -521,9 +522,15 @@ impl WAL {
         let entry = WALEntry::RollbackTnx {
             tnx_id
         };
-        let need_checkpoint = self.append_entry(&entry)?;
+        self.append_entry(&entry)?;
         self.flush()?;
-        Ok(need_checkpoint)
+        Ok(())
+    }
+    /// Detect whether a checkpoint is needed based on the current WAL size
+    pub fn need_checkpoint(&self) -> bool {
+        check_recovered();
+        let length = self.length.load(Ordering::SeqCst);
+        length > MAX_WAL_SIZE
     }
 }
 
