@@ -326,6 +326,14 @@ pub fn execute_plan_node(node: &PlanNode, tnx_id: u64) -> RsqlResult<ExecutionRe
         PlanNode::AlterTable { table_name, operation } => {
             // it depends
             todo!("Implement AlterTable execution")
+        },
+        PlanNode::CreateUser { user_name } => {
+            info!("Creating user: {}", user_name);
+            todo!("Implement CreateUser execution")
+        },
+        PlanNode::DropUser { user_name, if_exists } => {
+            info!("Dropping user: {}, if_exists: {}", user_name, if_exists);
+            todo!("Implement DropUser execution")
         }
     }
 }

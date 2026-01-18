@@ -19,7 +19,7 @@ pub fn execute(sql: &str, connection_id: u64) -> RsqlResult<()> {
             PlanItem::Rollback => {
                 info!("Rollback transaction");
             },
-            PlanItem::Statement(plan_node) => {
+            PlanItem::DDL(plan_node) | PlanItem::DML(plan_node) | PlanItem::DCL(plan_node) => {
                 info!("Executing statement: {:?}", plan_node);
                 execute_plan_node(plan_node, connection_id)?;
             },
