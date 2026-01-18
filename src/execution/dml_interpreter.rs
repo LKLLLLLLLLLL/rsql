@@ -3,8 +3,14 @@ use crate::sql::plan::{PlanNode, JoinType};
 use crate::common::data_item::{DataItem};
 use crate::catalog::table_schema::{TableSchema, ColType, TableColumn};
 use crate::storage::table::{Table};
-use super::result::{ExecutionResult::{self, Query, Mutation, TableObj, TableWithFilter, TempTable}, TableObject};
-use super::expr_interpreter::{handle_on_expr, handle_table_obj_filter_expr, handle_temp_table_filter_expr, handle_insert_expr, handle_update_expr};
+use super::result::{ExecutionResult::{self, Query, Mutation, TableObj, TableWithFilter, TempTable, AggrTable}, TableObject};
+use super::expr_interpreter::{handle_on_expr, 
+    handle_table_obj_filter_expr, 
+    handle_temp_table_filter_expr, 
+    handle_insert_expr, 
+    handle_update_expr,
+    handle_aggr_expr
+};
 use tracing::info;
 use std::collections::HashMap;
 use sqlparser::ast::{Expr};
@@ -207,10 +213,38 @@ pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64) -> RsqlResult<Executi
                     Ok(Query {
                         cols: (cols_name, cols_type),
                         rows,
-                    })
+                    }) // handle subquery
                 }else {
-                    Err(RsqlError::ExecutionError(format!("Projection input must be a TableWithFilter or TempTable")))
-                } // handle subquery
+                    if let AggrTable{cols: input_cols, rows: input_rows, aggr_cols} = input_result {
+                        // 1. get projection columns
+                        let mut cols_name = vec![];
+                        for expr in exprs {
+                            match expr {
+                                Expr::Identifier(ident) => {
+                                    cols_name.push(ident.value.clone());
+                                },
+                                _ => (), // skip aggr cols
+                            }
+                        }
+                        cols_name.extend(aggr_cols);
+                        // 2. get projection rows
+                        let mut rows = vec![];
+                        for row in input_rows.iter() {
+                            let mut r = vec![];
+                            for col in cols_name.iter() {
+                                let col_idx = input_cols.0.iter().position(|x| x == col).unwrap();
+                                r.push(row[col_idx].clone());
+                            }
+                            rows.push(r);
+                        }
+                        Ok(Query {
+                            cols: (cols_name, vec![]), // aggr col types are useless
+                            rows,
+                        }) // get aggr query result
+                    }else {
+                        Err(RsqlError::ExecutionError(format!("Projection input must be a TableWithFilter, TempTable or AggrTable")))
+                    }
+                }
             }
         },
         PlanNode::Join { left, right, join_type, on } => {
@@ -223,7 +257,14 @@ pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64) -> RsqlResult<Executi
             }
         },
         PlanNode::Aggregate { group_by, aggr_exprs, input } => {
-            todo!("Implement Aggregate execution")
+            info!("Implement Aggregate execution");
+            let input_result = execute_dml_plan_node(input, tnx_id)?;
+            if let TableObj(table_obj) = input_result {
+                let (cols, rows, aggr_cols) = handle_aggr_expr(table_obj, group_by, aggr_exprs)?;
+                Ok(AggrTable {cols, rows, aggr_cols})
+            }else {
+                Err(RsqlError::ExecutionError(format!("Aggregate input must be a TableObj")))
+            }
         },
         PlanNode::Subquery { subquery, alias } => {
             info!("Implement Subquery execution");
@@ -239,6 +280,7 @@ pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64) -> RsqlResult<Executi
             }
         },
         PlanNode::Insert { table_name, columns, values, input: _ } => {
+            info!("Implement Insert execution");
             let mut table_object = get_table_object(table_name)?;
             if let Some(cols) = columns {
                 let mut null_cols = vec![];
@@ -269,6 +311,7 @@ pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64) -> RsqlResult<Executi
             }
         },
         PlanNode::Delete { input } => {
+            info!("Implement Delete execution");
             let input_result = execute_dml_plan_node(input, tnx_id)?;
             if let TableWithFilter{mut table_obj, rows} = input_result {
                 for row in rows.iter() {
@@ -281,6 +324,7 @@ pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64) -> RsqlResult<Executi
             }
         },
         PlanNode::Update { input, assignments } => {
+            info!("Implement Update execution");
             let input_result = execute_dml_plan_node(input, tnx_id)?;
             if let TableWithFilter {mut table_obj, rows} = input_result {
                 handle_update_expr(&mut table_obj, assignments, &rows, tnx_id)?;
