@@ -4,6 +4,7 @@ use std::rc::Rc;
 use std::cell::RefCell;
 use std::thread;
 
+use crate::catalog::{self, SysCatalog};
 use crate::common::{RsqlResult, RsqlError};
 use crate::sql::{Plan, plan::{PlanItem}};
 use crate::storage::WAL;
@@ -147,6 +148,7 @@ fn execute_inner(sql: &str, connection_id: u64) -> RsqlResult<()> {
     Ok(())
 }
 
+/// Execute a SQL statement
 pub fn execute(sql: &str, connection_id: u64) -> RsqlResult<()> {
     let _guard = ExecGuard::new(connection_id);
     info!("Executing SQL: {}, in thread {:?}", sql, thread::current().id());
@@ -189,5 +191,24 @@ pub fn checkpoint() -> RsqlResult<()> {
     WAL::global().checkpoint(&|| {
         StorageManager::flush_all()
     })?;
+    Ok(())
+}
+
+/// Validate user credentials
+pub fn validate_user(username: &str, password: &str) -> RsqlResult<bool> {
+    let tnx_id = TnxManager::global().begin_transaction(1);
+    let is_valid = catalog::SysCatalog::global().validate_user(tnx_id, username, password)?;
+    TnxManager::global().end_transaction(1);
+    Ok(is_valid)
+}
+
+/// Callback function when a connection is disconnected
+/// Will automatically rollback any active transaction for the connection
+pub fn disconnect_callback(connection_id: u64) -> RsqlResult<()> {
+    let tnx_id_opt = TnxManager::global().get_transaction_id(connection_id);
+    if tnx_id_opt.is_some() {
+        warn!("Connection {} disconnected with active transaction, rolling back...", connection_id);
+        rollback_transaction(connection_id)?;
+    };
     Ok(())
 }
