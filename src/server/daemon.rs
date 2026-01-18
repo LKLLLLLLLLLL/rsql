@@ -189,7 +189,7 @@ fn run_sql_server() -> Result<(), Box<dyn std::error::Error>> {
     
     info!("SQL Server listening on port: {}", port);
     
-    if let Err(e) = actix_web::rt::System::new().block_on(crate::server::server::start_server()) {
+    if let Err(e) = actix_web::rt::System::new().block_on(crate::server::server::start_servers()) {
         error!("SQL Server failed to start: {:?}", e);
         std::process::exit(1);
     }

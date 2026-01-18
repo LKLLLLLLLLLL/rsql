@@ -1,8 +1,10 @@
+use actix_files::Files;
 use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer, Responder};
 use actix_web_actors::ws;
+use futures::try_join;
 use tracing::info;
 
-use crate::config::{PORT};
+use crate::config::{PORT, WEB_PORT};
 use super::types::{RayonQueryResponse, HttpQueryRequest, HttpQueryResponse};
 use super::sqlserver_actor::SQLWebsocketActor;
 use super::thread_pool::WorkingThreadPool;
@@ -160,21 +162,41 @@ async fn handle_http_query(
     }
 }
 
-pub async fn start_server() -> std::io::Result<()> {
-    info!("Starting server on port {}", PORT);
+pub async fn start_servers() -> std::io::Result<()> {
+    info!("Starting WebSocket server on port {}", PORT);
     let working_thread_pool = Arc::new(WorkingThreadPool::new());
     let state = web::Data::new(AppState{
         working_thread_pool,
         working_query: Arc::new(AtomicU64::new(0)),
     });
     state.working_thread_pool.show_info();
-    HttpServer::new( move || {
+    let ws_server = HttpServer::new( move || {
         App::new()
             .app_data(state.clone())
             //.route("/query", web::post().to(handle_http_query))
             .route("/ws",web::get().to(handle_ws_query))
     })
     .bind(("127.0.0.1",PORT))?
-    .run()
-    .await
+    .run();
+
+    // Serve built front-end assets on WEB_PORT
+    let static_dir = std::path::PathBuf::from("./client/dist");
+    if !static_dir.exists() {
+        info!("Static directory {:?} not found. Did you run `npm run build` in ./client?", static_dir);
+    }
+    let static_dir_for_service = static_dir.clone();
+    let web_server = HttpServer::new( move || {
+        let dir = static_dir_for_service.clone();
+        App::new()
+            .service(
+                Files::new("/", dir)
+                    .index_file("index.html")
+                    .prefer_utf8(true),
+            )
+    })
+    .bind(("127.0.0.1", WEB_PORT))?
+    .run();
+
+    try_join!(ws_server, web_server)?;
+    Ok(())
 }

@@ -312,6 +312,24 @@
         </div>
     </div>
 
+    <!-- 重命名弹窗 -->
+    <div v-if="renameModalVisible" class="modal-overlay">
+        <div class="modal-dialog">
+            <h3><Icon :path="mdiTableEdit" size="18" /> 重命名表</h3>
+            <p>将 <strong>{{ pendingRenameTable }}</strong> 重命名为：</p>
+            <div class="form-row">
+                <label for="rename-table-name">新表名</label>
+                <input id="rename-table-name" type="text" v-model="renameNewName" placeholder="例如：members" />
+            </div>
+            <div class="modal-actions">
+                <button class="modal-cancel" @click="renameModalVisible = false">取消</button>
+                <button class="modal-confirm rename" @click="confirmRenameTable">
+                    <Icon :path="mdiCheckCircleOutline" size="16" /> 确认重命名
+                </button>
+            </div>
+        </div>
+    </div>
+
     <Toast ref="toastRef" :message="toastMessage" :duration="toastDuration" />
     </div>
 </template>
@@ -378,9 +396,20 @@ let currentDisplayHeaders = []
 const dropMode = ref(false)
 const dropModalVisible = ref(false)
 const pendingDropTable = ref('')
+// Rename 模式与弹窗
+const renameMode = ref(false)
+const renameModalVisible = ref(false)
+const pendingRenameTable = ref('')
+const renameNewName = ref('')
 
 // WebSocket 相关状态
-const wsUrl = 'ws://127.0.0.1:4455/ws'
+// ============ 关键配置 ============
+// WebSocket 直接指向后端 4455 端口；页面可通过 4456 提供的 dist 访问
+// 默认携带 root/password 方便本地测试，如需改密码请同步修改这里
+const wsPort = 4455
+const wsUsername = 'root'
+const wsPassword = 'password'
+const wsUrl = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.hostname}:${wsPort}/ws?username=${encodeURIComponent(wsUsername)}&password=${encodeURIComponent(wsPassword)}`
 const wsRef = ref(null)
 const connected = ref(false)
 const codeInput = ref('')
@@ -498,7 +527,8 @@ function checkTypeMatches(type, data) {
     const makeResult = (valid, normalized = data, message = '') => ({ valid, normalized, message })
 
     switch (t) {
-        case 'INT': {
+        case 'INT':
+        case 'INTEGER': {
             const s = typeof data === 'number' ? String(data) : String(data ?? '').trim()
             if (!/^[+-]?\d+$/.test(s)) return makeResult(false, null, 'INT expects an integer without decimals')
             const n = Number(s)
@@ -525,6 +555,7 @@ function checkTypeMatches(type, data) {
             return makeResult(true, normalized)
         }
 
+        case 'BOOL':
         case 'BOOLEAN': {
             if (data === true || data === false) return makeResult(true, data)
             const s = String(data ?? '').trim().toLowerCase()
@@ -579,6 +610,25 @@ function confirmDropTable() {
     setTimeout(() => {
         loadTablesList()
     }, 100)
+}
+
+function confirmRenameTable() {
+    const oldName = (pendingRenameTable.value || '').trim()
+    const newName = (renameNewName.value || '').trim()
+    if (!oldName) { renameModalVisible.value = false; return }
+    if (!newName) { alert('新表名不能为空'); return }
+    if (oldName === newName) { alert('新表名与原表名相同'); return }
+    const sql = `ALTER TABLE ${oldName} RENAME TO ${newName};`
+    sendSqlStatement(sql, '重命名表')
+    renameModalVisible.value = false
+    // 若当前已选表为旧名，则同步更新显示
+    if (currentTableName.value === oldName) {
+        currentTableName.value = newName
+        const headerTitle = document.querySelector('.table-header h3')
+        if (headerTitle) headerTitle.textContent = `${newName} Table Data`
+    }
+    // 刷新列表
+    setTimeout(() => { loadTablesList() }, 100)
 }
 
 function headerPlaceholder(headerName) {
@@ -801,7 +851,8 @@ onMounted(() => {
         const makeResult = (valid, normalized = data, message = '') => ({ valid, normalized, message });
 
         switch (t) {
-            case 'INT': {
+            case 'INT':
+            case 'INTEGER': {
                 const s = typeof data === 'number' ? String(data) : String(data ?? '').trim();
                 if (!/^[+-]?\d+$/.test(s)) return makeResult(false, null, 'INT expects an integer without decimals');
                 const n = Number(s);
@@ -830,6 +881,7 @@ onMounted(() => {
                 return makeResult(true, normalized);
             }
 
+            case 'BOOL':
             case 'BOOLEAN': {
                 if (data === true || data === false) return makeResult(true, data);
                 const s = String(data ?? '').trim().toLowerCase();
@@ -998,7 +1050,15 @@ onMounted(() => {
                         删除
                    </button>`
                 : ''
-            return `<div class="table-item"><span>${n}</span>${delBtn}</div>`
+            const renBtn = renameMode.value
+                ? `<button class="table-rename-btn" data-table="${n}">
+                        <svg class="table-rename-svg" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="${mdiTableEdit}" fill="currentColor" />
+                        </svg>
+                        重命名
+                   </button>`
+                : ''
+            return `<div class="table-item"><span>${n}</span>${delBtn}${renBtn}</div>`
         }).join('')
         tablesListEl.innerHTML = header + items
         const countEl = document.getElementById('tables-counts')
@@ -1169,7 +1229,7 @@ onMounted(() => {
         if (item.parentNode) item.parentNode.replaceChild(newItem, item)
         newItem.addEventListener('click', async function (e) {
             // 点击删除按钮时，不触发表项切换
-            if (e && e.target && e.target.classList && e.target.classList.contains('table-delete-btn')) {
+            if (e && e.target && e.target.classList && (e.target.classList.contains('table-delete-btn') || e.target.classList.contains('table-rename-btn'))) {
                 return
             }
             // 点击任意表项时，将顶部四个按钮恢复为未选中（蓝色）
@@ -1212,6 +1272,18 @@ onMounted(() => {
                 if (tn) {
                     pendingDropTable.value = tn
                     dropModalVisible.value = true
+                }
+            })
+        }
+        const renBtn = newItem.querySelector('.table-rename-btn')
+        if (renBtn) {
+            renBtn.addEventListener('click', (ev) => {
+                ev.stopPropagation()
+                const tn = renBtn.getAttribute('data-table') || ''
+                if (tn) {
+                    pendingRenameTable.value = tn
+                    renameNewName.value = ''
+                    renameModalVisible.value = true
                 }
             })
         }
@@ -1366,8 +1438,8 @@ onMounted(() => {
 
     if (submitInsertBtn) {
         submitInsertBtn.addEventListener('click', () => {
-            const currentTableEl = document.getElementById('current-table')
-            const tableName = currentTableEl ? currentTableEl.textContent : ''
+            // Use reactive state as the single source of truth for current table name
+            const tableName = (currentTableName.value || '').trim()
             
             if (!insertRowsContainer) return
             
@@ -1375,6 +1447,11 @@ onMounted(() => {
             
             if (dataRows.length === 0) {
                 alert('请至少添加一行数据')
+                return
+            }
+
+            if (!tableName) {
+                alert('未获取到表名，无法生成插入语句，请先选择表')
                 return
             }
 
@@ -1588,6 +1665,7 @@ onMounted(() => {
             this.classList.contains('terminal') ? 'Terminal' : 'Unknown'
         if (action === 'Create') {
             dropMode.value = false
+            renameMode.value = false
             loadTablesList()
             document.querySelectorAll('.table-item').forEach((el) => {
                 el.classList.remove('active')
@@ -1596,14 +1674,17 @@ onMounted(() => {
         } else if (action === 'Drop') {
             // 开启删除模式，在列表每个表后显示删除按钮
             dropMode.value = true
+            renameMode.value = false
             loadTablesList()
 
         } else if (action === 'Rename') {
             dropMode.value = false
+            renameMode.value = true
             loadTablesList()
             
         } else if (action === 'Terminal') {
             dropMode.value = false
+            renameMode.value = false
             loadTablesList()
             document.querySelectorAll('.table-item').forEach((el) => {
                 el.classList.remove('active')
@@ -1749,6 +1830,8 @@ body {
     padding: 16px; 
     background: #fff; 
     min-height: 120px;
+    max-height: 500px;
+    overflow-y: auto;
 }
 
 .tables-list {
@@ -1774,6 +1857,25 @@ body {
     background-color: #c0392b;
 }
 .table-delete-svg {
+    flex-shrink: 0;
+}
+.table-rename-btn {
+    margin-left: auto;
+    background-color: #3498db;
+    color: #fff;
+    border: none;
+    border-radius: 12px;
+    padding: 4px 10px;
+    font-size: 12px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.table-rename-btn:hover {
+    background-color: #217dbb;
+}
+.table-rename-svg {
     flex-shrink: 0;
 }
 
@@ -2245,6 +2347,11 @@ tbody tr:hover {
     justify-content: center;
     z-index: 1000;
 }
+
+.modal-overlay p {
+    margin-bottom: 10px;
+}
+
 .modal-dialog {
     background: #fff;
     border-radius: 8px;
@@ -2281,6 +2388,12 @@ tbody tr:hover {
 }
 .modal-confirm:hover {
     background: #c0392b;
+}
+.modal-confirm.rename {
+    background: #3498db;
+}
+.modal-confirm.rename:hover {
+    background: #217dbb;
 }
 
 .form-row {
