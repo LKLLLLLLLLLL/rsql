@@ -2,6 +2,8 @@ use tracing_subscriber::prelude::*;
 use std::fs;
 use std::path;
 
+use crate::common::RsqlResult;
+
 mod config;
 mod server;
 mod execution;
@@ -11,6 +13,7 @@ mod storage;
 mod catalog;
 mod transaction;
 mod utils;
+mod init;
 
 pub fn init_log() {
     let log_dir = path::Path::new(config::LOG_PATH).parent().unwrap();
@@ -39,6 +42,10 @@ pub fn init_log() {
         .with(stdout_log)
         .with(file_log)
         .init();
+}
+
+pub fn init_database() {
+    init::init_database().expect("Failed to initialize database");
 }
 
 pub fn run() {

@@ -24,6 +24,10 @@ pub const SYS_COLUMN_ID: u64 = 1;
 pub const SYS_SEQUENCE_ID: u64 = 2; // for autoincrement
 pub const SYS_USER_ID: u64 = 3;
 
+pub fn is_sys_table(table_id: u64) -> bool {
+    table_id <= SYS_USER_ID
+}
+
 fn sys_table_schema() -> TableSchema {
     let columns = vec![
         TableColumn {

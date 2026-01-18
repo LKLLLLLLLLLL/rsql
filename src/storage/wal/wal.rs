@@ -110,8 +110,8 @@ impl WAL {
     /// - RsqlResult<u64>: The maximum transaction ID found in the log
     pub fn recovery_with_instance(
         wal: Arc<WAL>,
-        write_page: &mut impl FnMut(u64, u64, Vec<u8>) -> RsqlResult<()>,
-        update_page: &mut impl FnMut(u64, u64, u64, u64, Vec<u8>) -> RsqlResult<()>,
+        write_page: &mut impl FnMut(u64, u64, &[u8]) -> RsqlResult<()>,
+        update_page: &mut impl FnMut(u64, u64, u64, u64, &[u8]) -> RsqlResult<()>,
         append_page: &mut impl FnMut(u64) -> RsqlResult<u64>,
         trunc_page: &mut impl FnMut(u64) -> RsqlResult<()>,
         max_page_idx: &mut impl FnMut(u64) -> RsqlResult<u64>,
@@ -177,7 +177,7 @@ impl WAL {
             match entry {
                 WALEntry::UpdatePage { tnx_id, table_id, page_id, offset, len, new_data, .. } => {
                     if redo_tnx_ids.contains(tnx_id) {
-                        update_page(*table_id, *page_id, *offset, *len, new_data.clone())?;
+                        update_page(*table_id, *page_id, *offset, *len, &new_data)?;
                         recover_num += 1;
                     }
                 },
@@ -191,7 +191,7 @@ impl WAL {
                         while max_page_idx(*table_id)? > *page_id {
                             trunc_page(*table_id)?;
                         }
-                        write_page(*table_id, *page_id, data.clone())?;
+                        write_page(*table_id, *page_id, &data)?;
                         recover_num += 1;
                     }
                 },
@@ -216,7 +216,7 @@ impl WAL {
             match entry {
                 WALEntry::UpdatePage { tnx_id, table_id, page_id, offset, len, old_data, .. } => {
                     if undo_tnx_ids.contains(tnx_id) {
-                        update_page(*table_id, *page_id, *offset, *len, old_data.clone())?;
+                        update_page(*table_id, *page_id, *offset, *len, &old_data)?;
                         recover_num += 1;
                     }
                 },
@@ -243,7 +243,7 @@ impl WAL {
                         while max_page_idx(*table_id)? > *page_id {
                             trunc_page(*table_id)?;
                         }
-                        write_page(*table_id, *page_id, old_data.clone())?;
+                        write_page(*table_id, *page_id, &old_data)?;
                         recover_num += 1;
                     }
                 },
@@ -271,8 +271,8 @@ impl WAL {
     /// Returns:
     /// - RsqlResult<u64>: The maximum transaction ID found in the log
     pub fn recovery(
-        write_page: &mut impl FnMut(u64, u64, Vec<u8>) -> RsqlResult<()>,
-        update_page: &mut impl FnMut(u64, u64, u64, u64, Vec<u8>) -> RsqlResult<()>,
+        write_page: &mut impl FnMut(u64, u64, &[u8]) -> RsqlResult<()>,
+        update_page: &mut impl FnMut(u64, u64, u64, u64, &[u8]) -> RsqlResult<()>,
         append_page: &mut impl FnMut(u64) -> RsqlResult<u64>,
         trunc_page: &mut impl FnMut(u64) -> RsqlResult<()>,
         max_page_idx: &mut impl FnMut(u64) -> RsqlResult<u64>,
@@ -564,12 +564,12 @@ mod tests {
         let mut truncated = Vec::new();
 
         // closures for recovery
-        let mut write_page = |table_id: u64, page_id: u64, data: Vec<u8>| -> RsqlResult<()> {
-            wrote_pages.push((table_id, page_id, data));
+        let mut write_page = |table_id: u64, page_id: u64, data: &[u8]| -> RsqlResult<()> {
+            wrote_pages.push((table_id, page_id, data.to_vec()));
             Ok(())
         };
-        let mut update_page = |table_id: u64, page_id: u64, offset: u64, len: u64, data: Vec<u8>| -> RsqlResult<()> {
-            updated_pages.push((table_id, page_id, offset, len, data));
+        let mut update_page = |table_id: u64, page_id: u64, offset: u64, len: u64, data: &[u8]| -> RsqlResult<()> {
+            updated_pages.push((table_id, page_id, offset, len, data.to_vec()));
             Ok(())
         };
         let mut append_page = |_: u64| -> RsqlResult<u64> { appended.push(()); Ok(0) };
@@ -656,8 +656,8 @@ mod tests {
 
         // 5. Recovery test
         let mut updated = Vec::new();
-        let mut update_fn = |_: u64, _: u64, _: u64, _: u64, data: Vec<u8>| {
-            updated.push(data);
+        let mut update_fn = |_: u64, _: u64, _: u64, _: u64, data: &[u8]| {
+            updated.push(data.to_vec());
             Ok(())
         };
         

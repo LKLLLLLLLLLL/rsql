@@ -1,5 +1,5 @@
 mod btree_index;
-mod storage;
+pub mod storage;
 mod allocator;
 mod consist_storage;
 pub mod table;
