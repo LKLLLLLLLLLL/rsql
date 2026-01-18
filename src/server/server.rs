@@ -218,10 +218,9 @@ pub async fn start_server() -> std::io::Result<()> {
     HttpServer::new( move || {
         App::new()
             .app_data(state.clone())
-            //.route("/query", web::post().to(handle_http_query))
+            .route("/ws",web::get().to(handle_ws_query))
             .route("/", web::get().to(index))
             .route("/{path:.*}", web::get().to(handle_static_files))
-            .route("/ws",web::get().to(handle_ws_query))
             .wrap(NormalizePath::trim())
     })
     .bind(("127.0.0.1",PORT))?
