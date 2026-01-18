@@ -20,6 +20,9 @@ pub enum RsqlError {
     #[error("Invalid input: {0}")]
     InvalidInput(String),
 
+    #[error("Failed to acquire lock: {0}")]
+    LockError(String),
+
     #[error("Unknown Error: {0}")]
     Unknown(String),
 }

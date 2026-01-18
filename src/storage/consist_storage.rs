@@ -92,6 +92,9 @@ impl ConsistStorageEngine {
     pub fn max_page_index(&self) -> Option<u64> {
         self.storage_manager.max_page_index()
     }
+    pub fn get_storage(&mut self) -> &mut StorageManager {
+        &mut self.storage_manager
+    }
 }
 
 #[cfg(test)]

@@ -446,6 +446,84 @@ impl Table {
         }
         Ok(())
     }
+    pub fn creat_index(&mut self, col_name: &str, tnx_id: u64) -> RsqlResult<()> {
+        // check if column exists and is already indexed
+        let col = self.schema.get_columns().iter().find(|col| col.name == col_name);
+        if col.is_none() {
+            return Err(RsqlError::InvalidInput(format!("Column {} does not exist", col_name)));
+        };
+        let col = col.unwrap();
+        if col.index {
+            return Err(RsqlError::InvalidInput(format!("Column {} is already indexed", col_name)));
+        };
+        // update schema
+        let mut columns = vec![];
+        for schema_col in self.schema.get_columns().iter() {
+            if schema_col.name == col_name {
+                let mut new_col = schema_col.clone();
+                new_col.index = true;
+                columns.push(new_col);
+            } else {
+                columns.push(schema_col.clone());
+            }
+        };
+        self.schema = TableSchema::new(columns)?;
+        // create new index
+        let mut btree_index = btree_index::BTreeIndex::new(&mut self.storage, tnx_id)?;
+        // populate index with existing data
+        let pk_index = self.schema.get_columns().iter().position(|c| c.pk).unwrap();
+        let col_index = self.schema.get_columns().iter().position(|c| c.name == col_name).unwrap();
+        let entry_iter = self.get_all_rows()?
+            .collect::<RsqlResult<Vec<_>>>()?;
+        for row_res in entry_iter {
+            let row = row_res;
+            let pk = row[pk_index].clone();
+            let (entry_page_idx, entry_offset) = self.get_row_ptr_by_pk(&pk)?.unwrap();
+            btree_index.insert_entry(
+                tnx_id,
+                row[col_index].clone(),
+                entry_page_idx,
+                entry_offset,
+                &mut self.storage,
+            )?;
+        };
+        self.indexes.insert(col_name.to_string(), btree_index);
+        Ok(())
+    }
+    pub fn drop_index(&mut self, col_name: &str, tnx_id: u64) -> RsqlResult<()> {
+        // check if column exists and is indexed
+        let col = self.schema.get_columns().iter().find(|col| col.name == col_name);
+        if col.is_none() {
+            return Err(RsqlError::InvalidInput(format!("Column {} does not exist", col_name)));
+        };
+        let col = col.unwrap();
+        if !col.index {
+            return Err(RsqlError::InvalidInput(format!("Column {} is not indexed", col_name)));
+        };
+        // check if column is primary key or is unique
+        if col.pk || col.unique {
+            return Err(RsqlError::InvalidInput(format!("Cannot drop index on primary key or unique column {}", col_name)));
+        };
+        // update schema
+        let mut columns = vec![];
+        for schema_col in self.schema.get_columns().iter() {
+            if schema_col.name == col_name {
+                let mut new_col = schema_col.clone();
+                new_col.index = false;
+                columns.push(new_col);
+            } else {
+                columns.push(schema_col.clone());
+            }
+        };
+        self.schema = TableSchema::new(columns)?;
+        // remove index
+        let index = self.indexes.remove(col_name).unwrap();
+        index.drop(tnx_id, &mut self.storage)?;
+        Ok(())
+    }
+    pub fn get_storage(&mut self) -> &mut ConsistStorageEngine {
+        &mut self.storage
+    }
 }
 
 /// Get the file path for a table given its ID
@@ -682,5 +760,67 @@ mod tests {
         assert!(iter.next().is_none());
 
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_create_and_drop_index() {
+        let table_id = 3000;
+        let columns = vec![
+            crate::catalog::table_schema::TableColumn {
+                name: "id".to_string(),
+                data_type: crate::catalog::table_schema::ColType::Integer,
+                pk: true,
+                nullable: false,
+                unique: true,
+                index: true,
+            },
+            crate::catalog::table_schema::TableColumn {
+                name: "age".to_string(),
+                data_type: crate::catalog::table_schema::ColType::Integer,
+                pk: false,
+                nullable: false,
+                unique: false,
+                index: false,
+            },
+        ];
+        let schema = crate::catalog::table_schema::TableSchema::new(columns).unwrap();
+        let tnx_id = 1;
+        let path = get_table_path(table_id, false);
+        let _ = std::fs::remove_file(&path);
+
+        let mut table = Table::create(table_id, schema, tnx_id, false).expect("Failed to create table");
+
+        // insert rows (id, age)
+        for i in 1..=5 {
+            table.insert_row(
+                vec![
+                    DataItem::Integer(i as i64),
+                    DataItem::Integer((i * 10) as i64),
+                ],
+                tnx_id,
+            ).expect("Failed to insert row");
+        }
+
+        // create index on `age`
+        table.creat_index("age", tnx_id).expect("Failed to create index");
+        assert!(table.indexes.contains_key("age"));
+
+        // range query on age [20,40] => ages 20,30,40 -> 3 rows
+        let start = Some(DataItem::Integer(20));
+        let end = Some(DataItem::Integer(40));
+        let rows: Vec<_> = table.get_rows_by_range_indexed_col("age", &start, &end)
+            .expect("Range scan failed")
+            .collect::<RsqlResult<Vec<_>>>()
+            .expect("Iterator error");
+        assert_eq!(rows.len(), 3);
+
+        // drop the index
+        table.drop_index("age", tnx_id).expect("Failed to drop index");
+        assert!(!table.indexes.contains_key("age"));
+
+        // now querying by that index should return an error
+        assert!(table.get_rows_by_range_indexed_col("age", &start, &end).is_err());
+
+        let _ = std::fs::remove_file(&path);
     }
 }

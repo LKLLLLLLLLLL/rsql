@@ -77,6 +77,34 @@ impl BTreeIndex {
     ) -> RsqlResult<Self> {
         Ok(Self { root: root_page_num})
     }
+    pub fn drop(
+        &self,
+        tnx_id: u64,
+        storage: &mut ConsistStorageEngine,
+    ) -> RsqlResult<()> {
+        // traverse all pages and free them
+        let mut pages_to_free = vec![self.root];
+        while let Some(page_num) = pages_to_free.pop() {
+            let page = storage.read(page_num)?;
+            let node = btree_node::BTreeNode::from_page(&page)?;
+            match node {
+                btree_node::BTreeNode::Leaf { .. } => {
+                    // leaf node, just free
+                    storage.free_page(tnx_id, page_num)?;
+                }
+                btree_node::BTreeNode::Internal { items, next_page_num } => {
+                    // internal node, add children to free list
+                    for item in items {
+                        pages_to_free.push(item.child_page_num);
+                    }
+                    pages_to_free.push(next_page_num);
+                    // free this internal node
+                    storage.free_page(tnx_id, page_num)?;
+                }
+            }
+        };
+        Ok(())
+    }
     pub fn root_page_num(&self) -> u64 {
         self.root
     }

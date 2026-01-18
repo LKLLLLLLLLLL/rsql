@@ -27,3 +27,5 @@ pub const DEFAULT_PASSWORD: &str = "password";
 pub const MONITOR_TERM: u64 = 30; // 30 seconds
 pub const MAX_RESTART_TIMES: u32 = 5;
 pub const MAX_RESTART_INTERVAL: u64 = 2; // 2 seconds
+
+pub const LOCK_TIMEOUT_MS: u64 = 5000; // 5 seconds
