@@ -528,7 +528,7 @@ impl Table {
 
 /// Get the file path for a table given its ID
 /// For tests, use temp directory
-fn get_table_path(id: u64, is_sys: bool) -> PathBuf {
+pub fn get_table_path(id: u64, is_sys: bool) -> PathBuf {
     if is_sys {
         if cfg!(test) {
             utils::test_dir(format!("table_{id}")).join(format!("{}.dbs", id))

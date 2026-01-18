@@ -2,7 +2,9 @@ use std::sync::{OnceLock, Mutex};
 use std::time;
 
 use bcrypt::{hash, DEFAULT_COST};
+use tracing::info;
 
+use crate::storage::table;
 use crate::storage::Table;
 use crate::common::DataItem;
 use crate::common::data_item::VarCharHead;
@@ -199,8 +201,13 @@ impl SysCatalog {
         SYS_TABLE_INSTANCE.get_or_init(|| SysCatalog::new())
     }
     /// Initialize system catalog
-    /// Should be called only once when the database is created
     pub fn init() -> RsqlResult<()> {
+        // check if the first time init
+        let table_path = table::get_table_path(SYS_TABLE_ID, true);
+        if table_path.exists() {
+            return Ok(());
+        };
+        info!("First time starting database, initializing system catalog...");
         let tnx_id = TnxManager::global()
             .begin_transaction(0); // connection id 0 for privileged operations
         let table_ids = vec![
@@ -253,6 +260,7 @@ impl SysCatalog {
             tnx_id,
         )?;
         TnxManager::global().end_transaction(0);
+        info!("System catalog initialized successfully!");
         Ok(())
     }
     /// Construct syscatalog
