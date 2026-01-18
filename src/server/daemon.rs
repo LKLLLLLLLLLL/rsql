@@ -1,384 +1,227 @@
-use tokio::process::Command;
-use tokio::sync::Mutex;
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::time::{sleep, Duration};
-use std::sync::Arc;
-use std::process::Stdio;
-use std::env;
-use tracing::info;
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
+use std::time::Duration;
+use tracing::{error, info, warn};
 
-use crate::config;
-use super::web_server;
-use super::server;
-use crate::config::{MAX_RESTART_INTERVAL, MAX_RESTART_TIMES, MONITOR_TERM};
+use crate::config::{MAX_RESTART_TIMES, RESTART_DELAY_SECS};
 
+/// Daemon error types
 #[derive(Debug)]
 pub enum DaemonError {
-    MaxRestartsReached(String),
     ProcessError(String),
-    PortConflict(String),
-    InternalError(String),
+    MaxRestartsReached(u32),
+    PortConflict(u16),
 }
 
 impl std::fmt::Display for DaemonError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            DaemonError::MaxRestartsReached(msg) => write!(f, "[Daemon] {}", msg),
-            DaemonError::ProcessError(msg) => write!(f, "[Daemon] {}", msg),
-            DaemonError::PortConflict(msg) => write!(f, "[Daemon] Port conflict: {}", msg),
-            DaemonError::InternalError(msg) => write!(f, "[Daemon] Internal error: {}", msg),
+            DaemonError::ProcessError(msg) => write!(f, "Process error: {}", msg),
+            DaemonError::MaxRestartsReached(max) => write!(f, "Maximum restart attempts reached: {}", max),
+            DaemonError::PortConflict(port) => write!(f, "Port conflict: {}", port),
         }
     }
 }
 
 impl std::error::Error for DaemonError {}
 
-struct ManagedProcess {
-    name: String,
-    command: String,
-    args: Vec<String>,
-    child: Arc<Mutex<Option<tokio::process::Child>>>,
-    restart_count: Arc<std::sync::atomic::AtomicU32>,
-    max_restarts: u32,
-    stop_signal: Arc<std::sync::atomic::AtomicBool>,
-    port: Option<u16>,
+/// Initialize tracing
+fn init_tracing() {
+    use tracing_subscriber::EnvFilter;
+    
+    let filter = EnvFilter::from_default_env()
+        .add_directive("info".parse().unwrap());
+
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(false)
+        .with_thread_ids(false)
+        .with_thread_names(false)
+        .with_file(false)
+        .with_line_number(false)
+        .with_ansi(true)
+        .compact()
+        .try_init();
 }
 
-impl ManagedProcess {
-    fn new(name: &str, args: Vec<&str>, stop_signal: Arc<std::sync::atomic::AtomicBool>, port: Option<u16>) -> Self {
-        let exe = std::env::current_exe()
-            .expect("[Daemon] Unable to get the current executable file path")
-            .to_string_lossy()
-            .to_string();
-
-        Self {
-            name: name.to_string(),
-            command: exe,
-            args: args.iter().map(|s| s.to_string()).collect(),
-            child: Arc::new(Mutex::new(None)),
-            restart_count: Arc::new(std::sync::atomic::AtomicU32::new(0)),
-            max_restarts: MAX_RESTART_TIMES,
-            stop_signal,
-            port,
+/// Check if port is available
+fn check_port_available(port: u16) -> bool {
+    match std::net::TcpListener::bind(("127.0.0.1", port)) {
+        Ok(_) => true,
+        Err(e) => {
+            warn!("Port {} check failed: {}", port, e);
+            false
         }
     }
+}
 
-    fn check_port_available(&self) -> bool {
-        if let Some(port) = self.port {
-            use std::net::TcpListener;
-            match TcpListener::bind(("127.0.0.1", port)) {
-                Ok(_) => true, 
-                Err(_) => false, 
+/// Start SQL server process
+fn start_sql_server(port: u16) -> Result<std::process::Child, DaemonError> {
+    if !check_port_available(port) {
+        return Err(DaemonError::PortConflict(port));
+    }
+
+    let exe_path = std::env::current_exe()
+        .map_err(|e| DaemonError::ProcessError(format!("Failed to get executable path: {}", e)))?;
+
+    info!("Starting SQL server process on port: {}", port);
+    
+    let child = Command::new(exe_path)
+        .arg("sql")
+        .env("PORT", port.to_string())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .map_err(|e| DaemonError::ProcessError(format!("Failed to start process: {}", e)))?;
+
+    Ok(child)
+}
+
+/// Global running flag
+static GLOBAL_RUNNING: AtomicBool = AtomicBool::new(true);
+
+/// Setup signal handler for Ctrl+C
+fn setup_signal_handler() {
+    ctrlc::set_handler(|| {
+        info!("Received termination signal, stopping daemon...");
+        GLOBAL_RUNNING.store(false, Ordering::SeqCst);
+    })
+    .expect("Failed to set Ctrl+C handler");
+}
+
+/// Main daemon function
+pub fn run_daemon(port: u16) -> Result<(), DaemonError> {
+    init_tracing();
+    info!("RSQL Daemon starting, monitoring port: {}", port);
+    
+    setup_signal_handler();
+
+    let mut restart_count = 0;
+    let mut child_process: Option<std::process::Child> = None;
+
+    while GLOBAL_RUNNING.load(Ordering::SeqCst) {
+        let need_restart = if let Some(child) = &mut child_process {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    if status.success() {
+                        info!("SQL server process exited normally");
+                        false
+                    } else {
+                        error!("SQL server process exited abnormally, status code: {:?}", status.code());
+                        true
+                    }
+                }
+                Ok(None) => false,
+                Err(e) => {
+                    error!("Failed to check process status: {}", e);
+                    true
+                }
             }
         } else {
-            true 
-        }
-    }
-
-    async fn start(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let mut child_guard = self.child.lock().await;
-
-        if self.stop_signal.load(std::sync::atomic::Ordering::Relaxed) {
-            return Err(Box::new(DaemonError::ProcessError(
-                format!("{} server stop signal received", self.name)
-            )));
-        }
-
-        let current_restarts = self.restart_count.load(std::sync::atomic::Ordering::Relaxed);
-        if current_restarts >= self.max_restarts {
-            let error_msg = format!("{} server has reached the max restart time ({})", 
-                     self.name, self.max_restarts);
-            tracing::error!("{}", error_msg);
-            return Err(Box::new(DaemonError::MaxRestartsReached(error_msg)));
-        }
-
-        if !self.check_port_available() {
-            let error_msg = format!("Port conflict for {} server", self.name);
-            tracing::error!("{}", error_msg);
-            return Err(Box::new(DaemonError::PortConflict(error_msg)));
-        }
-
-        if let Some(child) = child_guard.as_mut() {
-            if let Ok(None) = child.try_wait() {
-                tracing::info!("{} server is already running", self.name);
-                return Ok(());
-            }
-        }
-
-        tracing::info!("Starting {} server...", self.name);
-        
-        let mut cmd = Command::new(&self.command);
-        cmd.args(&self.args)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-
-        let mut child = match cmd.spawn() {
-            Ok(child) => child,
-            Err(e) => {
-                if e.to_string().contains("address already in use") {
-                    let error_msg = format!("Port conflict for {} server: {}", self.name, e);
-                    return Err(Box::new(DaemonError::PortConflict(error_msg)));
-                }
-                return Err(Box::new(DaemonError::InternalError(e.to_string())));
-            }
+            true
         };
 
-        let name_std = self.name.clone();
-        if let Some(stdout) = child.stdout.take() {
-            tokio::spawn(async move {
-                let mut reader = BufReader::new(stdout);
-                let mut line = String::new();
-                while reader.read_line(&mut line).await.is_ok() {
-                    if !line.is_empty() {
-                        print!("[{}] {}", name_std, line);
-                        line.clear();
+        if need_restart {
+            if let Some(mut child) = child_process.take() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+
+            if restart_count >= MAX_RESTART_TIMES {
+                return Err(DaemonError::MaxRestartsReached(MAX_RESTART_TIMES));
+            }
+
+            match start_sql_server(port) {
+                Ok(child) => {
+                    child_process = Some(child);
+                    restart_count += 1;
+                    
+                    if restart_count > 1 {
+                        info!("SQL server restarted {} times", restart_count - 1);
                     }
+                    
+                    thread::sleep(Duration::from_secs(2));
                 }
-            });
-        }
-
-        let name_err = self.name.clone();
-        if let Some(stderr) = child.stderr.take() {
-            tokio::spawn(async move {
-                let mut reader = BufReader::new(stderr);
-                let mut line = String::new();
-                while reader.read_line(&mut line).await.is_ok() {
-                    if !line.is_empty() {
-                        eprint!("[{} ERROR] {}", name_err, line);
-                        line.clear();
+                Err(e) => {
+                    error!("Failed to start SQL server: {}", e);
+                    
+                    if matches!(e, DaemonError::PortConflict(_)) {
+                        return Err(e);
                     }
-                }
-            });
-        }
-
-        *child_guard = Some(child);
-        tracing::info!("{} server started successfully", self.name);
-        
-        self.restart_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        
-        Ok(())
-    }
-
-    async fn check_and_restart(&self) -> Result<(), Box<dyn std::error::Error>> {
-        if self.stop_signal.load(std::sync::atomic::Ordering::Relaxed) {
-            return Ok(());
-        }
-
-        let mut child_guard = self.child.lock().await;
-        
-        match child_guard.as_mut() {
-            Some(child) => {
-                match child.try_wait() {
-                    Ok(Some(status)) => {
-                        if !self.stop_signal.load(std::sync::atomic::Ordering::Relaxed) {
-                            tracing::info!("{} server has stopped, status: {}. Restarting...", 
-                                         self.name, status);
-                            *child_guard = None;
-                            
-                            drop(child_guard);
-                            
-                            sleep(Duration::from_secs(MAX_RESTART_INTERVAL)).await;
-                            
-                            self.start().await?;
-                        }
-                    }
-                    Ok(None) => {
-
-                    }
-                    Err(e) => {
-                        tracing::error!("Error checking {} server status: {}", self.name, e);
+                    
+                    if GLOBAL_RUNNING.load(Ordering::SeqCst) {
+                        info!("Waiting {} seconds before retry...", RESTART_DELAY_SECS);
+                        thread::sleep(Duration::from_secs(RESTART_DELAY_SECS as u64));
                     }
                 }
             }
-            None => {
-                if !self.stop_signal.load(std::sync::atomic::Ordering::Relaxed) {
-                    drop(child_guard);
-                    self.start().await?;
-                }
-            }
         }
-        
-        Ok(())
+
+        if GLOBAL_RUNNING.load(Ordering::SeqCst) {
+            thread::sleep(Duration::from_secs(1));
+        }
     }
 
-    fn get_restart_count(&self) -> u32 {
-        self.restart_count.load(std::sync::atomic::Ordering::Relaxed)
+    if let Some(mut child) = child_process.take() {
+        info!("Stopping SQL server process...");
+        thread::sleep(Duration::from_secs(1));
+        let _ = child.kill();
+        let _ = child.wait();
     }
 
-    async fn stop(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let mut child_guard = self.child.lock().await;
-        if let Some(child) = child_guard.as_mut() {
-            if let Err(e) = child.start_kill() {
-                tracing::warn!("Failed to send kill signal to {}: {}", self.name, e);
-            }
-            
-            let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
-            
-            *child_guard = None;
-        }
-        Ok(())
-    }
+    info!("Daemon stopped");
+    Ok(())
 }
 
-pub struct ProcessManager {
-    sql_process: ManagedProcess,
-    web_process: ManagedProcess,
-    running: Arc<std::sync::atomic::AtomicBool>,
-    stop_signal: Arc<std::sync::atomic::AtomicBool>,
+/// SQL server entry function
+fn run_sql_server() -> Result<(), Box<dyn std::error::Error>> {
+    init_tracing();
+    info!("RSQL SQL Server starting...");
+    
+    let port = std::env::var("PORT")
+        .ok()
+        .and_then(|p| p.parse::<u16>().ok())
+        .unwrap_or_else(|| {
+            info!("PORT environment variable not set, using default port");
+            crate::config::PORT
+        });
+    
+    info!("SQL Server listening on port: {}", port);
+    
+    if let Err(e) = actix_web::rt::System::new().block_on(crate::server::server::start_server()) {
+        error!("SQL Server failed to start: {:?}", e);
+        std::process::exit(1);
+    }
+    
+    Ok(())
 }
 
-impl ProcessManager {
-    pub fn new(sql_port: Option<u16>, web_port: Option<u16>) -> Self {
-        let stop_signal = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        Self {
-            sql_process: ManagedProcess::new("SQL", vec!["sql"], stop_signal.clone(), sql_port),
-            web_process: ManagedProcess::new("WEB", vec!["web"], stop_signal.clone(), web_port),
-            running: Arc::new(std::sync::atomic::AtomicBool::new(true)),
-            stop_signal,
-        }
-    }
-
-    pub async fn start_all(&self) -> Result<(), Box<dyn std::error::Error>> {
-        tracing::info!("Starting all servers...");
-        
-        self.sql_process.start().await?;
-        
-        sleep(Duration::from_secs(2)).await;
-        
-        self.web_process.start().await?;
-        
-        Ok(())
-    }
-
-    pub async fn monitor(&self) -> Result<(), Box<dyn std::error::Error>> {
-        tracing::info!("Starting monitor loop...");
-        
-        while self.running.load(std::sync::atomic::Ordering::Relaxed) {
-            if let Err(e) = self.sql_process.check_and_restart().await {
-                tracing::error!("Monitor SQL server error: {}", e);
-                
-                if self.sql_process.get_restart_count() >= MAX_RESTART_TIMES {
-                    let error_msg = format!("SQL server reached maximum restart limit ({})", MAX_RESTART_TIMES);
-                    self.stop_signal.store(true, std::sync::atomic::Ordering::Relaxed);
-                    return Err(Box::new(DaemonError::MaxRestartsReached(error_msg)));
-                }
-            }
-            
-            if let Err(e) = self.web_process.check_and_restart().await {
-                tracing::error!("Monitor WEB server error: {}", e);
-                
-                if self.web_process.get_restart_count() >= MAX_RESTART_TIMES {
-                    let error_msg = format!("WEB server reached maximum restart limit ({})", MAX_RESTART_TIMES);
-                    self.stop_signal.store(true, std::sync::atomic::Ordering::Relaxed);
-                    return Err(Box::new(DaemonError::MaxRestartsReached(error_msg)));
-                }
-            }
-            
-            sleep(Duration::from_secs(MONITOR_TERM)).await;
-        }
-        
-        Ok(())
-    }
-    
-    pub fn stop(&self) {
-        self.running.store(false, std::sync::atomic::Ordering::Relaxed);
-        self.stop_signal.store(true, std::sync::atomic::Ordering::Relaxed);
-    }
-
-    pub async fn stop_all(&self) -> Result<(), Box<dyn std::error::Error>> {
-        tracing::info!("Stopping all servers...");
-        
-        if let Err(e) = self.sql_process.stop().await {
-            tracing::error!("Error stopping SQL server: {}", e);
-        }
-        
-        if let Err(e) = self.web_process.stop().await {
-            tracing::error!("Error stopping WEB server: {}", e);
-        }
-        
-        sleep(Duration::from_secs(1)).await;
-        
-        Ok(())
-    }
-}
-
-pub async fn start_daemon() -> Result<(), Box<dyn std::error::Error>> {
-    tracing::info!("RSQL Daemon starting...");
-    
-    let sql_port = config::PORT;
-    let web_port = config::WEB_PORT;
-    
-    let manager = ProcessManager::new(Some(sql_port), Some(web_port));
-    
-    let manager_arc = Arc::new(tokio::sync::Mutex::new(manager));
-    let manager_clone = manager_arc.clone();
-    
-    tokio::spawn(async move {
-        if let Ok(()) = tokio::signal::ctrl_c().await {
-            tracing::info!("Received Ctrl+C signal, stopping daemon...");
-            let manager = manager_clone.lock().await;
-            manager.stop();
-            if let Err(e) = manager.stop_all().await {
-                tracing::error!("Error stopping servers: {}", e);
-            }
-            std::process::exit(0);
-        }
-    });
-    
-    manager_arc.lock().await.start_all().await?;
-    
-    let result = manager_arc.lock().await.monitor().await;
-    
-    if let Err(ref e) = result {
-        tracing::error!("Daemon monitoring error: {}", e);
-    }
-    
-    tracing::info!("RSQL Daemon stopped.");
-    
-    result
-}
-
-pub fn daemon(){
-    let args: Vec<String> = env::args().collect();
+/// Main entry function
+pub fn daemon() {
+    let args: Vec<String> = std::env::args().collect();
     
     match args.get(1).map(|s| s.as_str()) {
-        Some("web") => {
-            info!("RSQL Web Server starting...");
-            if let Err(e) = actix_web::rt::System::new().block_on(web_server::start_server()) {
-                tracing::error!("Web Server starting failed: {:?}", e);
-                std::process::exit(1);
-            }
-            info!("RSQL Web Server stopped.");
-        }
         Some("sql") => {
-            info!("RSQL SQL Server starting...");
-            if let Err(e) = actix_web::rt::System::new().block_on(server::start_server()) {
-                tracing::error!("SQL Server starting failed: {:?}", e);
+            if let Err(e) = run_sql_server() {
+                error!("SQL Server error: {}", e);
                 std::process::exit(1);
             }
-            info!("RSQL SQL Server stopped.");
         }
         Some("daemon") | None => {
-            info!("RSQL Daemon starting...");
-            info!("Log file path: {}", config::LOG_PATH);
+            let port = crate::config::PORT;
             
-            if let Err(e) = actix_web::rt::System::new().block_on(start_daemon()) {
-                tracing::error!("Daemon process starting failed: {:?}", e);
+            if let Err(e) = run_daemon(port) {
+                error!("Daemon process failed: {}", e);
                 std::process::exit(1);
             }
-            info!("RSQL service stopped.");
         }
         _ => {
-            tracing::warn!("Unknown argument '{}', starting daemon process.", args[1]);
-            info!("RSQL Daemon starting...(default)");
-            info!("Log file path: {}", config::LOG_PATH);
-            
-            if let Err(e) = actix_web::rt::System::new().block_on(start_daemon()) {
-                tracing::error!("Daemon process starting failed: {:?}", e);
-                std::process::exit(1);
-            }
-            info!("RSQL service stopped.");
+            eprintln!("Unknown argument: {}", args[1]);
+            println!("Usage:");
+            println!("  {} [daemon] - Start daemon process", args[0]);
+            println!("  {} sql     - Start SQL server directly", args[0]);
+            std::process::exit(1);
         }
     }
 }
