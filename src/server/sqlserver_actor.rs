@@ -5,13 +5,14 @@ use actix_web_actors::ws;
 use actix::{Actor, StreamHandler, AsyncContext};
 use serde_json;
 use tracing::{info, error};
+use futures::executor;
 
 use std::time::{SystemTime, UNIX_EPOCH, Instant};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-// one WebsocketActor corresponds to one websocket connection and multiple transactions
-pub struct WebsocketActor{
+// one SQLWebsocketActor corresponds to one websocket connection and multiple transactions
+pub struct SQLWebsocketActor{
     working_thread_pool: Arc<WorkingThreadPool>,
     working_query: Arc<AtomicU64>,
     current_connection_id: u64,
@@ -19,7 +20,7 @@ pub struct WebsocketActor{
     username: String,
 }
 
-impl Actor for WebsocketActor{
+impl Actor for SQLWebsocketActor{
     type Context = ws::WebsocketContext<Self>;
 
     //start the websocket connection
@@ -46,16 +47,66 @@ impl Actor for WebsocketActor{
         if let Ok(json_msg) = serde_json::to_string(&welcome_msg) {
             ctx.text(json_msg);
         }
+
+        let thread_pool = self.working_thread_pool.clone();
+        let connection_id = self.current_connection_id;
+        let addr = ctx.address().clone();
+        
+        ctx.run_interval(std::time::Duration::from_secs(60), move |_act, _ctx| {
+            let thread_pool = thread_pool.clone();
+            let addr = addr.clone();
+            
+            actix::spawn(async move {
+                match thread_pool.make_checkpoint(connection_id).await {
+                    Ok(msg) => {
+                        info!("Checkpoint successful: {}", msg);
+                        let checkpoint_msg = WebsocketResponse {
+                            rayon_response: RayonQueryResponse {
+                                response_content: format!("Checkpoint completed at {}", 
+                                    SystemTime::now()
+                                        .duration_since(UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs()),
+                                error: String::new(),
+                                execution_time: 0,
+                            },
+                            timestamp: SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs(),
+                            success: true,
+                            connection_id,
+                        };
+                        
+                        if let Ok(json_msg) = serde_json::to_string(&checkpoint_msg) {
+                            addr.do_send(SendTextMessage { json: json_msg });
+                        }
+                    }
+                    Err(e) => error!("Checkpoint failed: {:?}", e),
+                }
+            });
+        });
     }
 
     //stop the websocket connection
     fn stopped(&mut self, _ctx: &mut Self::Context) {
         info!("WebSocket connection closed, connection_id: {}, username: {}", self.current_connection_id, self.username);
-        self.working_thread_pool.rollback_sync(self.current_connection_id).unwrap();
+
+        let thread_pool = self.working_thread_pool.clone();
+        let connection_id = self.current_connection_id;
+        
+        let result = executor::block_on(async {
+            thread_pool.rollback(connection_id).await
+        });
+        
+        match result {
+            Ok(msg) => info!("Rollback completed for connection {}: {}", connection_id, msg),
+            Err(e) => error!("Rollback failed for connection {}: {:?}", connection_id, e),
+        }
     }
 }
 
-impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for WebsocketActor {
+impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for SQLWebsocketActor {
     fn handle(&mut self, msg: Result<ws::Message, ws::ProtocolError>, ctx: &mut Self::Context) {
         match msg {
             Ok(ws::Message::Text(text)) => {
@@ -180,7 +231,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for WebsocketActor {
     }
 }
 
-impl WebsocketActor{
+impl SQLWebsocketActor{
     pub fn new(
         working_thread_pool: Arc<WorkingThreadPool>,
         working_query: Arc<AtomicU64>,
@@ -205,7 +256,7 @@ struct SendTextMessage {
     pub json: String,
 }
 
-impl actix::Handler<SendTextMessage> for WebsocketActor {
+impl actix::Handler<SendTextMessage> for SQLWebsocketActor {
     type Result = ();
     
     fn handle(&mut self, msg: SendTextMessage, ctx: &mut Self::Context) -> Self::Result {
