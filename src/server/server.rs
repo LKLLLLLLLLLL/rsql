@@ -3,6 +3,7 @@ use actix_web_actors::ws;
 use tracing::info;
 
 use crate::config::{PORT};
+use crate::transaction::TnxManager;
 use super::websocket_actor::WebsocketActor;
 use super::thread_pool::WorkingThreadPool;
 use super::types::{HttpQueryRequest, HttpQueryResponse, RayonQueryResponse};
@@ -101,7 +102,8 @@ async fn handle_ws_query(
         }
     };
 
-    match SysCatalog::global().validate_user( &username, &password){
+    let tnx_id = TnxManager::global().begin_transaction(0); // connection id 0 for privileged operations
+    match SysCatalog::global().validate_user( tnx_id, &username, &password){
         Ok(true) =>{
             ws::start(
                 WebsocketActor::new(
@@ -119,10 +121,12 @@ async fn handle_ws_query(
             )
         }
         Ok(false) => {
+            TnxManager::global().end_transaction(tnx_id);
             info!("Invalid username or password");
             Err(actix_web::error::ErrorUnauthorized("Invalid username or password"))
         }
         Err(_) => {
+            TnxManager::global().end_transaction(tnx_id);
             info!("Internal server error");
             Err(actix_web::error::ErrorInternalServerError("Internal server error"))
         }
