@@ -503,7 +503,8 @@ function checkTypeMatches(type, data) {
     const makeResult = (valid, normalized = data, message = '') => ({ valid, normalized, message })
 
     switch (t) {
-        case 'INT': {
+        case 'INT':
+        case 'INTEGER': {
             const s = typeof data === 'number' ? String(data) : String(data ?? '').trim()
             if (!/^[+-]?\d+$/.test(s)) return makeResult(false, null, 'INT expects an integer without decimals')
             const n = Number(s)
@@ -530,6 +531,7 @@ function checkTypeMatches(type, data) {
             return makeResult(true, normalized)
         }
 
+        case 'BOOL':
         case 'BOOLEAN': {
             if (data === true || data === false) return makeResult(true, data)
             const s = String(data ?? '').trim().toLowerCase()
@@ -806,7 +808,8 @@ onMounted(() => {
         const makeResult = (valid, normalized = data, message = '') => ({ valid, normalized, message });
 
         switch (t) {
-            case 'INT': {
+            case 'INT':
+            case 'INTEGER': {
                 const s = typeof data === 'number' ? String(data) : String(data ?? '').trim();
                 if (!/^[+-]?\d+$/.test(s)) return makeResult(false, null, 'INT expects an integer without decimals');
                 const n = Number(s);
@@ -835,6 +838,7 @@ onMounted(() => {
                 return makeResult(true, normalized);
             }
 
+            case 'BOOL':
             case 'BOOLEAN': {
                 if (data === true || data === false) return makeResult(true, data);
                 const s = String(data ?? '').trim().toLowerCase();
