@@ -3,12 +3,9 @@ use actix_web_actors::ws;
 use tracing::info;
 
 use crate::config::{PORT};
-use crate::transaction::TnxManager;
-use super::websocket_actor::WebsocketActor;
+use super::types::{RayonQueryResponse, HttpQueryRequest, HttpQueryResponse};
+use super::sqlserver_actor::SQLWebsocketActor;
 use super::thread_pool::WorkingThreadPool;
-use super::types::{HttpQueryRequest, HttpQueryResponse, RayonQueryResponse};
-use crate::catalog::SysCatalog;
-use crate::storage::WAL;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -80,39 +77,17 @@ async fn handle_ws_query(
     }
     info!("Received username: {}, password: {}", username, password);
 
-    // match wal::WAL::recovery(
-    //     &mut |a,b,Vec::new()|{},
-    //     &mut ||{},
-    //     &mut ||{},
-    //     &mut ||{},
-    //     &mut ||{}
-    // ){
-    //         Ok(_)=>{},
-    //         Err(_)=>{
-    //             info!("Internal server error");
-    //             return Err(actix_web::error::ErrorInternalServerError("Internal server error"));
-    //         }
-    //     }
-
-    match SysCatalog::init(){
-        Ok(_)=>{},
-        Err(_)=>{
-            info!("Internal server error");
-            return Err(actix_web::error::ErrorInternalServerError("Internal server error"));
-        }
-    };
-
-    let tnx_id = TnxManager::global().begin_transaction(0); // connection id 0 for privileged operations
-    match SysCatalog::global().validate_user( tnx_id, &username, &password){
-        Ok(true) =>{
+    let thread_pool = state.working_thread_pool.clone();
+    match thread_pool.validate(0, &username, &password).await {// use connection_id 0 to validate user
+        Ok(true) => {
             ws::start(
-                WebsocketActor::new(
+                SQLWebsocketActor::new(
                     state.working_thread_pool.clone(),
                     state.working_query.clone(),
                     SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as u64,
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64,
                     true,
                     username,
                 ),
@@ -121,19 +96,17 @@ async fn handle_ws_query(
             )
         }
         Ok(false) => {
-            TnxManager::global().end_transaction(tnx_id);
             info!("Invalid username or password");
             Err(actix_web::error::ErrorUnauthorized("Invalid username or password"))
         }
         Err(_) => {
-            TnxManager::global().end_transaction(tnx_id);
             info!("Internal server error");
             Err(actix_web::error::ErrorInternalServerError("Internal server error"))
         }
     }
 }
 
-//handle http query
+// handle http query
 async fn handle_http_query(
     query_request: web::Json<HttpQueryRequest>,
     state: web::Data<AppState>

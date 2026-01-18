@@ -25,7 +25,12 @@ pub enum ExecutionResult {
         cols: (Vec<String>, Vec<ColType>),
         rows: Vec<Vec<DataItem>>,
         table_name: Option<String>,
-    } // used for join, group by, aggregate and subquery
+    }, // used for join and subquery
+    AggrTable {
+        cols: (Vec<String>, Vec<ColType>),
+        rows: Vec<Vec<DataItem>>,
+        aggr_cols: Vec<String>, // aggregate columns
+    },
 }
 pub struct TableObject {
     pub table_obj: Table,

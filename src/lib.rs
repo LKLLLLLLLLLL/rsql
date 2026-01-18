@@ -25,7 +25,6 @@ use crate::storage::table::get_table_path;
 use crate::catalog::sys_catalog::is_sys_table;
 use crate::transaction::TnxManager;
 
-
 pub fn init_log() {
     let log_dir = path::Path::new(config::LOG_PATH).parent().unwrap();
     let log_filename = path::Path::new(config::LOG_PATH).file_name().unwrap().to_str().unwrap();

@@ -2,7 +2,10 @@ use rayon::ThreadPoolBuilder;
 use num_cpus;
 use tracing::{error, info};
 use futures::channel::oneshot;
+use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
 
+use crate::execution::executor;
 use crate::{config::THREAD_MAXNUM};
 use crate::common::{ RsqlResult};
 use super::types::{ RayonQueryRequest };
@@ -11,6 +14,7 @@ use crate::execution::execute;
 pub struct WorkingThreadPool{
     thread_pool: rayon::ThreadPool,
     max_thread_num: usize,
+    serialize_lock: Arc<Mutex<HashMap<u64, Arc<Mutex<bool>>>>>
 }
 
 impl WorkingThreadPool{
@@ -23,6 +27,7 @@ impl WorkingThreadPool{
                    .build()
                    .unwrap(),
                 max_thread_num: detected,
+                serialize_lock: Arc::new(Mutex::new(HashMap::new()))
             }
         }
         Self{
@@ -31,18 +36,68 @@ impl WorkingThreadPool{
                 .build()
                 .unwrap(),
             max_thread_num: THREAD_MAXNUM,
+            serialize_lock: Arc::new(Mutex::new(HashMap::new()))
+        }
+    }
+
+    pub async fn validate(&self, connection_id: u64, username: &str, password: &str) -> RsqlResult<bool> {
+        let (sender, receiver) = oneshot::channel::<RsqlResult<bool>>();
+
+        let serialize_lock = self.serialize_lock.clone();
+        let username = username.to_string();
+        let password = password.to_string();
+
+        self.thread_pool.spawn(move || {
+            let conn_mutex = {
+                let mut map_guard = serialize_lock.lock().unwrap();
+                map_guard.entry(connection_id).or_insert_with(|| {
+                    Arc::new(Mutex::new(true))
+                }).clone()
+            };
+
+            let _conn_guard = conn_mutex.lock().unwrap();
+
+            match executor::validate_user(&username, &password){
+                Ok(valid) => {
+                    sender.send(Ok(valid)).unwrap();
+                }
+                Err(e) => {
+                    sender.send(Err(e)).unwrap();
+                }
+            }
+                
+        });
+        
+        let result = receiver.await.unwrap();
+        match result {
+            Ok(valid) => Ok(valid),
+            Err(e) => Err(e)
         }
     }
 
     pub async fn parse_and_execute_query(&self, query: RayonQueryRequest, connection_id: u64) -> RsqlResult<String> {
         let (sender, receiver) = oneshot::channel::<RsqlResult<String>>();
+
+        let serialize_lock = self.serialize_lock.clone();
+
         self.thread_pool.spawn(move ||{
+
+            let conn_mutex = {
+                let mut map_guard = serialize_lock.lock().unwrap();
+                map_guard.entry(connection_id).or_insert_with(|| {
+                    Arc::new(Mutex::new(true))
+                }).clone()
+            };
+
+            let _conn_guard = conn_mutex.lock().unwrap();
+
             if let Err(err) = execute(&query.request_content,connection_id){
                 error!("execute query failed: {:?}", err);
             };
             let result = Ok(query.request_content);
             sender.send(result).unwrap();
         });
+
         let result = receiver.await.unwrap();
         match result {
             Ok(result) => Ok(result),
@@ -51,23 +106,67 @@ impl WorkingThreadPool{
     }
 
     pub async fn rollback(&self, connection_id: u64) -> RsqlResult<String> {
-        self.thread_pool.spawn(move ||{
+        let (sender, receiver) = oneshot::channel::<RsqlResult<String>>();
 
+        let serialize_lock = self.serialize_lock.clone();
+
+        self.thread_pool.spawn(move ||{
+            let conn_mutex = {
+                let mut map_guard = serialize_lock.lock().unwrap();
+                map_guard.entry(connection_id).or_insert_with(|| {
+                    Arc::new(Mutex::new(true))
+                }).clone()
+            };
+
+            let _conn_guard = conn_mutex.lock().unwrap();
+
+            match executor::disconnect_callback(connection_id){
+                Ok(_) => {
+                    sender.send(Ok(format!("rollbacking transaction for connection id: {}", connection_id))).unwrap();
+                }
+                Err(e) => {
+                    sender.send(Err(e)).unwrap();
+                }
+            }
         });
-        let result = format!("rollbacking transaction for connection id: {}", connection_id);
-        Ok(result)
+        let result = receiver.await.unwrap();
+        match result {
+            Ok(result) => Ok(result),
+            Err(e) => Err(e)
+        }
     }
 
-    pub fn rollback_sync(&self, connection_id: u64) -> RsqlResult<String> {
-        let result = format!("rollbacking transaction (sync) for connection id: {}", connection_id);
-        self.thread_pool.spawn(move ||{
+    pub async fn make_checkpoint(&self, connection_id: u64) -> RsqlResult<String> {
 
+        let (sender, receiver) = oneshot::channel::<RsqlResult<String>>();
+
+        let serialize_lock = self.serialize_lock.clone();
+
+        self.thread_pool.spawn(move ||{
+            let conn_mutex = {
+                let mut map_guard = serialize_lock.lock().unwrap();
+                map_guard.entry(connection_id).or_insert_with(|| {
+                    Arc::new(Mutex::new(true))
+                }).clone()
+            };
+
+            let _conn_guard = conn_mutex.lock().unwrap();
+
+            match executor::checkpoint(){
+                Ok(_) => {
+                    sender.send(Ok(format!("checkpointing for connection id: {}", connection_id))).unwrap();
+                }
+                Err(e) => {
+                    sender.send(Err(e)).unwrap();
+                }
+            }
         });
-        // match result {
-        //     Ok(result)=> Ok(result),
-        //     Err(e)=> Err(e)
-        // }
-        Ok(result)
+        let result = receiver.await.unwrap();
+        match result {
+            Ok(result) => Ok(result),
+            Err(e) => Err(e)
+        }
+
     }
 
     pub fn show_info(&self){

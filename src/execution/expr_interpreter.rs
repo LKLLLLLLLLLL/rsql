@@ -3,7 +3,15 @@ use crate::sql::plan::{JoinType};
 use crate::common::data_item::{DataItem};
 use crate::catalog::table_schema::{ColType};
 use super::result::{TableObject};
-use sqlparser::ast::{Expr, BinaryOperator, Value::{Number, SingleQuotedString, Boolean}};
+use sqlparser::ast::{Expr, 
+    BinaryOperator, 
+    Value::{Number, SingleQuotedString, Boolean}, 
+    FunctionArguments,
+    FunctionArg,
+    FunctionArgExpr,
+    ObjectName,
+    ObjectNamePart,
+};
 
 fn parse_number(s: &str) -> RsqlResult<DataItem> {
     // 1. try to parse integer
@@ -17,6 +25,35 @@ fn parse_number(s: &str) -> RsqlResult<DataItem> {
     }
 
     Err(RsqlError::InvalidInput(format!("Failed to parse number from string: {}", s)))
+}
+
+fn get_func_arg(args: &FunctionArguments) -> RsqlResult<String> {
+    let arg = match args {
+        FunctionArguments::List(arg_list) => {
+            if let FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Identifier(ident))) = arg_list.args[0].clone() {
+                ident.value
+            }else {
+                return Err(RsqlError::ExecutionError(format!("Failed to parse function argument: {:?}", args)))
+            }
+        },
+        _ => {
+            return Err(RsqlError::ExecutionError(format!("Failed to parse function argument: {:?}", args)))
+        }
+    };
+    Ok(arg)
+}
+
+fn get_func_name(func_obj_name: &ObjectName) -> RsqlResult<String> {
+    let name = match func_obj_name {
+        ObjectName(obj_name_part) => {
+            if let ObjectNamePart::Identifier(ident) = obj_name_part[0].clone() {
+                ident.value
+            }else {
+                return Err(RsqlError::ExecutionError(format!("Failed to parse function name: {:?}", func_obj_name)))
+            }
+        }
+    };
+    Ok(name)
 }
 
 pub fn handle_table_obj_filter_expr(table_obj: &TableObject, predicate: &Expr) -> RsqlResult<Vec<Vec<DataItem>>> {
@@ -1156,4 +1193,268 @@ pub fn handle_update_expr(table_object: &mut TableObject, assignments: &Vec<(Str
         }
     }
     Ok(())
+}
+
+pub fn handle_aggr_expr (table_obj: TableObject, group_by: &Vec<Expr>, aggr_exprs: &Vec<Expr>) -> RsqlResult<((Vec<String>, Vec<ColType>), Vec<Vec<DataItem>>, Vec<String>)> {
+    let mut cols_name = vec![];
+    let mut cols_type = vec![];
+    let mut aggr_cols = vec![];
+    let mut aggr_rows = vec![];
+    let mut group_by_cols_idx = vec![];
+    // 1. construct aggr_cols, (cols_name, cols_type), group_by_cols_idx
+    for group_by_col_expr in group_by.iter() {
+        if let Expr::Identifier(ident) = group_by_col_expr {
+            let col_idx = table_obj.map.get(&ident.value).unwrap();
+            let col_type = table_obj.cols.1[*col_idx].clone();
+            cols_type.push(col_type);
+            cols_name.push(ident.value.clone());
+            group_by_cols_idx.push(*col_idx);
+        }
+    }
+    for aggr_expr in aggr_exprs.iter() {
+        match aggr_expr {
+            Expr::Function(func) => {
+                let func_name = get_func_name(&func.name)?;
+                let func_arg = get_func_arg(&func.args)?;
+                let col_idx = table_obj.map.get(&func_arg).unwrap();
+                if func_name == "COUNT" {
+                    let col_type = ColType::Integer;
+                    let aggr_col_name = "COUNT".to_string();
+                    aggr_cols.push(aggr_col_name.clone());
+                    cols_name.push(aggr_col_name.clone());
+                    cols_type.push(col_type);
+                }else if func_name == "AVG" {
+                    let col_type = ColType::Float;
+                    let aggr_col_name = format!("AVG_{}", &func_arg);
+                    aggr_cols.push(aggr_col_name.clone());
+                    cols_name.push(aggr_col_name.clone());
+                    cols_type.push(col_type);
+                }else {
+                    let col_type = table_obj.cols.1[*col_idx].clone();
+                    let aggr_col_name = format!("{}_{}", &func_name, &func_arg);
+                    aggr_cols.push(aggr_col_name.clone());
+                    cols_name.push(aggr_col_name.clone());
+                    cols_type.push(col_type);
+                }
+            },
+            _ => {
+                return Err(RsqlError::ExecutionError(format!("Unsupported aggregate expression: {:?}", aggr_expr)))
+            },
+        }
+    }
+    // 2. get all rows from the table
+    let mut rows = vec![];
+    let rows_iter = table_obj.table_obj.get_all_rows()?;
+    for row in rows_iter {
+        let row = row?;
+        rows.push(row);
+    }
+    // 3. get all distinct group_by values
+    let mut distinct_group_by_values = vec![];
+    for row in rows.iter() {
+        let mut group_by_values = vec![];
+        for group_by_col_expr in group_by.iter() {
+            if let Expr::Identifier(ident) = group_by_col_expr {
+                let col_idx = table_obj.map.get(&ident.value).unwrap();
+                group_by_values.push(row[*col_idx].clone());
+            }
+        }
+        if !distinct_group_by_values.contains(&group_by_values) {
+            distinct_group_by_values.push(group_by_values);
+        }
+    }
+    // 4. construct aggr_rows
+    for row in distinct_group_by_values.iter() {
+        let mut aggr_row = row.clone();
+        for aggr_expr in aggr_exprs.iter() {
+            match aggr_expr {
+                Expr::Function(func) => {
+                    let func_name = get_func_name(&func.name)?;
+                    let func_arg = get_func_arg(&func.args)?;
+                    let col_idx = table_obj.map.get(&func_arg).unwrap(); // get col_idx from func_arg
+                    match func_name.as_str() {
+                        "COUNT" => {
+                            let mut count: i64 = 0;
+                            for r in rows.iter() {
+                                let group_by_row: Vec<DataItem> = group_by_cols_idx.iter().map(|i| r[*i].clone()).collect();
+                                if group_by_row == *row {
+                                    count += 1;
+                                }
+                            }
+                            aggr_row.push(DataItem::Integer(count));
+                        },
+                        "AVG" => {
+                            let mut sum: f64 = 0.0;
+                            let mut count: i64 = 0;
+                            for r in rows.iter() {
+                                let group_by_row: Vec<DataItem> = group_by_cols_idx.iter().map(|i| r[*i].clone()).collect();
+                                if group_by_row == *row {
+                                    match r[*col_idx] {
+                                        DataItem::Integer(i) => {
+                                            sum += i as f64;
+                                            count += 1;
+                                        },
+                                        DataItem::Float(f) => {
+                                            sum += f;
+                                            count += 1;
+                                        },
+                                        _ => {
+                                            return Err(RsqlError::ExecutionError(format!("unsupported type for AVG: {:?}", r[*col_idx])));
+                                        },
+                                    }
+                                }
+                            }
+                            aggr_row.push(DataItem::Float(sum / count as f64));
+                        },
+                        "SUM" => {
+                            let col_type = table_obj.cols.1[*col_idx].clone();
+                            match col_type {
+                                ColType::Integer => {
+                                    let mut sum = 0 as i64;
+                                    for r in rows.iter() {
+                                        let group_by_row: Vec<DataItem> = group_by_cols_idx.iter().map(|i| r[*i].clone()).collect();
+                                        if group_by_row == *row {
+                                            match r[*col_idx] {
+                                                DataItem::Integer(i) => {
+                                                    sum += i;
+                                                },
+                                                _ => {
+                                                    return Err(RsqlError::ExecutionError(format!("cannot sum other type with integer: {:?}", r[*col_idx])));
+                                                },
+                                            }
+                                        }
+                                    }
+                                    aggr_row.push(DataItem::Integer(sum));
+                                },
+                                ColType::Float => {
+                                    let mut sum = 0.0 as f64;
+                                    for r in rows.iter() {
+                                        let group_by_row: Vec<DataItem> = group_by_cols_idx.iter().map(|i| r[*i].clone()).collect();
+                                        if group_by_row == *row {
+                                            match r[*col_idx] {
+                                                DataItem::Float(f) => {
+                                                    sum += f;
+                                                },
+                                                _ => {
+                                                    return Err(RsqlError::ExecutionError(format!("cannot sum other type with float: {:?}", r[*col_idx])));
+                                                },
+                                            }
+                                        }
+                                    }
+                                    aggr_row.push(DataItem::Float(sum));
+                                },
+                                _ => {
+                                    return Err(RsqlError::ExecutionError(format!("unsupported type for SUM")));
+                                }
+                            }
+                        },
+                        "MIN" => {
+                            let col_type = table_obj.cols.1[*col_idx].clone();
+                            match col_type {
+                                ColType::Integer => {
+                                    let mut min = None;
+                                    for r in rows.iter() {
+                                        let group_by_row: Vec<DataItem> = group_by_cols_idx.iter().map(|i| r[*i].clone()).collect();
+                                        if group_by_row == *row {
+                                            match r[*col_idx] {
+                                                DataItem::Integer(i) => {
+                                                    if min.is_none() || i < min.unwrap() {
+                                                        min = Some(i);
+                                                    }
+                                                },
+                                                _ => {
+                                                    return Err(RsqlError::ExecutionError(format!("cannot min other type with integer: {:?}", r[*col_idx])));
+                                                },
+                                            }
+                                        }
+                                    }
+                                    aggr_row.push(DataItem::Integer(min.unwrap()));
+                                },
+                                ColType::Float => {
+                                    let mut min = None;
+                                    for r in rows.iter() {
+                                        let group_by_row: Vec<DataItem> = group_by_cols_idx.iter().map(|i| r[*i].clone()).collect();
+                                        if group_by_row == *row {
+                                            match r[*col_idx] {
+                                                DataItem::Float(f) => {
+                                                    if min.is_none() || f < min.unwrap() {
+                                                        min = Some(f);
+                                                    }
+                                                },
+                                                _ => {
+                                                    return Err(RsqlError::ExecutionError(format!("cannot min other type with float: {:?}", r[*col_idx])));
+                                                },
+                                            }
+                                        }
+                                    }
+                                    aggr_row.push(DataItem::Float(min.unwrap()));
+                                },
+                                _ => {
+                                    return Err(RsqlError::ExecutionError(format!("unsupported type for MIN")));
+                                },
+                            }
+                        },
+                        "MAX" => {
+                            let col_type = table_obj.cols.1[*col_idx].clone();
+                            match col_type {
+                                ColType::Integer => {
+                                    let mut max = None;
+                                    for r in rows.iter() {
+                                        let group_by_row: Vec<DataItem> = group_by_cols_idx.iter().map(|i| r[*i].clone()).collect();
+                                        if group_by_row == *row {
+                                            match r[*col_idx] {
+                                                DataItem::Integer(i) => {
+                                                    if max.is_none() || i > max.unwrap() {
+                                                        max = Some(i);
+                                                    }
+                                                },
+                                                _ => {
+                                                    return Err(RsqlError::ExecutionError(format!("cannot max other type with integer: {:?}", r[*col_idx])));
+                                                },
+                                            }
+                                        }
+                                    }
+                                    aggr_row.push(DataItem::Integer(max.unwrap()));
+                                },
+                                ColType::Float => {
+                                    let mut max = None;
+                                    for r in rows.iter() {
+                                        let group_by_row: Vec<DataItem> = group_by_cols_idx.iter().map(|i| r[*i].clone()).collect();
+                                        if group_by_row == *row {
+                                            match r[*col_idx] {
+                                                DataItem::Float(f) => {
+                                                    if max.is_none() || f > max.unwrap() {
+                                                        max = Some(f);
+                                                    }
+                                                },
+                                                _ => {
+                                                    return Err(RsqlError::ExecutionError(format!("cannot max other type with float: {:?}", r[*col_idx])));
+                                                },
+                                            }
+                                        }
+                                    }
+                                    aggr_row.push(DataItem::Float(max.unwrap()));
+                                },
+                                _ => {
+                                    return Err(RsqlError::ExecutionError(format!("unsupported type for MAX")));
+                                },
+                            }
+                        },
+                        _ => {
+                            return Err(RsqlError::ExecutionError(format!("Unsupported aggregate function: {:?}", func_name)))
+                        }
+                    }
+                },
+                _ => {
+                    return Err(RsqlError::ExecutionError(format!("Unsupported aggregate expression: {:?}", aggr_expr)))
+                },
+            }
+        }
+        aggr_rows.push(aggr_row);
+    }
+    Ok((
+        (cols_name, cols_type),
+        aggr_rows,
+        aggr_cols,
+    ))
 }

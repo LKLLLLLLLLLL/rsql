@@ -1,83 +1,35 @@
+use crate::catalog::SysCatalog;
 use crate::common::{RsqlResult, RsqlError};
 use crate::sql::plan::{PlanNode, JoinType};
 use crate::common::data_item::{DataItem};
-use crate::catalog::table_schema::{TableSchema, ColType, TableColumn};
+use crate::catalog::table_schema::{ColType};
 use crate::storage::table::{Table};
-use super::result::{ExecutionResult::{self, Query, Mutation, TableObj, TableWithFilter, TempTable}, TableObject};
-use super::expr_interpreter::{handle_on_expr, handle_table_obj_filter_expr, handle_temp_table_filter_expr, handle_insert_expr, handle_update_expr};
+use crate::transaction::TnxManager;
+use super::result::{ExecutionResult::{self, Query, Mutation, TableObj, TableWithFilter, TempTable, AggrTable}, TableObject};
+use super::expr_interpreter::{handle_on_expr, 
+    handle_table_obj_filter_expr, 
+    handle_temp_table_filter_expr, 
+    handle_insert_expr, 
+    handle_update_expr,
+    handle_aggr_expr
+};
 use tracing::info;
 use std::collections::HashMap;
 use sqlparser::ast::{Expr};
 
-fn get_table_object (table_name: &str) -> RsqlResult<TableObject> {
-    // 1. get Table
-    let columns = match table_name {
-        "users" => vec![
-            TableColumn {
-                name: "id".to_string(),
-                data_type: ColType::Integer,
-                pk: true,
-                nullable: false,
-                index: true,
-                unique: true,
-            },
-            TableColumn {
-                name: "name".to_string(),
-                data_type: ColType::Chars(50),
-                pk: false,
-                nullable: false,
-                index: false,
-                unique: false,
-            },
-            TableColumn {
-                name: "age".to_string(),
-                data_type: ColType::Integer,
-                pk: false,
-                nullable: true,
-                index: false,
-                unique: false,
-            },
-        ],
-        "products" => vec![
-            TableColumn {
-                name: "product_id".to_string(),
-                data_type: ColType::Integer,
-                pk: true,
-                nullable: false,
-                index: true,
-                unique: true,
-            },
-            TableColumn {
-                name: "product_name".to_string(),
-                data_type: ColType::Chars(100),
-                pk: false,
-                nullable: false,
-                index: false,
-                unique: false,
-            },
-            TableColumn {
-                name: "price".to_string(),
-                data_type: ColType::Integer,
-                pk: false,
-                nullable: false,
-                index: false,
-                unique: false,
-            },
-        ],
-        _ => vec![
-            TableColumn {
-                name: "id".to_string(),
-                data_type: ColType::Integer,
-                pk: true,
-                nullable: false,
-                index: true,
-                unique: false,
-            },
-        ],
+fn get_table_object (table_name: &str, read_only: bool, tnx_id: u64) -> RsqlResult<TableObject> {
+    let Some(table_id) = SysCatalog::global().get_table_id(tnx_id, table_name)? else {
+        return Err(RsqlError::ExecutionError(format!("Table {} not found", table_name)));
     };
-    //Table::from(0, TableSchema::new(columns)?, false)?
-    let table_obj = Table::create(114514, TableSchema::new(columns)?, 0, false)?;
-    let table_schema = table_obj.get_schema();
+    // 0. acquire read or write lock
+    if read_only {
+        TnxManager::global().acquire_read_locks(tnx_id, &vec![table_id])?;
+    } else {
+        TnxManager::global().acquire_write_locks(tnx_id, &vec![table_id])?;
+    };
+    // 1. get Table
+    let table_schema = SysCatalog::global().get_table_schema(tnx_id, table_id)?;
+    let table_obj = Table::from(table_id, table_schema.clone(), false)?;
     // 2. construct TableObject
     let mut map = HashMap::new();
     let mut cols_name = vec![];
@@ -104,16 +56,16 @@ fn get_table_object (table_name: &str) -> RsqlResult<TableObject> {
     Ok(table_object)
 }
 
-pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64) -> RsqlResult<ExecutionResult> {
+pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64, read_only: bool) -> RsqlResult<ExecutionResult> {
     match node {
         PlanNode::TableScan { table } => {
             info!("Implement TableScan execution");
-            let table_object = get_table_object(table)?;
+            let table_object = get_table_object(table, read_only, tnx_id)?;
             Ok(TableObj(table_object)) // get table object after scan
         },
         PlanNode::Filter { predicate, input } => {
             info!("Implement Filter execution");
-            let input_result = execute_dml_plan_node(input, tnx_id)?;
+            let input_result = execute_dml_plan_node(input, tnx_id, read_only)?;
             if let TableObj(table_obj) = input_result {
                 let filter_result = handle_table_obj_filter_expr(&table_obj, predicate)?;
                 Ok(TableWithFilter { table_obj, rows: filter_result }) // get temp query result after filter
@@ -132,7 +84,7 @@ pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64) -> RsqlResult<Executi
         },
         PlanNode::Projection { exprs, input } => {
             info!("Implement Projection execution");
-            let input_result = execute_dml_plan_node(input, tnx_id)?;
+            let input_result = execute_dml_plan_node(input, tnx_id, true)?;
             if let TableWithFilter {table_obj, rows: input_rows} = input_result {
                 // 0. handle * column
                 if exprs.len() == 0 {
@@ -207,15 +159,43 @@ pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64) -> RsqlResult<Executi
                     Ok(Query {
                         cols: (cols_name, cols_type),
                         rows,
-                    })
+                    }) // handle subquery
                 }else {
-                    Err(RsqlError::ExecutionError(format!("Projection input must be a TableWithFilter or TempTable")))
-                } // handle subquery
+                    if let AggrTable{cols: input_cols, rows: input_rows, aggr_cols} = input_result {
+                        // 1. get projection columns
+                        let mut cols_name = vec![];
+                        for expr in exprs {
+                            match expr {
+                                Expr::Identifier(ident) => {
+                                    cols_name.push(ident.value.clone());
+                                },
+                                _ => (), // skip aggr cols
+                            }
+                        }
+                        cols_name.extend(aggr_cols);
+                        // 2. get projection rows
+                        let mut rows = vec![];
+                        for row in input_rows.iter() {
+                            let mut r = vec![];
+                            for col in cols_name.iter() {
+                                let col_idx = input_cols.0.iter().position(|x| x == col).unwrap();
+                                r.push(row[col_idx].clone());
+                            }
+                            rows.push(r);
+                        }
+                        Ok(Query {
+                            cols: (cols_name, vec![]), // aggr col types are useless
+                            rows,
+                        }) // get aggr query result
+                    }else {
+                        Err(RsqlError::ExecutionError(format!("Projection input must be a TableWithFilter, TempTable or AggrTable")))
+                    }
+                }
             }
         },
         PlanNode::Join { left, right, join_type, on } => {
             info!("Implement Join execution");
-            if let (TableObj(left_table_obj), TableObj(right_table_obj)) = (execute_dml_plan_node(left, tnx_id)?, execute_dml_plan_node(right, tnx_id)?) {
+            if let (TableObj(left_table_obj), TableObj(right_table_obj)) = (execute_dml_plan_node(left, tnx_id, read_only)?, execute_dml_plan_node(right, tnx_id, read_only)?) {
                 let (joined_cols, joined_rows) = handle_join(&left_table_obj, &right_table_obj, join_type, on)?;
                 Ok(TempTable { cols: joined_cols, rows: joined_rows, table_name: None })
             }else {
@@ -223,11 +203,18 @@ pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64) -> RsqlResult<Executi
             }
         },
         PlanNode::Aggregate { group_by, aggr_exprs, input } => {
-            todo!("Implement Aggregate execution")
+            info!("Implement Aggregate execution");
+            let input_result = execute_dml_plan_node(input, tnx_id, read_only)?;
+            if let TableObj(table_obj) = input_result {
+                let (cols, rows, aggr_cols) = handle_aggr_expr(table_obj, group_by, aggr_exprs)?;
+                Ok(AggrTable {cols, rows, aggr_cols})
+            }else {
+                Err(RsqlError::ExecutionError(format!("Aggregate input must be a TableObj")))
+            }
         },
         PlanNode::Subquery { subquery, alias } => {
             info!("Implement Subquery execution");
-            let subquery_result = execute_dml_plan_node(subquery, tnx_id)?;
+            let subquery_result = execute_dml_plan_node(subquery, tnx_id, read_only)?;
             if let Query{cols, rows} = subquery_result {
                 Ok(TempTable { cols, rows, table_name: alias.clone() })
             }else {
@@ -239,7 +226,8 @@ pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64) -> RsqlResult<Executi
             }
         },
         PlanNode::Insert { table_name, columns, values, input: _ } => {
-            let mut table_object = get_table_object(table_name)?;
+            info!("Implement Insert execution");
+            let mut table_object = get_table_object(table_name, false, tnx_id)?;
             if let Some(cols) = columns {
                 let mut null_cols = vec![];
                 for col_type in table_object.cols.1.iter() {
@@ -269,7 +257,8 @@ pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64) -> RsqlResult<Executi
             }
         },
         PlanNode::Delete { input } => {
-            let input_result = execute_dml_plan_node(input, tnx_id)?;
+            info!("Implement Delete execution");
+            let input_result = execute_dml_plan_node(input, tnx_id, false)?;
             if let TableWithFilter{mut table_obj, rows} = input_result {
                 for row in rows.iter() {
                     let pk_col_idx = table_obj.map.get(&table_obj.pk_col.0).unwrap();
@@ -281,7 +270,8 @@ pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64) -> RsqlResult<Executi
             }
         },
         PlanNode::Update { input, assignments } => {
-            let input_result = execute_dml_plan_node(input, tnx_id)?;
+            info!("Implement Update execution");
+            let input_result = execute_dml_plan_node(input, tnx_id, false)?;
             if let TableWithFilter {mut table_obj, rows} = input_result {
                 handle_update_expr(&mut table_obj, assignments, &rows, tnx_id)?;
                 Ok(Mutation("Update successful".to_string()))
