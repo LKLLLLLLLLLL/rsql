@@ -141,7 +141,10 @@ fn execute_inner(sql: &str, connection_id: u64) -> RsqlResult<()> {
                 execute_ddl_plan_node(plan_node, connection_id)?;
             },
             PlanItem::DML(plan_node) => {
-                execute_dml_plan_node(plan_node, connection_id)?;
+                let Some(tnx_id) = TnxManager::global().get_transaction_id(connection_id) else {
+                    return Err(RsqlError::ExecutionError("No active transaction".to_string()));
+                };
+                execute_dml_plan_node(plan_node, tnx_id, false)?;
             },
         }
     };
