@@ -4,7 +4,7 @@ use crate::common::data_item::{DataItem};
 use crate::catalog::table_schema::{TableSchema, ColType, TableColumn};
 use crate::storage::table::{Table};
 use super::result::{ExecutionResult::{self, Query, Mutation, TableObj, TableWithFilter, TempTable}, TableObject};
-use super::expr_interpreter::{handle_on_expr, handle_table_obj_filter_expr, handle_temp_table_filter_expr, handle_insert_expr};
+use super::expr_interpreter::{handle_on_expr, handle_table_obj_filter_expr, handle_temp_table_filter_expr, handle_insert_expr, handle_update_expr};
 use tracing::info;
 use std::collections::HashMap;
 use sqlparser::ast::{Expr};
@@ -281,7 +281,13 @@ pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64) -> RsqlResult<Executi
             }
         },
         PlanNode::Update { input, assignments } => {
-            todo!("Implement Update execution")
+            let input_result = execute_dml_plan_node(input, tnx_id)?;
+            if let TableWithFilter {mut table_obj, rows} = input_result {
+                handle_update_expr(&mut table_obj, assignments, &rows, tnx_id)?;
+                Ok(Mutation)
+            }else {
+                Err(RsqlError::ExecutionError(format!("Update input must be a TableWithFilter")))
+            }
         },
         _ => {
             panic!("Unsupported DML operation")
