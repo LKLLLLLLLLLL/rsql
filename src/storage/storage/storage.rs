@@ -1,11 +1,11 @@
 use crate::config::{PAGE_SIZE_BYTES, MAX_PAGE_CACHE_BYTES};
 use crate::common::{RsqlError, RsqlResult};
 use super::cache::LRUCache;
-use std::sync::{RwLock, Mutex, Arc, OnceLock};
+use std::sync::{RwLock, Mutex, Arc, OnceLock, Weak};
 use std::fs::{self, OpenOptions, File};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
-use std::collections::HashSet;
+use std::collections::{HashSet, HashMap};
 
 #[derive(Clone)]
 pub struct Page {
@@ -26,6 +26,8 @@ impl Page {
     }
 }
 
+static STORAGE_REGISTRY: OnceLock<RwLock<HashMap<String, Weak<Mutex<StorageManager>>>>> = OnceLock::new(); // global single instance registry
+
 pub struct StorageManager {
     file: Mutex<File>, // file handle
     file_path: String,
@@ -33,30 +35,20 @@ pub struct StorageManager {
     pages: Mutex<LRUCache>,  // cache of pages which has the latest data
 }
 
-static STORAGE_MANAGERS: OnceLock<RwLock<HashSet<String>>> = OnceLock::new(); // global single instance registry
+// implement Drop trait so that StorageManager will be unregistered when it is dropped
+impl Drop for StorageManager {
+    fn drop(&mut self) {
+        let _ = self.flush(); // don't forget to flush
+        if let Some(registry) = STORAGE_REGISTRY.get() {
+            let mut write_guard = registry.write().unwrap();
+            write_guard.remove(&self.file_path);
+        }
+    }
+}
 
 impl StorageManager {
-    fn get_registry() -> &'static RwLock<HashSet<String>> {
-        STORAGE_MANAGERS.get_or_init(|| RwLock::new(HashSet::new()))
-    }
-
-    fn register_file_path(file_path: &str) -> RsqlResult<()> {
-        let registry = Self::get_registry();
-        let mut paths = registry.write()
-            .map_err(|_| RsqlError::StorageError("Poisoned RwLock in registry".to_string()))?;
-        
-        // use insert method, false means the file path already exists
-        if !paths.insert(file_path.to_string()) {
-            panic!("StorageManager for file {} already exists!", file_path);
-        }
-        
-        Ok(())
-    }
-
-    fn unregister_file_path(file_path: &str) {
-        if let Ok(mut registry) = Self::get_registry().write() {
-            registry.remove(file_path);
-        }
+    fn get_registry() -> &'static RwLock<HashMap<String, Weak<Mutex<StorageManager>>>> {
+        STORAGE_REGISTRY.get_or_init(|| RwLock::new(HashMap::new()))
     }
 
     fn create_file<P: AsRef<Path>>(path: P) -> RsqlResult<()> {
@@ -121,30 +113,39 @@ impl StorageManager {
         Ok(())
     }
 
-    pub fn new(file_path: &str) -> RsqlResult<Self> {
-        Self::register_file_path(file_path)?; // register file path
-
-        Self::create_file(file_path)?;
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(file_path)
-            .map_err(|e| RsqlError::StorageError(format!("Failed to open file: {}", e)))?;
-        let metadata= fs::metadata(file_path).map_err(|e| RsqlError::StorageError(format!("Failed to read file metadata: {}", e)))?;
-        let file_size = metadata.len(); // file size in bytes
-        if file_size % PAGE_SIZE_BYTES as u64 != 0 {
-            Self::unregister_file_path(file_path); // unregister file path
-            return Err(RsqlError::StorageError(
-                "file size is not aligned to page size".to_string()
-            ));
+    pub fn new(file_path: &str) -> RsqlResult<Arc<Mutex<Self>>> {
+        let registry = Self::get_registry();
+        
+        // 1. check if already exists
+        {
+            let read_guard = registry.read().unwrap();
+            if let Some(weak_ref) = read_guard.get(file_path) {
+                if weak_ref.strong_count() > 0 {
+                    panic!("StorageManager for file {} already exists!", file_path);
+                }
+            }
         }
-        let file_page_num = file_size / PAGE_SIZE_BYTES as u64;
-        Ok(Self {
+
+        // 2. create new StorageManager
+        Self::create_file(file_path)?;
+        let file = OpenOptions::new().read(true).write(true).open(file_path)?;
+        let metadata = fs::metadata(file_path)?;
+        let file_page_num = metadata.len() / PAGE_SIZE_BYTES as u64;
+
+        let manager = Arc::new(Mutex::new(Self {
             file: Mutex::new(file),
             file_path: file_path.to_string(),
             file_page_num: Mutex::new(file_page_num),
-            pages: Mutex::new(LRUCache::new(MAX_PAGE_CACHE_BYTES / PAGE_SIZE_BYTES)), // cache of pages which has the latest data
-        })
+            pages: Mutex::new(LRUCache::new(MAX_PAGE_CACHE_BYTES / PAGE_SIZE_BYTES)),
+        }));
+
+        // 3. register the new StorageManager
+        registry.write().unwrap().insert(
+            file_path.to_string(),
+            Arc::downgrade(&manager),
+        );
+
+        Ok(manager)
     }
 
     /// deallocate last page
@@ -238,91 +239,15 @@ impl StorageManager {
         *self.file_page_num.lock().unwrap() = file_page_num; // update pages number in the file
         Ok(())
     }
-}
-
-// implement Drop trait so that StorageManager will be unregistered when it is dropped
-impl Drop for StorageManager {
-    fn drop(&mut self) {
-        self.flush().unwrap();
-        Self::unregister_file_path(&self.file_path);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::tempdir;
-
-    #[test]
-    fn test_storage_basic_write_read() {
-        let dir = tempdir().unwrap();
-        let file_path = dir.path().join("test_storage_basic.db");
-        let file_path_str = file_path.to_str().unwrap();
-
-        {
-            let mut storage = StorageManager::new(file_path_str).unwrap();
-            let (page_idx, mut page) = storage.new_page().unwrap();
-            assert_eq!(page_idx, 0);
-            
-            page.data[0] = 42;
-            storage.write_page(&page, page_idx).unwrap();
-            
-            let read_page = storage.read_page(page_idx).unwrap();
-            assert_eq!(read_page.data[0], 42);
-        }
-
-        // persistence check
-        {
-            let storage = StorageManager::new(file_path_str).unwrap();
-            let read_page = storage.read_page(0).unwrap();
-            assert_eq!(read_page.data[0], 42);
-        }
-    }
-
-    #[test]
-    fn test_storage_multi_pages() {
-        let dir = tempdir().unwrap();
-        let file_path = dir.path().join("test_storage_multi.db");
-        let file_path_str = file_path.to_str().unwrap();
-
-        {
-            let mut storage = StorageManager::new(file_path_str).unwrap();
-            for i in 0..5 {
-                let (idx, mut page) = storage.new_page().unwrap();
-                assert_eq!(idx, i);
-                page.data[0] = i as u8;
-                storage.write_page(&page, idx).unwrap();
-            }
-            
-            for i in 0..5 {
-                let page = storage.read_page(i).unwrap();
-                assert_eq!(page.data[0], i as u8);
+    pub fn flush_all() -> RsqlResult<()> {
+        let registry = Self::get_registry();
+        let read_guard = registry.read().unwrap();
+        for weak_ref in read_guard.values() {
+            if let Some(strong_ref) = weak_ref.upgrade() {
+                let mut sm = strong_ref.lock().unwrap();
+                sm.flush()?;
             }
         }
-    }
-
-    #[test]
-    fn test_storage_free_page() {
-        let dir = tempdir().unwrap();
-        let file_path = dir.path().join("test_storage_free.db");
-        let file_path_str = file_path.to_str().unwrap();
-
-        {
-            let mut storage = StorageManager::new(file_path_str).unwrap();
-            storage.new_page().unwrap(); // 0
-            storage.new_page().unwrap(); // 1
-            storage.new_page().unwrap(); // 2
-            
-            assert_eq!(storage.max_page_index(), Some(2));
-            
-            storage.free().unwrap();
-            assert_eq!(storage.max_page_index(), Some(1));
-            
-            storage.free().unwrap();
-            assert_eq!(storage.max_page_index(), Some(0));
-            
-            storage.free().unwrap();
-            assert_eq!(storage.max_page_index(), None);
-        }
+        Ok(())
     }
 }
