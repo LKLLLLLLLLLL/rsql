@@ -1,6 +1,8 @@
 use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer, Responder};
+use actix_web::middleware::NormalizePath;
 use actix_web_actors::ws;
 use tracing::info;
+use rust_embed::RustEmbed;
 
 use crate::config::{PORT};
 use super::types::{RayonQueryResponse, HttpQueryRequest, HttpQueryResponse};
@@ -11,7 +13,52 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH, Instant};
 
-//global state for the server, single instance for the entire server
+#[derive(RustEmbed)]
+#[folder = "client/dist"] 
+struct Assets;
+
+async fn handle_static_files(path: web::Path<String>) -> HttpResponse {
+    let path = if path.is_empty() {
+        "index.html".to_string()
+    } else {
+        path.into_inner()
+    };
+    
+    match Assets::get(&path) {
+        Some(content) => {
+            let body = content.data.into_owned();
+            let mime = mime_guess::from_path(&path).first_or_octet_stream();
+            
+            HttpResponse::Ok()
+                .content_type(mime.as_ref())
+                .body(body)
+        }
+        None => {
+            match Assets::get("index.html") {
+                Some(content) => {
+                    let body = content.data.into_owned();
+                    HttpResponse::Ok()
+                        .content_type("text/html")
+                        .body(body)
+                }
+                None => HttpResponse::NotFound().body("404 Not Found"),
+            }
+        }
+    }
+}
+
+async fn index() -> HttpResponse {
+    match Assets::get("index.html") {
+        Some(content) => {
+            let body = content.data.into_owned();
+            HttpResponse::Ok()
+                .content_type("text/html")
+                .body(body)
+        }
+        None => HttpResponse::NotFound().body("index.html not found"),
+    }
+}
+
 struct AppState{
     working_thread_pool: Arc<WorkingThreadPool>,
     working_query: Arc<AtomicU64>,
@@ -171,8 +218,10 @@ pub async fn start_server() -> std::io::Result<()> {
     HttpServer::new( move || {
         App::new()
             .app_data(state.clone())
-            //.route("/query", web::post().to(handle_http_query))
             .route("/ws",web::get().to(handle_ws_query))
+            .route("/", web::get().to(index))
+            .route("/{path:.*}", web::get().to(handle_static_files))
+            .wrap(NormalizePath::trim())
     })
     .bind(("127.0.0.1",PORT))?
     .run()
