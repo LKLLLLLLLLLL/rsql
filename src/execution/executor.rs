@@ -1,7 +1,8 @@
 use crate::common::RsqlResult;
 use crate::sql::{Plan, plan::{PlanItem}};
-use super::handler::execute_plan_node;
+use super::{dml_interpreter::execute_dml_plan_node, ddl_interpreter::execute_ddl_plan_node, dcl_interpreter::execute_dcl_plan_node};
 use tracing::info;
+use crate::transaction::TnxManager;
 
 pub fn execute(sql: &str, connection_id: u64) -> RsqlResult<()> {
     info!("Executing SQL: {}", sql);
@@ -12,6 +13,7 @@ pub fn execute(sql: &str, connection_id: u64) -> RsqlResult<()> {
         match item {
             PlanItem::Begin => {
                 info!("Begin transaction");
+                // TnxManager::global().begin_transaction(connection_id);
             },
             PlanItem::Commit => {
                 info!("Commit transaction");
@@ -19,9 +21,14 @@ pub fn execute(sql: &str, connection_id: u64) -> RsqlResult<()> {
             PlanItem::Rollback => {
                 info!("Rollback transaction");
             },
-            PlanItem::Statement(plan_node) => {
-                info!("Executing statement: {:?}", plan_node);
-                execute_plan_node(plan_node, connection_id)?;
+            PlanItem::DCL(plan_node) => {
+                execute_dcl_plan_node(plan_node, connection_id)?;
+            },
+            PlanItem::DDL(plan_node) => {
+                execute_ddl_plan_node(plan_node, connection_id)?;
+            },
+            PlanItem::DML(plan_node) => {
+                execute_dml_plan_node(plan_node, connection_id)?;
             },
         }
     }

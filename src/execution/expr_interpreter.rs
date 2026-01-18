@@ -2,7 +2,7 @@ use crate::common::{RsqlResult, RsqlError};
 use crate::sql::plan::{JoinType};
 use crate::common::data_item::{DataItem};
 use crate::catalog::table_schema::{ColType};
-use super::handler::{TableObject};
+use super::result::{TableObject};
 use sqlparser::ast::{Expr, BinaryOperator, Value::{Number, SingleQuotedString, Boolean}};
 
 fn parse_number(s: &str) -> RsqlResult<DataItem> {
@@ -885,4 +885,275 @@ pub fn handle_insert_expr(table_object: &TableObject, cols: &Vec<String>, null_c
         }
     }
     Ok(data_item)
+}
+
+pub fn handle_update_expr(table_object: &mut TableObject, assignments: &Vec<(String, Expr)>, rows: &Vec<Vec<DataItem>>, tnx_id: u64) -> RsqlResult<()> {
+    for (col_name, expr) in assignments.iter() {
+        let tar_col_idx = table_object.map.get(col_name).unwrap();
+        let pk_col_idx = table_object.map.get(&table_object.pk_col.0).unwrap();
+        match expr {
+            Expr::Identifier(ident) => {
+                let src_col_name = ident.value.clone();
+                let src_col_idx = table_object.map.get(&src_col_name).unwrap(); // get the source column index to assign its value to the target column
+                let mut rows = rows.clone();
+                for row in rows.iter_mut() {
+                    let src_col_value = row[*src_col_idx].clone();
+                    let pk_col_value = &row[*pk_col_idx].clone();
+                    row[*tar_col_idx] = src_col_value;
+                    table_object.table_obj.update_row(pk_col_value, row.clone(), tnx_id)?;
+                }
+            },
+            Expr::Value(value) => {
+                match &value.value {
+                    Boolean(b) => {
+                        let bool_value = DataItem::Bool(*b);
+                        let mut rows = rows.clone();
+                        for row in rows.iter_mut() {
+                            let pk_col_value = &row[*pk_col_idx].clone();
+                            row[*tar_col_idx] = bool_value.clone();
+                            table_object.table_obj.update_row(pk_col_value, row.clone(), tnx_id)?;
+                        }
+                    },
+                    Number(n, _) => {
+                        let number_value = parse_number(n)?;
+                        let mut rows = rows.clone();
+                        for row in rows.iter_mut() {
+                            let pk_col_value = &row[*pk_col_idx].clone();
+                            row[*tar_col_idx] = number_value.clone();
+                            table_object.table_obj.update_row(pk_col_value, row.clone(), tnx_id)?;
+                        }
+                    },
+                    SingleQuotedString(s) => {
+                        let col_type = table_object.cols.1[*tar_col_idx].clone();
+                        let string_value = match col_type {
+                            ColType::Chars(size) => DataItem::Chars{len: size as u64, value: s.clone()},
+                            _ => {
+                                return Err(RsqlError::ExecutionError(format!("Unsupported update value type: {:?}", value.value)))
+                            },
+                        };
+                        let mut rows = rows.clone();
+                        for row in rows.iter_mut() {
+                            let pk_col_value = &row[*pk_col_idx].clone();
+                            row[*tar_col_idx] = string_value.clone();
+                            table_object.table_obj.update_row(pk_col_value, row.clone(), tnx_id)?;
+                        }
+                    },
+                    _ => {
+                        return Err(RsqlError::ExecutionError(format!("Unsupported update value type: {:?}", value.value)))
+                    }
+                }
+            },
+            Expr::BinaryOp { left, op, right } => {
+                match op {
+                    BinaryOperator::Plus => {
+                        match (&**left, &**right) {
+                            (Expr::Identifier(ident), Expr::Value(value)) => {
+                                match &value.value {
+                                    Number(n, _) => {
+                                        let src_col_name = ident.value.clone();
+                                        let src_col_idx = table_object.map.get(&src_col_name).unwrap();
+                                        let number_value = parse_number(n)?;
+                                        match number_value {
+                                            DataItem::Integer(n_right) => {
+                                                let mut rows = rows.clone();
+                                                for row in rows.iter_mut() {
+                                                    let pk_col_value = &row[*pk_col_idx].clone();
+                                                    let src_col_value = row[*src_col_idx].clone();
+                                                    if let DataItem::Integer(n_left) = src_col_value {
+                                                        row[*tar_col_idx] = DataItem::Integer(n_left + n_right);
+                                                        table_object.table_obj.update_row(pk_col_value, row.clone(), tnx_id)?;
+                                                    }else {
+                                                        return Err(RsqlError::ExecutionError(format!("dismatched operation number type")))
+                                                    }
+                                                }
+                                            },
+                                            DataItem::Float(f_right) => {
+                                                let mut rows = rows.clone();
+                                                for row in rows.iter_mut() {
+                                                    let pk_col_value = &row[*pk_col_idx].clone();
+                                                    let src_col_value = row[*src_col_idx].clone();
+                                                    if let DataItem::Float(f_left) = src_col_value {
+                                                        row[*tar_col_idx] = DataItem::Float(f_left + f_right);
+                                                        table_object.table_obj.update_row(pk_col_value, row.clone(), tnx_id)?;
+                                                    }else {
+                                                        return Err(RsqlError::ExecutionError(format!("dismatched operation number type")))
+                                                    }
+                                                }
+                                            },
+                                            _ => {
+                                                return Err(RsqlError::ExecutionError(format!("unsupported operation number type {number_value:?}")))
+                                            },
+                                        }
+                                    },
+                                    _ => {
+                                        return Err(RsqlError::ExecutionError(format!("Unsupported update expression: {:?}", expr)))
+                                    },
+                                }
+                            },
+                            _ => {
+                                return Err(RsqlError::ExecutionError(format!("Unsupported update expression: {:?}", expr)))
+                            },
+                        }
+                    },
+                    BinaryOperator::Minus => {
+                        match (&**left, &**right) {
+                            (Expr::Identifier(ident), Expr::Value(value)) => {
+                                match &value.value {
+                                     Number(n, _) => {
+                                        let src_col_name = ident.value.clone();
+                                        let src_col_idx = table_object.map.get(&src_col_name).unwrap();
+                                        let number_value = parse_number(n)?;
+                                        match number_value {
+                                             DataItem::Integer(n_right) => {
+                                                let mut rows = rows.clone();
+                                                for row in rows.iter_mut() {
+                                                    let pk_col_value = &row[*pk_col_idx].clone();
+                                                    let src_col_value = row[*src_col_idx].clone();
+                                                    if let DataItem::Integer(n_left) = src_col_value {
+                                                        row[*tar_col_idx] = DataItem::Integer(n_left - n_right);
+                                                        table_object.table_obj.update_row(pk_col_value, row.clone(), tnx_id)?;
+                                                    }else {
+                                                        return Err(RsqlError::ExecutionError(format!("dismatched operation number type")))
+                                                    }
+                                                }
+                                            },
+                                            DataItem::Float(f_right) => {
+                                                let mut rows = rows.clone();
+                                                for row in rows.iter_mut() {
+                                                    let pk_col_value = &row[*pk_col_idx].clone();
+                                                    let src_col_value = row[*src_col_idx].clone();
+                                                    if let DataItem::Float(f_left) = src_col_value {
+                                                        row[*tar_col_idx] = DataItem::Float(f_left - f_right);
+                                                        table_object.table_obj.update_row(pk_col_value, row.clone(), tnx_id)?;
+                                                    }else {
+                                                        return Err(RsqlError::ExecutionError(format!("dismatched operation number type")))
+                                                    }
+                                                }
+                                            },
+                                             _ => {
+                                                 return Err(RsqlError::ExecutionError(format!("unsupported operation number type {number_value:?}")))
+                                             },
+                                        }
+                                     },
+                                     _ => {
+                                         return Err(RsqlError::ExecutionError(format!("Unsupported update expression: {:?}", expr)))
+                                     },
+                                }
+                            },
+                            _ => {
+                                return Err(RsqlError::ExecutionError(format!("Unsupported update expression: {:?}", expr)))
+                            },
+                        }
+                    },
+                    BinaryOperator::Multiply => {
+                        match (&**left, &**right) {
+                            (Expr::Identifier(ident), Expr::Value(value)) => {
+                                match &value.value {
+                                    Number(n, _) => {
+                                        let src_col_name = ident.value.clone();
+                                        let src_col_idx = table_object.map.get(&src_col_name).unwrap();
+                                        let number_value = parse_number(n)?;
+                                        match number_value {
+                                            DataItem::Integer(n_right) => {
+                                                let mut rows = rows.clone();
+                                                for row in rows.iter_mut() {
+                                                    let pk_col_value = &row[*pk_col_idx].clone();
+                                                    let src_col_value = row[*src_col_idx].clone();
+                                                    if let DataItem::Integer(n_left) = src_col_value {
+                                                        row[*tar_col_idx] = DataItem::Integer(n_left * n_right);
+                                                        table_object.table_obj.update_row(pk_col_value, row.clone(), tnx_id)?;
+                                                    }else {
+                                                        return Err(RsqlError::ExecutionError(format!("dismatched operation number type")))
+                                                    }
+                                                }
+                                            },
+                                            DataItem::Float(f_right) => {
+                                                let mut rows = rows.clone();
+                                                for row in rows.iter_mut() {
+                                                    let pk_col_value = &row[*pk_col_idx].clone();
+                                                    let src_col_value = row[*src_col_idx].clone();
+                                                    if let DataItem::Float(f_left) = src_col_value {
+                                                        row[*tar_col_idx] = DataItem::Float(f_left * f_right);
+                                                        table_object.table_obj.update_row(pk_col_value, row.clone(), tnx_id)?;
+                                                    }else {
+                                                        return Err(RsqlError::ExecutionError(format!("dismatched operation number type")))
+                                                    }
+                                                }
+                                            },
+                                            _ => {
+                                                return Err(RsqlError::ExecutionError(format!("unsupported operation number type {number_value:?}")))
+                                            },
+                                        }
+                                    },
+                                    _ => {
+                                        return Err(RsqlError::ExecutionError(format!("Unsupported update expression: {:?}", expr)))
+                                    },
+                                }
+                            },
+                            _ => {
+                                return Err(RsqlError::ExecutionError(format!("Unsupported update expression: {:?}", expr)))
+                            },
+                        }
+                    },
+                    BinaryOperator::Divide => {
+                        match (&**left, &**right) {
+                            (Expr::Identifier(ident), Expr::Value(value)) => {
+                                match &value.value {
+                                    Number(n, _) => {
+                                        let src_col_name = ident.value.clone();
+                                        let src_col_idx = table_object.map.get(&src_col_name).unwrap();
+                                        let number_value = parse_number(n)?;
+                                        match number_value {
+                                            DataItem::Integer(n_right) => {
+                                                let mut rows = rows.clone();
+                                                for row in rows.iter_mut() {
+                                                    let pk_col_value = &row[*pk_col_idx].clone();
+                                                    let src_col_value = row[*src_col_idx].clone();
+                                                    if let DataItem::Integer(n_left) = src_col_value {
+                                                        row[*tar_col_idx] = DataItem::Integer(n_left / n_right);
+                                                        table_object.table_obj.update_row(pk_col_value, row.clone(), tnx_id)?;
+                                                    }else {
+                                                        return Err(RsqlError::ExecutionError(format!("dismatched operation number type")))
+                                                    }
+                                                }
+                                            },
+                                            DataItem::Float(f_right) => {
+                                                let mut rows = rows.clone();
+                                                for row in rows.iter_mut() {
+                                                    let pk_col_value = &row[*pk_col_idx].clone();
+                                                    let src_col_value = row[*src_col_idx].clone();
+                                                    if let DataItem::Float(f_left) = src_col_value {
+                                                        row[*tar_col_idx] = DataItem::Float(f_left / f_right);
+                                                        table_object.table_obj.update_row(pk_col_value, row.clone(), tnx_id)?;
+                                                    }else {
+                                                        return Err(RsqlError::ExecutionError(format!("dismatched operation number type")))
+                                                    }
+                                                }
+                                            },
+                                            _ => {
+                                                return Err(RsqlError::ExecutionError(format!("unsupported operation number type {number_value:?}")))
+                                            },
+                                        }
+                                    },
+                                    _ => {
+                                        return Err(RsqlError::ExecutionError(format!("Unsupported update expression: {:?}", expr)))
+                                    },
+                                }
+                            },
+                            _ => {
+                                return Err(RsqlError::ExecutionError(format!("Unsupported update expression: {:?}", expr)))
+                            },
+                        }
+                    },
+                    _ => {
+                        return Err(RsqlError::ExecutionError(format!("Unsupported binary operator: {:?}", op)))
+                    }
+                }
+            },
+            _ => {
+                return Err(RsqlError::ExecutionError(format!("Unsupported update expression: {:?}", expr)))
+            },
+        }
+    }
+    Ok(())
 }

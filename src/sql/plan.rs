@@ -1347,23 +1347,40 @@ mod tests {
     use super::*;
     #[test]
     fn test_plan_pretty_print_pro() {
-        // let sql = "\
-        //     select a
-        //     from (select b from t1 where e = true and f = 1.1)
-        //     where c <= 1 and b = 'letter'
-        // ";
-        // let plan = Plan::build_plan(sql).unwrap();
-        // Plan::pretty_print_pro(&plan.tnxs[0].stmts[0]);
-        // let sql = "\
-        //     DELETE FROM student
-        //     WHERE age < 18;
-        // ";
-        // let plan = Plan::build_plan(sql).unwrap();
-        // let plan_node= match &plan.items[0] {
-        //     PlanItem::Statement(pn) => pn,
-        //     _ => panic!("Not a statement plan item"),
-        // };
-        // Plan::pretty_print_pro(plan_node);
+        let sql = "\
+            UPDATE student
+            SET    age  = 23,
+                name = '李六'
+            WHERE  id = 1002;
+        ";
+        let plan = Plan::build_plan(sql).unwrap();
+        let plan_node= match &plan.items[0] {
+            PlanItem::DML(pn) => pn,
+            _ => panic!("Not a DML plan item"),
+        };
+        Plan::pretty_print_pro(plan_node);
+        let sql = "\
+            UPDATE student
+            SET    score = score + 5
+            WHERE  class = '3班';
+        ";
+        let plan = Plan::build_plan(sql).unwrap();
+        let plan_node= match &plan.items[0] {
+            PlanItem::DML(pn) => pn,
+            _ => panic!("Not a DML plan item"),
+        };
+        Plan::pretty_print_pro(plan_node);
+        let sql = "\
+            UPDATE student
+            SET    score = other
+            WHERE  class = '3班';
+        ";
+        let plan = Plan::build_plan(sql).unwrap();
+        let plan_node= match &plan.items[0] {
+            PlanItem::DML(pn) => pn,
+            _ => panic!("Not a DML plan item"),
+        };
+        Plan::pretty_print_pro(plan_node);
         // assert!(false);
     }
 }
