@@ -6,7 +6,7 @@ use futures::channel::oneshot;
 use crate::{config::THREAD_MAXNUM};
 use crate::common::{ RsqlResult};
 use super::types::{ RayonQueryRequest };
-use crate::execution::executor;
+use crate::execution::execute;
 
 pub struct WorkingThreadPool{
     thread_pool: rayon::ThreadPool,
@@ -37,7 +37,7 @@ impl WorkingThreadPool{
     pub async fn parse_and_execute_query(&self, query: RayonQueryRequest, connection_id: u64) -> RsqlResult<String> {
         let (sender, receiver) = oneshot::channel::<RsqlResult<String>>();
         self.thread_pool.spawn(move ||{
-            if let Err(err) = executor::execute(&query.request_content,connection_id){
+            if let Err(err) = execute(&query.request_content,connection_id){
                 error!("execute query failed: {:?}", err);
             };
             let result = Ok(query.request_content);

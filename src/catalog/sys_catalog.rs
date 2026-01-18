@@ -501,6 +501,89 @@ impl SysCatalog {
         Ok(())
     }
     
+    pub fn register_index(
+        &self,
+        tnx_id: u64,
+        table_id: u64,
+        column_name: &str,
+    ) -> RsqlResult<()> {
+        let mut column_guard = self.column.lock().unwrap();
+        let pk = DataItem::Integer(table_id as i64);
+        let key = Some(pk.clone());
+        let column_rows = column_guard
+            .get_rows_by_range_indexed_col("table_id", &key, &key)?
+            .collect::<RsqlResult<Vec<_>>>()?;
+        for row in column_rows {
+            let row = row;
+            let DataItem::Chars{ len: _, value: name} = &row[1] else {
+                panic!("column_name column is not Chars");
+            };
+            if name == column_name {
+                // update is_indexed to true
+                column_guard.update_row(
+                    &row[1],
+                    vec![
+                        row[0].clone(),
+                        row[1].clone(),
+                        row[2].clone(),
+                        row[3].clone(),
+                        row[4].clone(),
+                        row[5].clone(),
+                        DataItem::Bool(true), // set is_indexed to true
+                        row[7].clone(),
+                    ],
+                    tnx_id,
+                )?;
+                return Ok(());
+            }
+        }
+        Err(RsqlError::Unknown(format!(
+            "Column {} not found in table id {}",
+            column_name, table_id
+        )))
+    }
+    pub fn create_index(
+        &self,
+        tnx_id: u64,
+        table_id: u64,
+        column_name: &str,
+    ) -> RsqlResult<()> {
+        let mut column_guard = self.column.lock().unwrap();
+        let pk = DataItem::Integer(table_id as i64);
+        let key = Some(pk.clone());
+        let column_rows = column_guard
+            .get_rows_by_range_indexed_col("table_id", &key, &key)?
+            .collect::<RsqlResult<Vec<_>>>()?;
+        for row in column_rows {
+            let row = row;
+            let DataItem::Chars{ len: _, value: name} = &row[1] else {
+                panic!("column_name column is not Chars");
+            };
+            if name == column_name {
+                // update is_indexed to true
+                column_guard.update_row(
+                    &row[1],
+                    vec![
+                        row[0].clone(),
+                        row[1].clone(),
+                        row[2].clone(),
+                        row[3].clone(),
+                        row[4].clone(),
+                        row[5].clone(),
+                        DataItem::Bool(true), // set is_indexed to true
+                        row[7].clone(),
+                    ],
+                    tnx_id,
+                )?;
+                return Ok(());
+            }
+        }
+        Err(RsqlError::Unknown(format!(
+            "Column {} not found in table id {}",
+            column_name, table_id
+        )))
+    }
+
     pub fn validate_user(
         &self,
         username: &str,
