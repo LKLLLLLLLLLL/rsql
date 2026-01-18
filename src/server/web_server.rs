@@ -37,8 +37,9 @@ async fn handle_ws_query(
 ) -> Result<HttpResponse, Error> {
     info!("WebSocket connection requested from: {:?}", request.peer_addr());
 
-    // 从URL查询参数中提取username
+    // 从URL查询参数中提取username和password
     let username = query.username.clone().unwrap_or_else(|| "guest".to_string());
+    let password = query.password.clone().unwrap_or_else(|| "".to_string());
     
     info!("WebSocket connection attempt - username: {}", username);
     
@@ -53,8 +54,8 @@ async fn handle_ws_query(
             state.working_thread_pool.clone(),
             state.working_query.clone(),
             connection_id,
-            false,  // authenticated
             username,
+            password,
         ),
         &request,
         stream,
@@ -212,6 +213,8 @@ pub async fn start_server() -> std::io::Result<()> {
     info!("Web Server listening on 127.0.0.1:4455");
     
     // 同时运行两个服务器
-    futures::try_join!(server1, server2)?;
-    Ok(())
+    tokio::select! {
+        result1 = server1 => result1,
+        result2 = server2 => result2,
+    }
 }

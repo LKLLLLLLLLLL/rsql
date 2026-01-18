@@ -18,7 +18,7 @@ num_cpus = "1.17.0"
 thiserror = "1.0"
 actix-web-actors = "4.3.1"
 actix = "0.13.5"
-tokio = { version = "1.49.0", features = ["process"]}
+tokio = { version = "1.49.0", features = ["process", "macros"]}
 serde_json = "1.0.149"
 rand = "0.9.2"
 bcrypt = "0.18.0"

@@ -1,18 +1,23 @@
 use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer, Responder};
 use actix_web_actors::ws;
+use serde::Deserialize;
 use tracing::info;
 
 use crate::config::{PORT};
-use crate::transaction::TnxManager;
 use super::websocket_actor::WebsocketActor;
 use super::thread_pool::WorkingThreadPool;
 use super::types::{HttpQueryRequest, HttpQueryResponse, RayonQueryResponse};
-use crate::catalog::SysCatalog;
-use crate::storage::WAL;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH, Instant};
+
+// WebSocket 连接查询参数
+#[derive(Deserialize)]
+struct WsQueryParams {
+    username: Option<String>,
+    password: Option<String>,
+}
 
 //global state for the server, single instance for the entire server
 struct AppState{
@@ -20,117 +25,38 @@ struct AppState{
     working_query: Arc<AtomicU64>,
 }
 
-fn url_decode(encoded: &str) -> String {
-    let mut result = String::new();
-    let mut chars = encoded.chars().peekable();
-
-    while let Some(ch) = chars.next() {
-        match ch {
-            '%' => {
-                let hex1 = chars.next();
-                let hex2 = chars.peek().cloned();
-                
-                if let (Some(h1), Some(h2)) = (hex1, hex2) {
-                    let hex_str = format!("{}{}", h1, h2);
-                    if let Ok(byte_val) = u8::from_str_radix(&hex_str, 16) {
-                        result.push(byte_val as char);
-                        chars.next();
-                    } else {
-                        result.push('%');
-                        result.push(h1);
-                        if let Some(h2) = chars.peek().cloned() {
-                            result.push(h2);
-                        }
-                    }
-                } else {
-                    result.push('%');
-                    if let Some(h1) = hex1 {
-                        result.push(h1);
-                    }
-                }
-            }
-            '+' => result.push(' '),
-            _ => result.push(ch),
-        }
-    }
-
-    result
-}
-
 //handle websocket connection
 async fn handle_ws_query(
     request: HttpRequest,
+    query: web::Query<WsQueryParams>,
     stream: web::Payload,
     state: web::Data<AppState>
 )-> Result<HttpResponse, actix_web::Error> {
     info!("WebSocket connection requested from: {:?}", request.peer_addr());
 
-    let query_params = request.query_string();
-    let mut username = String::new();
-    let mut password = String::new();
+    // 从URL查询参数中提取username和password
+    let username = query.username.clone().unwrap_or_else(|| "guest".to_string());
+    let password = query.password.clone().unwrap_or_else(|| "".to_string());
+    
+    info!("WebSocket connection attempt - username: {}", username);
+    
+    // 生成唯一的连接ID（使用时间戳）
+    let connection_id = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
 
-    for param in query_params.split('&'){
-        if let Some((key,value)) = param.split_once('='){
-            match key{
-                "username"=> username = url_decode(value),
-                "password"=> password = url_decode(value),
-                _=>{}
-            }
-        }
-    }
-    info!("Received username: {}, password: {}", username, password);
-
-    // match wal::WAL::recovery(
-    //     &mut |a,b,Vec::new()|{},
-    //     &mut ||{},
-    //     &mut ||{},
-    //     &mut ||{},
-    //     &mut ||{}
-    // ){
-    //         Ok(_)=>{},
-    //         Err(_)=>{
-    //             info!("Internal server error");
-    //             return Err(actix_web::error::ErrorInternalServerError("Internal server error"));
-    //         }
-    //     }
-
-    match SysCatalog::init(){
-        Ok(_)=>{},
-        Err(_)=>{
-            info!("Internal server error");
-            return Err(actix_web::error::ErrorInternalServerError("Internal server error"));
-        }
-    };
-
-    let tnx_id = TnxManager::global().begin_transaction(0); // connection id 0 for privileged operations
-    match SysCatalog::global().validate_user( tnx_id, &username, &password){
-        Ok(true) =>{
-            ws::start(
-                WebsocketActor::new(
-                    state.working_thread_pool.clone(),
-                    state.working_query.clone(),
-                    SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as u64,
-                    true,
-                    username,
-                ),
-                &request,
-                stream,
-            )
-        }
-        Ok(false) => {
-            TnxManager::global().end_transaction(tnx_id);
-            info!("Invalid username or password");
-            Err(actix_web::error::ErrorUnauthorized("Invalid username or password"))
-        }
-        Err(_) => {
-            TnxManager::global().end_transaction(tnx_id);
-            info!("Internal server error");
-            Err(actix_web::error::ErrorInternalServerError("Internal server error"))
-        }
-    }
+    ws::start(
+        WebsocketActor::new(
+            state.working_thread_pool.clone(),
+            state.working_query.clone(),
+            connection_id,
+            username,
+            password,
+        ),
+        &request,
+        stream,
+    )
 }
 
 //handle http query
@@ -198,7 +124,7 @@ pub async fn start_server() -> std::io::Result<()> {
     HttpServer::new( move || {
         App::new()
             .app_data(state.clone())
-            //.route("/query", web::post().to(handle_http_query))
+            .route("/query", web::post().to(handle_http_query))
             .route("/ws",web::get().to(handle_ws_query))
     })
     .bind(("127.0.0.1",PORT))?
