@@ -31,6 +31,9 @@ pub enum ExecutionResult {
         rows: Vec<Vec<DataItem>>,
         aggr_cols: Vec<String>, // aggregate columns
     },
+    TnxBeginSuccess,
+    CommitSuccess,
+    RollbackSuccess,
 }
 pub struct TableObject {
     pub table_obj: Table,
