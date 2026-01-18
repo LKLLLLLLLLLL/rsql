@@ -14,6 +14,7 @@ use std::path;
 use std::collections::HashMap;
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 use tracing::info;
 
@@ -55,22 +56,22 @@ pub fn init_log() {
 }
 
 fn recovery_wal() -> RsqlResult<u64> {
-    let tmp_storages: Rc<RefCell<HashMap<u64, Rc<RefCell<StorageManager>>>>> = Rc::new(RefCell::new(HashMap::new()));
+    let tmp_storages: Rc<RefCell<HashMap<u64, Arc<Mutex<StorageManager>>>>> = Rc::new(RefCell::new(HashMap::new()));
     // Helper closures
-    let get_sm = |table_id: u64| -> RsqlResult<Rc<RefCell<StorageManager>>> {
+    let get_sm = |table_id: u64| -> RsqlResult<Arc<Mutex<StorageManager>>> {
         let mut tmp_storages = tmp_storages.borrow_mut();
         if let Some(sm) = tmp_storages.get(&table_id) {
             Ok(sm.clone())
         } else {
             let file_path = get_table_path(table_id, is_sys_table(table_id));
             let sm = StorageManager::new(file_path.to_str().unwrap())?;
-            tmp_storages.insert(table_id, Rc::new(RefCell::new(sm)));
+            tmp_storages.insert(table_id, sm);
             Ok(tmp_storages.get(&table_id).unwrap().clone())
         }
     };
     let mut write_page = |table_id: u64, page_id: u64, data: &[u8]| -> RsqlResult<()> {
         let sm_rc = get_sm(table_id)?;
-        let mut sm = sm_rc.borrow_mut();
+        let mut sm = sm_rc.lock().unwrap();
         let mut page = sm.read_page(page_id)?;
         assert_eq!(Page::max_size(), data.len());
         page.data[..data.len()].copy_from_slice(data);
@@ -78,7 +79,7 @@ fn recovery_wal() -> RsqlResult<u64> {
     };
     let mut update_page = |table_id: u64, page_id: u64, offset: u64, len: u64, data: &[u8]| -> RsqlResult<()> {
         let sm_rc = get_sm(table_id)?;
-        let mut sm = sm_rc.borrow_mut();
+        let mut sm = sm_rc.lock().unwrap();
         let mut page = sm.read_page(page_id)?;
         assert!(offset + len <= Page::max_size() as u64);
         page.data[offset as usize..(offset + len) as usize].copy_from_slice(data);
@@ -86,18 +87,18 @@ fn recovery_wal() -> RsqlResult<u64> {
     };
     let mut append_page = |table_id: u64| -> RsqlResult<u64> {
         let sm_rc = get_sm(table_id)?;
-        let mut sm = sm_rc.borrow_mut();
+        let mut sm = sm_rc.lock().unwrap();
         Ok(sm.new_page()?.0)
     };
     let mut trunc_page = |table_id: u64| -> RsqlResult<()> {
         let sm_rc = get_sm(table_id)?;
-        let mut sm = sm_rc.borrow_mut();
+        let mut sm = sm_rc.lock().unwrap();
         sm.free()?;
         Ok(())
     };
     let mut max_page_idx = |table_id: u64| -> RsqlResult<u64> {
         let sm_rc = get_sm(table_id)?;
-        let sm = sm_rc.borrow_mut();
+        let sm = sm_rc.lock().unwrap();
         let max_idx = match sm.max_page_index() {
             Some(idx) => idx,
             None => 0,

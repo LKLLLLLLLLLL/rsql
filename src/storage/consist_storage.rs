@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::common::RsqlResult;
 
@@ -7,7 +7,7 @@ use super::wal::WAL;
 /// This struct implements a consistent storage engine for the database.
 pub struct ConsistStorageEngine {
     table_id: u64,
-    storage_manager: StorageManager,
+    storage_manager: Arc<Mutex<StorageManager>>,
     wal: Arc<WAL>,
 }
 
@@ -22,16 +22,16 @@ impl ConsistStorageEngine {
         })
     }
     pub fn read(&self, page_id: u64) -> RsqlResult<Page> {
-        self.storage_manager.read_page(page_id)
+        self.storage_manager.lock().unwrap().read_page(page_id)
     }
     pub fn read_bytes(&self, page_id: u64, offset: usize, size: usize) -> RsqlResult<Vec<u8>> {
-        let page = self.storage_manager.read_page(page_id)?;
+        let page = self.storage_manager.lock().unwrap().read_page(page_id)?;
         Ok(page.data[offset..offset + size].to_vec())
     }
     pub fn write(&mut self, tnx_id: u64, page_id: u64, page: &Page) -> RsqlResult<()> {
         // analyze the differences, to find out continuous byte ranges
         // this will significantly reduce the WAL size
-        let old_page = self.storage_manager.read_page(page_id)?;
+        let old_page = self.storage_manager.lock().unwrap().read_page(page_id)?;
         let mut start = None;
         for (i, byte) in page.data.iter().enumerate() {
             if *byte != old_page.data[i] {
@@ -57,18 +57,18 @@ impl ConsistStorageEngine {
     }
     pub fn write_bytes(&mut self, tnx_id: u64, page_id: u64, offset: usize, data: &[u8]) -> RsqlResult<()> {
         // read old data for WAL
-        let mut old_page = self.storage_manager.read_page(page_id)?;
+        let mut old_page = self.storage_manager.lock().unwrap().read_page(page_id)?;
         let old_data = &old_page.data[offset..offset + data.len()];
         // write to WAL first
         self.wal.update_page(tnx_id, self.table_id, page_id, offset as u64, old_data, data)?;
         self.wal.flush()?;
         // then write to storage
         old_page.data[offset..offset + data.len()].copy_from_slice(data);
-        self.storage_manager.write_page(&old_page, page_id)?;
+        self.storage_manager.lock().unwrap().write_page(&old_page, page_id)?;
         Ok(())
     }
     pub fn new_page(&mut self, tnx_id: u64) -> RsqlResult<(u64, Page)> {
-        let (page_id, page) = self.storage_manager.new_page()?;
+        let (page_id, page) = self.storage_manager.lock().unwrap().new_page()?;
         // log the new page creation in WAL
         self.wal.new_page(tnx_id, self.table_id, page_id, &page.data)?;
         self.wal.flush()?;
@@ -76,24 +76,26 @@ impl ConsistStorageEngine {
     }
     pub fn free_page(&mut self, tnx_id: u64, page_id: u64) -> RsqlResult<()> {
         let check_page_id = self.storage_manager
+            .lock()
+            .unwrap()
             .max_page_index()
             .unwrap(); // None means no page exists, so cannot free any page
         if page_id != check_page_id {
             panic!("can only free the last page, 
                     try to free page_id: {}, max_page_id: {}", page_id, check_page_id);
         };
-        let freed_page = self.storage_manager.read_page(page_id)?;
+        let freed_page = self.storage_manager.lock().unwrap().read_page(page_id)?;
         // log the page deletion in WAL
         self.wal.delete_page(tnx_id, self.table_id, page_id, &freed_page.data)?;
         self.wal.flush()?;
-        self.storage_manager.free()?;
+        self.storage_manager.lock().unwrap().free()?;
         Ok(())
     }
     pub fn max_page_index(&self) -> Option<u64> {
-        self.storage_manager.max_page_index()
+        self.storage_manager.lock().unwrap().max_page_index()
     }
-    pub fn get_storage(&mut self) -> &mut StorageManager {
-        &mut self.storage_manager
+    pub fn get_storage(&mut self) -> Arc<Mutex<StorageManager>> {
+        Arc::clone(&self.storage_manager)
     }
 }
 

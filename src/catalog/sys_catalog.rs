@@ -18,6 +18,7 @@ use crate::config::{
     DEFAULT_PASSWORD,
     DEFAULT_USERNAME,
 };
+use crate::utils::PrivilegeConn;
 
 use super::table_schema::TableSchema;
 
@@ -209,7 +210,7 @@ impl SysCatalog {
         };
         info!("First time starting database, initializing system catalog...");
         let tnx_id = TnxManager::global()
-            .begin_transaction(0); // connection id 0 for privileged operations
+            .begin_transaction(PrivilegeConn::INIT); // connection id 0 for privileged operations
         let table_ids = vec![
             SYS_TABLE_ID,
             SYS_COLUMN_ID,
@@ -541,6 +542,21 @@ impl SysCatalog {
             tnx_id,
         )?;
         Ok(())
+    }
+    pub fn get_all_table_ids(&self, tnx_id: u64) -> RsqlResult<Vec<u64>> {
+        let read_table = vec![SYS_TABLE_ID];
+        TnxManager::global().acquire_read_locks(tnx_id, &read_table)?;
+        let table_guard = self.table.lock().unwrap();
+        let mut table_ids = vec![];
+        let table_rows = table_guard.get_all_rows()?;
+        for row in table_rows {
+            let row = row?;
+            let DataItem::Integer(table_id) = &row[0] else {
+                panic!("table_id column is not Integer");
+            };
+            table_ids.push(*table_id as u64);
+        }
+        Ok(table_ids)
     }
     
     pub fn register_index(

@@ -359,15 +359,15 @@ impl WAL {
         Ok(())
     }
 
-    fn append_entry(&self, entry: &WALEntry) -> RsqlResult<bool> {
+    fn append_entry(&self, entry: &WALEntry) -> RsqlResult<()> {
         check_recovered();
         let entry_bytes = entry.to_bytes();
         let mut log_file = self.log_file.lock().unwrap();
         // 1. write entry bytes
         log_file.write_all(&entry_bytes)?;
         // 2. update length
-        let new_length = self.length.fetch_add(entry_bytes.len() as u64, Ordering::SeqCst) + entry_bytes.len() as u64;
-        Ok(new_length > MAX_WAL_SIZE)
+        self.length.fetch_add(entry_bytes.len() as u64, Ordering::SeqCst);
+        Ok(())
     }
 
     pub fn flush(&self) -> RsqlResult<()> {
@@ -386,7 +386,7 @@ impl WAL {
         offset: u64,
         old_data: &[u8],
         new_data: &[u8],
-    ) -> RsqlResult<bool> {
+    ) -> RsqlResult<()> {
         check_recovered();
         if old_data.len() != new_data.len() {
             panic!("WAL::update_page: old_data and new_data length mismatch");
@@ -409,7 +409,7 @@ impl WAL {
         table_id: u64,
         page_id: u64,
         data: &[u8],
-    ) -> RsqlResult<bool> {
+    ) -> RsqlResult<()> {
         check_recovered();
         let entry = WALEntry::NewPage {
             tnx_id,
@@ -425,7 +425,7 @@ impl WAL {
         table_id: u64,
         page_id: u64,
         old_data: &[u8],
-    ) -> RsqlResult<bool> {
+    ) -> RsqlResult<()> {
         check_recovered();
         let entry = WALEntry::DeletePage {
             tnx_id,
