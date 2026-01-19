@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use crate::common::{RsqlResult, RsqlError};
 use crate::common::data_item::{DataItem};
 use crate::catalog::table_schema::{ColType};
@@ -30,7 +31,7 @@ pub enum MiddleResult {
 impl MiddleResult {
     pub fn to_exec_result(&self) -> RsqlResult<ExecutionResult> {
         match self {
-            MiddleResult::Query{cols, rows} => Ok(ExecutionResult::Query{cols: cols.clone(), rows: rows.clone()}),
+            MiddleResult::Query{cols, rows} => Ok(ExecutionResult::Query{cols: cols.0.clone(), rows: rows.clone()}),
             MiddleResult::Mutation(msg) => Ok(ExecutionResult::Mutation(msg.clone())),
             _ => Err(RsqlError::ExecutionError(format!("unexpected middle result")))
         }
@@ -45,6 +46,7 @@ pub struct TableObject {
     pub pk_col: (String, ColType), // primary key column name
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ExecutionResult {
     TnxBeginSuccess,
     CommitSuccess,
@@ -52,7 +54,7 @@ pub enum ExecutionResult {
     Ddl(String), // create, drop
     Dcl(String), // users 
     Query {
-        cols: (Vec<String>, Vec<ColType>),
+        cols: Vec<String>,
         rows: Vec<Vec<DataItem>>, // query result
     },
     Mutation(String), // update, delete, insert

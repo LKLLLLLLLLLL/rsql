@@ -195,7 +195,7 @@ async fn handle_http_query(
         Err(e)=>{
             let response = HttpQueryResponse {
                 rayon_response: RayonQueryResponse {
-                    response_content: String::new(),
+                    response_content: Vec::new(),
                     error: e.to_string(),
                     execution_time: exec_ms,
                 },

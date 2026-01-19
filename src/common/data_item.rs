@@ -2,12 +2,13 @@ use core::panic;
 use std::mem::size_of;
 use std::cmp::Ordering;
 use std::hash::Hash;
+use serde::{Deserialize, Serialize};
 
 use crate::common::{RsqlError, RsqlResult};
 use crate::catalog::table_schema;
 
 /// Data item representation in one block in table.
-#[derive(Debug, PartialEq,Clone)]
+#[derive(Debug, PartialEq,Clone, Serialize, Deserialize)]
 pub enum DataItem {
     Integer(i64),
     Float(f64),
@@ -22,7 +23,7 @@ pub enum DataItem {
     NullBool,
 }
 
-#[derive(Debug, PartialEq, PartialOrd, Clone)]
+#[derive(Debug, PartialEq, PartialOrd, Clone, Serialize, Deserialize)]
 pub struct VarCharHead {
     pub max_len: u64,
     pub len: u64,

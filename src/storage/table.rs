@@ -3,6 +3,9 @@ use std::sync::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
+use serde::Deserialize;
+use serde::Serialize;
+
 use super::storage::Page;
 use crate::config;
 use crate::common::{RsqlError, RsqlResult};

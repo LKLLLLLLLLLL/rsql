@@ -1,4 +1,5 @@
 use serde::{Serialize,Deserialize};
+use crate::execution::result::ExecutionResult;
 /* http request/response structure is reserved for compatibility of single-query transaction */
 //http request structure received from the front-end
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,7 +25,7 @@ pub struct RayonQueryRequest{
 #[derive(Debug, Clone, Serialize, Deserialize)]
 // response sent from the rayon thread pool
 pub struct RayonQueryResponse{
-    pub response_content: String,
+    pub response_content: Vec<ExecutionResult>,
     pub error: String,
     pub execution_time: u64
 }
