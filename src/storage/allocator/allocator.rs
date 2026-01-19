@@ -79,7 +79,14 @@ impl Allocator {
 
 impl Allocator {
     pub fn create(entry_size: u64, begin_with: u64) -> Self {
-        let entries_per_page = storage::Page::max_size() as u64 / entry_size;
+        // 8 + 8 + bitmap:((entry_num * 1 + 7) / 8) + entry_num * entry_size <= page_size
+        let mut entry_num = 0;
+        let mut left = 16 + (entry_num + 7) / 8 + entry_num * entry_size;
+        while left < storage::Page::max_size() as u64 {
+            entry_num += 1;
+            left = 16 + (entry_num + 7) / 8 + entry_num * entry_size;
+        }
+        let entries_per_page = entry_num - 1;
         Allocator {
             begin_with,
             entry_size,

@@ -100,7 +100,7 @@ impl WAL {
         })
     }
     fn align_page_num(
-        num: u64,
+        num: i64,
         table_id: &u64,
         append_page: &mut impl FnMut(u64) -> RsqlResult<u64>,
         trunc_page: &mut impl FnMut(u64) -> RsqlResult<()>,
@@ -110,8 +110,8 @@ impl WAL {
             Some(idx) => idx as i64,
             None => -1,
         };
-        while max_page != num as i64 {
-            if max_page < num as i64 {
+        while max_page != num {
+            if max_page < num {
                 // if too short, append pages until enough
                 append_page(*table_id)?;
                 max_page += 1;
@@ -204,7 +204,7 @@ impl WAL {
                     if redo_tnx_ids.contains(tnx_id) {
                         let max_page = max_page_idx(*table_id)?;
                         if max_page.is_none() || *page_id > max_page.unwrap() {
-                            Self::align_page_num(*page_id, table_id, append_page, trunc_page, max_page_idx)?;
+                            Self::align_page_num(*page_id as i64, table_id, append_page, trunc_page, max_page_idx)?;
                         }
                         update_page(*table_id, *page_id, *offset, *len, &new_data)?;
                         recover_num += 1;
@@ -212,14 +212,15 @@ impl WAL {
                 },
                 WALEntry::NewPage { tnx_id, table_id, data, page_id } => {
                     if redo_tnx_ids.contains(tnx_id) {
-                        Self::align_page_num(*page_id, table_id, append_page, trunc_page, max_page_idx)?;
+                        Self::align_page_num(*page_id as i64, table_id, append_page, trunc_page, max_page_idx)?;
                         write_page(*table_id, *page_id, &data)?;
                         recover_num += 1;
                     }
                 },
                 WALEntry::DeletePage { tnx_id, table_id, page_id, .. } => {
+                    let page_id = *page_id as i64;
                     if redo_tnx_ids.contains(tnx_id) {
-                        Self::align_page_num(*page_id - 1, table_id, append_page, trunc_page, max_page_idx)?;
+                        Self::align_page_num(page_id - 1, table_id, append_page, trunc_page, max_page_idx)?;
                         recover_num += 1;
                     }
                 },
@@ -233,7 +234,7 @@ impl WAL {
                     if undo_tnx_ids.contains(tnx_id) {
                         let max_page = max_page_idx(*table_id)?;
                         if max_page.is_none() || *page_id > max_page.unwrap() {
-                            Self::align_page_num(*page_id, table_id, append_page, trunc_page, max_page_idx)?;
+                            Self::align_page_num(*page_id as i64, table_id, append_page, trunc_page, max_page_idx)?;
                         }
                         update_page(*table_id, *page_id, *offset, *len, &old_data)?;
                         recover_num += 1;
@@ -241,13 +242,13 @@ impl WAL {
                 },
                 WALEntry::NewPage { tnx_id, table_id, page_id, .. } => {
                     if undo_tnx_ids.contains(tnx_id) {
-                        Self::align_page_num(*page_id - 1, table_id, append_page, trunc_page, max_page_idx)?;
+                        Self::align_page_num(*page_id as i64 - 1, table_id, append_page, trunc_page, max_page_idx)?;
                         recover_num += 1;
                     }
                 },
                 WALEntry::DeletePage { tnx_id, table_id, page_id, old_data } => {
                     if undo_tnx_ids.contains(tnx_id) {
-                        Self::align_page_num(*page_id, table_id, append_page, trunc_page, max_page_idx)?;
+                        Self::align_page_num(*page_id as i64, table_id, append_page, trunc_page, max_page_idx)?;
                         write_page(*table_id, *page_id, &old_data)?;
                         recover_num += 1;
                     }
@@ -497,15 +498,15 @@ impl WAL {
                 WALEntry::UpdatePage { table_id, page_id, offset, len, old_data, .. } => {
                     let max_page = max_page_idx(*table_id)?;
                     if max_page.is_none() || *page_id > max_page.unwrap() {
-                        Self::align_page_num(*page_id, table_id, append_page, trunc_page, max_page_idx)?;
+                        Self::align_page_num(*page_id as i64, table_id, append_page, trunc_page, max_page_idx)?;
                     }
                     update_page(*table_id, *page_id, *offset, *len, &old_data)?;
                 },
                 WALEntry::NewPage { table_id, page_id, .. } => {
-                    Self::align_page_num(*page_id - 1, table_id, append_page, trunc_page, max_page_idx)?;
+                    Self::align_page_num(*page_id as i64 - 1, table_id, append_page, trunc_page, max_page_idx)?;
                 },
                 WALEntry::DeletePage { table_id, page_id, old_data, .. } => {
-                    Self::align_page_num(*page_id, table_id, append_page, trunc_page, max_page_idx)?;
+                    Self::align_page_num(*page_id as i64, table_id, append_page, trunc_page, max_page_idx)?;
                     write_page(*table_id, *page_id, &old_data)?;
                 },
                 _ => {},
