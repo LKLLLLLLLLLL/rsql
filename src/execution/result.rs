@@ -31,7 +31,7 @@ pub enum MiddleResult {
 impl MiddleResult {
     pub fn to_exec_result(&self) -> RsqlResult<ExecutionResult> {
         match self {
-            MiddleResult::Query{cols, rows} => Ok(ExecutionResult::Query{cols: cols.0.clone(), rows: rows.clone()}),
+            MiddleResult::Query{cols, rows} => Ok(ExecutionResult::Query{cols: cols.clone(), rows: rows.clone()}),
             MiddleResult::Mutation(msg) => Ok(ExecutionResult::Mutation(msg.clone())),
             _ => Err(RsqlError::ExecutionError(format!("unexpected middle result")))
         }
@@ -54,7 +54,7 @@ pub enum ExecutionResult {
     Ddl(String), // create, drop
     Dcl(String), // users 
     Query {
-        cols: Vec<String>,
+        cols: (Vec<String>, Vec<ColType>),
         rows: Vec<Vec<DataItem>>, // query result
     },
     Mutation(String), // update, delete, insert
