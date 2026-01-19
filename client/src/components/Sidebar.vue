@@ -1,55 +1,117 @@
-<!-- Sidebar.vue -->
 <template>
   <div class="sidebar">
     <div class="sidebar-header">
-      <h2>Database Management</h2>
+      <div class="header-icon">
+        <Icon :path="mdiDatabase" size="24" />
+      </div>
+      <div class="header-content">
+        <h2>Database Management</h2>
+        <p class="header-subtitle">Manage your RSQL databases</p>
+      </div>
     </div>
-    <div class="tables-buttons">
-      <div class="tables-btn create" :class="{ active: activeButton === 'create' }" @click="emit('create')">
-        <Icon :path="mdiTablePlus" size="18" />
-        <span>Create New Table</span>
+    
+    <div class="functions-section">
+      <div class="section-header">
+        <h3>FUNCTIONS</h3>
       </div>
-      <div class="tables-btn rename" :class="{ active: activeButton === 'rename' }" @click="emit('rename')">
-        <Icon :path="mdiTableEdit" size="18" />
-        <span>Rename Table</span>
-      </div>
-      <div class="tables-btn drop" :class="{ active: activeButton === 'drop' }" @click="emit('drop')">
-        <Icon :path="mdiTableRemove" size="18" />
-        <span>Drop Table</span>
-      </div>
-      <div class="tables-btn terminal" :class="{ active: activeButton === 'terminal' }" @click="emit('terminal')">
-        <Icon :path="mdiConsoleLine" size="18" />
-        <span>Open Terminal</span>
+      <div class="tables-buttons">
+        <div 
+          class="tables-btn create" 
+          :class="{ active: activeButton === 'create', hovered: hoveredButton === 'create' }" 
+          @click="emit('create')"
+          @mouseenter="hoveredButton = 'create'"
+          @mouseleave="hoveredButton = ''"
+        >
+          <div class="btn-icon">
+            <Icon :path="mdiTablePlus" size="18" />
+          </div>
+          <span>Create New Table</span>
+        </div>
+        <div 
+          class="tables-btn rename" 
+          :class="{ active: activeButton === 'rename', hovered: hoveredButton === 'rename' }" 
+          @click="emit('rename')"
+          @mouseenter="hoveredButton = 'rename'"
+          @mouseleave="hoveredButton = ''"
+        >
+          <div class="btn-icon">
+            <Icon :path="mdiTableEdit" size="18" />
+          </div>
+          <span>Rename Table</span>
+        </div>
+        <div 
+          class="tables-btn drop" 
+          :class="{ active: activeButton === 'drop', hovered: hoveredButton === 'drop' }" 
+          @click="emit('drop')"
+          @mouseenter="hoveredButton = 'drop'"
+          @mouseleave="hoveredButton = ''"
+        >
+          <div class="btn-icon">
+            <Icon :path="mdiTableRemove" size="18" />
+          </div>
+          <span>Drop Table</span>
+        </div>
+        <div 
+          class="tables-btn terminal" 
+          :class="{ active: activeButton === 'terminal', hovered: hoveredButton === 'terminal' }" 
+          @click="emit('terminal')"
+          @mouseenter="hoveredButton = 'terminal'"
+          @mouseleave="hoveredButton = ''"
+        >
+          <div class="btn-icon">
+            <Icon :path="mdiConsoleLine" size="18" />
+          </div>
+          <span>Open Terminal</span>
+        </div>
       </div>
     </div>
 
     <div class="tables-list">
-      <h3>Table List</h3>
-      <div v-for="table in tables" :key="table" class="table-item" :class="{ active: currentTable === table }">
-        <span @click="emit('select-table', table)">{{ table }}</span>
-        <button v-if="isDropMode" class="table-delete-btn" @click.stop="emit('delete-table', table)">
-          <Icon :path="mdiTrashCanOutline" size="14" />
-          删除
-        </button>
+      <div class="list-header">
+        <h3>Table List</h3>
+        <span class="table-count">{{ tables.length }} tables</span>
+      </div>
+      <div 
+        v-for="table in tables" 
+        :key="table" 
+        class="table-item" 
+        :class="{ active: currentTable === table, hovered: hoveredTable === table }"
+        @mouseenter="hoveredTable = table"
+        @mouseleave="hoveredTable = ''"
+      >
+        <div class="table-content">
+          <div class="table-icon">
+            <Icon :path="mdiTable" size="16" />
+          </div>
+          <span class="table-name" @click="emit('select-table', table)">{{ table }}</span>
+          <button v-if="isDropMode" class="table-delete-btn" @click.stop="emit('delete-table', table)">
+            <Icon :path="mdiTrashCanOutline" size="14" />
+          </button>
+        </div>
       </div>
     </div>
 
     <div class="sidebar-footer">
-      <p>Total <span id="tables-counts">{{ tables.length }}</span> tables</p>
-      <p>Click table name to view data</p>
+      <div class="footer-content">
+        <Icon :path="mdiInformationOutline" size="16" />
+        <span>Click table name to view data</span>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { defineProps, defineEmits } from 'vue'
+import { defineProps, defineEmits, ref } from 'vue'
 import Icon from './Icon.vue'
 import {
+  mdiDatabase,
   mdiConsoleLine,
   mdiTableEdit,
   mdiTablePlus,
   mdiTableRemove,
   mdiTrashCanOutline,
+  mdiTable,
+  mdiInformationOutline,
 } from '@mdi/js'
 
 const props = defineProps({
@@ -60,127 +122,330 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['create', 'rename', 'drop', 'terminal', 'select-table', 'delete-table'])
+
+const hoveredButton = ref('')
+const hoveredTable = ref('')
 </script>
 
-<style scoped>
+<style scoped lang="scss">
+/* 使用系统字体栈，保证字体一致性 */
 .sidebar {
-  width: 20%;
-  background-color: #2c3e50;
-  color: white;
+  width: 280px;
+  background: #1e293b;
+  color: #cbd5e1;
   display: flex;
   flex-direction: column;
-  box-shadow: 3px 0 15px rgba(0, 0, 0, 0.1);
+  border-right: 1px solid #334155;
+  height: 100vh;
+  position: sticky;
+  top: 0;
   z-index: 10;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  box-sizing: border-box;
 }
 
 .sidebar-header {
-  padding: 25px 20px;
-  background-color: #1a252f;
-  border-bottom: 1px solid #34495e;
+  padding: 24px 20px;
+  background: #0f172a;
+  color: #f1f5f9;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  position: relative;
+  overflow: hidden;
+  border-bottom: 1px solid #334155;
+}
+
+.header-icon {
+  padding: 10px;
+  background: rgba(99, 102, 241, 0.1);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.header-content {
+  flex: 1;
 }
 
 .sidebar-header h2 {
-  font-size: 1.5rem;
-  display: flex;
-  align-items: center;
-  gap: 10px;
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin: 0 0 4px 0;
+  color: #e2e8f0;
+  letter-spacing: -0.025em;
+}
+
+.header-subtitle {
+  font-size: 0.85rem;
+  color: #94a3b8;
+  margin: 0;
+  font-weight: 400;
+}
+
+.functions-section {
+  padding: 20px 0;
+  background: #0f172a;
+  border-bottom: 1px solid #334155;
+  border-top: 1px solid #334155;
+}
+
+.section-header {
+  padding: 0 20px 12px;
+  margin-bottom: 4px;
+}
+
+.section-header h3 {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #64748b;
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
 .tables-buttons {
-  border-bottom: 1px solid #34495e;
+  padding: 0 16px;
   user-select: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .tables-btn {
-  padding: 15px 20px;
+  padding: 14px 16px;
   cursor: pointer;
-  border-bottom: 1px solid #34495e;
-  font-weight: 600;
+  border-radius: 6px;
+  font-weight: 500;
   transition: all 0.2s ease;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
+  color: #94a3b8;
+  background: transparent; /* 默认透明背景 */
+  border: 1px solid transparent;
+  position: relative;
+  overflow: hidden;
+}
+
+.tables-btn::before {
+  display: none; /* 移除左侧颜色条 */
 }
 
 .tables-btn:hover {
-  border-left: 4px solid #2c3e50;
+  background: #334155;
+  color: #e2e8f0;
+  border-color: #475569;
 }
 
-.tables-btn.create,
-.tables-btn.drop,
-.tables-btn.rename,
-.tables-btn.terminal {
-  background-color: #3c8dc3;
-  color: white;
+.tables-btn.hovered {
+  background: #334155;
+  color: #e2e8f0;
+  border-color: #475569;
 }
 
 .tables-btn.active {
-  background-color: #f08080;
-  color: white;
+  background: #334155;
+  color: #f8fafc;
+  border-color: #64748b;
+  box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.3);
+}
+
+.tables-btn.active:hover,
+.tables-btn.active.hovered {
+  background: #475569;
+  border-color: #94a3b8;
+}
+
+.btn-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  background: rgba(148, 163, 184, 0.1);
+  color: #94a3b8;
+  transition: all 0.2s ease;
+}
+
+.tables-btn:hover .btn-icon,
+.tables-btn.hovered .btn-icon,
+.tables-btn.active .btn-icon {
+  background: #64748b;
+  color: #f8fafc;
 }
 
 .tables-list {
-  padding: 20px 0;
+  padding: 20px;
   overflow-y: auto;
   flex-grow: 1;
+  background: #0f172a;
 }
 
-.tables-list h3 {
-  padding: 0 20px 15px;
-  font-size: 1rem;
-  font-weight: 500;
-  color: #bdc3c7;
-  border-bottom: 1px solid #34495e;
-  margin-bottom: 15px;
-}
-
-.table-item {
-  padding: 15px 20px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  border-left: 4px solid transparent;
+.list-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  margin-bottom: 16px;
+  padding: 0 4px;
+}
+
+.tables-list h3 {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #64748b;
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.table-count {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: #64748b;
+  background: #1e293b;
+  padding: 4px 10px;
+  border-radius: 20px;
+}
+
+.table-item {
+  height: 48px;
+  min-height: 48px;
+  padding: 0 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
   user-select: none;
+  position: relative;
+  background: transparent; /* 默认透明背景 */
+  color: #cbd5e1;
+  border-radius: 6px;
+  margin-bottom: 6px;
+  border: 1px solid transparent;
 }
 
 .table-item:hover {
-  background-color: #34495e;
-  border-left: 4px solid #3498db;
+  background: #334155;
+  color: #e2e8f0;
+  border-color: #475569;
+}
+
+.table-item.hovered {
+  background: #334155;
+  color: #e2e8f0;
+  border-color: #475569;
 }
 
 .table-item.active {
-  background-color: #34495e;
-  border-left: 4px solid #3498db;
-  color: #3498db;
+  background: #334155;
+  color: #f8fafc;
+  font-weight: 600;
+  border: 1px solid #64748b;
+  box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.3);
+}
+
+.table-item.active:hover,
+.table-item.active.hovered {
+  background: #475569;
+  border-color: #94a3b8;
+}
+
+.table-content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  height: 100%;
+}
+
+.table-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  background: rgba(148, 163, 184, 0.1);
+  color: #94a3b8;
+  transition: all 0.2s ease;
+}
+
+.table-item:hover .table-icon,
+.table-item.hovered .table-icon,
+.table-item.active .table-icon {
+  background: #64748b;
+  color: #f8fafc;
+}
+
+.table-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.95rem;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  padding-left: 8px;
 }
 
 .table-delete-btn {
-  background-color: #e74c3c;
-  color: #fff;
-  border: none;
-  border-radius: 12px;
-  padding: 4px 10px;
-  font-size: 12px;
+  background: #3f3f46;
+  color: #f43f5e;
+  border: 1px solid #52525b;
+  border-radius: 4px;
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  min-height: 30px;
   cursor: pointer;
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 6px;
+  justify-content: center;
+  transition: all 0.2s ease;
+  margin-left: 8px;
+  padding: 0;
 }
 
 .table-delete-btn:hover {
-  background-color: #c0392b;
+  background: #52525b;
+  color: #fb7185;
+  border-color: #71717a;
 }
 
 .sidebar-footer {
-  padding: 20px;
-  border-top: 1px solid #34495e;
-  font-size: 0.8rem;
-  color: #7f8c8d;
+  padding: 16px 20px;
+  border-top: 1px solid #334155;
+  background: #0f172a;
 }
 
-.sidebar-footer p + p {
-  margin-top: 5px;
+.footer-content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8rem;
+  color: #64748b;
+}
+
+/* 滚动条样式 */
+.tables-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.tables-list::-webkit-scrollbar-track {
+  background: #0f172a;
+  border-radius: 3px;
+}
+
+.tables-list::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 3px;
+}
+
+.tables-list::-webkit-scrollbar-thumb:hover {
+  background: #475569;
 }
 </style>
