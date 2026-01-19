@@ -135,11 +135,11 @@ impl Allocator {
         let previous_page = self.entry_page_list_tail(storage)?;
         if previous_page == 0 {
             // first entry page
-            self.set_first_free_entry_page(page_idx, storage, 0)?; // tnx_id 0 for system operations
+            self.set_first_free_entry_page(page_idx, storage, tnx_id)?;
         } else {
             let mut prev_page_data = storage.read(previous_page)?;
             EntryPage::set_next_free_page(&mut prev_page_data, page_idx);
-            storage.write(0, previous_page, &prev_page_data)?; // tnx_id 0 for system operations
+            storage.write(tnx_id, previous_page, &prev_page_data)?;
         }
         // write new page to disk
         storage.write(tnx_id, page_idx, &page)?;

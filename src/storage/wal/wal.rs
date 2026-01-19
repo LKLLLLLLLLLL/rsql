@@ -1,4 +1,5 @@
 use core::panic;
+use std::cmp::max;
 use std::collections::HashSet;
 use std::fs;
 use std::io::Seek;
@@ -194,7 +195,9 @@ impl WAL {
             match entry {
                 WALEntry::UpdatePage { tnx_id, table_id, page_id, offset, len, new_data, .. } => {
                     if redo_tnx_ids.contains(tnx_id) {
-                        Self::align_page_num(*page_id, table_id, append_page, trunc_page, max_page_idx)?;
+                        if *page_id > max_page_idx(*table_id)? {
+                            Self::align_page_num(*page_id, table_id, append_page, trunc_page, max_page_idx)?;
+                        }
                         update_page(*table_id, *page_id, *offset, *len, &new_data)?;
                         recover_num += 1;
                     }
@@ -220,7 +223,9 @@ impl WAL {
             match entry {
                 WALEntry::UpdatePage { tnx_id, table_id, page_id, offset, len, old_data, .. } => {
                     if undo_tnx_ids.contains(tnx_id) {
-                        Self::align_page_num(*page_id, table_id, append_page, trunc_page, max_page_idx)?;
+                        if *page_id > max_page_idx(*table_id)? {
+                            Self::align_page_num(*page_id, table_id, append_page, trunc_page, max_page_idx)?;
+                        }
                         update_page(*table_id, *page_id, *offset, *len, &old_data)?;
                         recover_num += 1;
                     }

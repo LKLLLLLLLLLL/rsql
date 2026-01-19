@@ -7,7 +7,7 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::collections::HashMap;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Page {
     pub data: Vec<u8>,
     need_flush: bool,
@@ -83,8 +83,9 @@ impl StorageManager {
         let max_page_index = self.max_page_index();
         match max_page_index {
             Some(max_index) if page_index <= max_index => Ok(()),
-            _ => Err(RsqlError::StorageError(
-                "page index out of bounds".to_string()
+            _ => Err(RsqlError::StorageError(format!(
+                "page index out of bounds, {} > max page index {:?}",
+                page_index, max_page_index)
             )),
         }
     }
