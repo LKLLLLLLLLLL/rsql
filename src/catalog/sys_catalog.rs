@@ -65,6 +65,14 @@ fn sys_table_schema() -> TableSchema {
 
 fn sys_column_schema() -> TableSchema {
     let columns = vec![
+        TableColumn {
+            name: "column_id".to_string(),
+            data_type: super::table_schema::ColType::Integer,
+            pk: true,
+            nullable: false,
+            unique: true,
+            index: true,
+        },
         TableColumn { // foreign key to sys_table.table_id
             name: "table_id".to_string(),
             data_type: super::table_schema::ColType::Integer,
@@ -76,7 +84,7 @@ fn sys_column_schema() -> TableSchema {
         TableColumn {
             name: "column_name".to_string(),
             data_type: super::table_schema::ColType::Chars(MAX_COL_NAME_SIZE),
-            pk: true,
+            pk: false,
             nullable: false,
             unique: false,
             index: true,
@@ -220,15 +228,8 @@ static SYS_TABLE_INSTANCE: OnceLock<SysCatalog> = OnceLock::new();
 /// System Catalog
 /// Some special tables to store metadata about database objects
 /// Singleton struct
-pub struct SysCatalog {
-    // The consistence is guaranteed by TnxManager locks.
-    // This Mutex is only used to protect concurrent access.
-    // table: Mutex<Table>,
-    // column: Mutex<Table>,
-    // index: Mutex<Table>,
-    // sequence: Mutex<Table>,
-    // user: Mutex<Table>,
-}
+pub struct SysCatalog {} // Sys tables are all processed as common tables
+
 
 impl SysCatalog {
     pub fn global() -> &'static SysCatalog {
@@ -285,6 +286,7 @@ impl SysCatalog {
             )?;
         }
         // sys_column
+        let mut sequence_num = 0;
         let column_schema = sys_column_schema();
         let mut column = Table::create(SYS_COLUMN_ID, column_schema, tnx_id, true)?;
         // init sys table columns
@@ -310,8 +312,11 @@ impl SysCatalog {
                     super::table_schema::ColType::VarChar(size) => *size as i64,
                     _ => 0,
                 };
+                let col_id = sequence_num;
+                sequence_num += 1;
                 column.insert_row(
                     vec![
+                        DataItem::Integer(col_id as i64),
                         DataItem::Integer(*table_id as i64),
                         DataItem::Chars { 
                             len: MAX_COL_NAME_SIZE as u64, 
@@ -348,6 +353,16 @@ impl SysCatalog {
             ],
             tnx_id
         )?;
+        sequence.insert_row(
+            vec![
+                DataItem::Chars { 
+                    len: MAX_COL_NAME_SIZE as u64, 
+                    value: "column_id".to_string(), 
+                },
+                DataItem::Integer(sequence_num as i64),
+            ], 
+            tnx_id,
+        )?;
         // sys_user
         let user_schema = sys_user_schema();
         let mut user = Table::create(SYS_USER_ID, user_schema, tnx_id, true)?;
@@ -374,30 +389,9 @@ impl SysCatalog {
     /// Construct syscatalog
     /// This method can only called when the database has been initialized
     fn new() -> Self {
-        // // sys_table
-        // let table_schema = sys_table_schema();
-        // let table = Table::from(SYS_TABLE_ID, table_schema, true).unwrap();
-        // // sys_column
-        // let column_schema = sys_column_schema();
-        // let column = Table::from(SYS_COLUMN_ID, column_schema, true).unwrap();
-        // // sys_index
-        // let index_schema = sys_index_schema();
-        // let index = Table::from(SYS_INDEX_ID, index_schema, true).unwrap();
-        // // sys_sequence
-        // let sequence_schema = sys_sequence_schema();
-        // let sequence = Table::from(SYS_SEQUENCE_ID, sequence_schema, true).unwrap();
-        // // sys_user
-        // let user_schema = sys_user_schema();
-        // let user = Table::from(SYS_USER_ID, user_schema, true).unwrap();
-        // SysCatalog {
-        //     table: Mutex::new(table),
-        //     column: Mutex::new(column),
-        //     index: Mutex::new(index),
-        //     sequence: Mutex::new(sequence),
-        //     user: Mutex::new(user),
-        // }
         SysCatalog {}
     }
+
     // pub fn get_storage(&self, table_id: u64) -> Arc<Mutex<StorageManager>> {
     //     match table_id {
     //         SYS_TABLE_ID => self.table.lock().unwrap().get_storage().get_storage(),
@@ -427,13 +421,13 @@ impl SysCatalog {
         let mut columns = vec![];
         for row in column_rows {
             let row = row.unwrap();
-            let DataItem::Chars{ len: _, value: name} = &row[1] else {
+            let DataItem::Chars{ len: _, value: name} = &row[2] else {
                 panic!("column_name column is not Chars");
             };
-            let DataItem::Integer(data_type) = &row[2] else {
+            let DataItem::Integer(data_type) = &row[3] else {
                 panic!("data_type column is not Integer");
             };
-            let DataItem::Integer(extra) = &row[3] else {
+            let DataItem::Integer(extra) = &row[4] else {
                 panic!("extra column is not Integer");
             };
             let data_type = match *data_type as u8 {
@@ -444,16 +438,16 @@ impl SysCatalog {
                 4 => super::table_schema::ColType::Bool,
                 _ => panic!("Invalid column type in sys_column"),
             };
-            let DataItem::Bool(pk) = &row[4] else {
+            let DataItem::Bool(pk) = &row[5] else {
                 panic!("is_primary column is not Bool");
             };
-            let DataItem::Bool(nullable) = &row[5] else {
+            let DataItem::Bool(nullable) = &row[6] else {
                 panic!("is_nullable column is not Bool");
             };
-            let DataItem::Bool(index) = &row[6] else {
+            let DataItem::Bool(index) = &row[7] else {
                 panic!("is_indexed column is not Bool");
             };
-            let DataItem::Bool(unique) = &row[7] else {
+            let DataItem::Bool(unique) = &row[8] else {
                 panic!("is_unique column is not Bool");
             };
             columns.push(TableColumn {
@@ -590,6 +584,7 @@ impl SysCatalog {
             };
             column.insert_row(
                 vec![
+                    DataItem::Integer(self.get_autoincrement(tnx_id, "column_id")?.unwrap() as i64),
                     DataItem::Integer(table_id as i64),
                     DataItem::Chars { 
                         len: MAX_COL_NAME_SIZE as u64, 
@@ -647,7 +642,7 @@ impl SysCatalog {
             .collect();
         for row_opt in column_rows {
             let row = row_opt?;
-            let index = row[1].clone(); // column_name is the second column
+            let index = row[0].clone(); // column_name is the second column
             column.delete_row(&index, tnx_id)?;
         }
         // delete from sys_index
@@ -728,13 +723,13 @@ impl SysCatalog {
         let mut found = false;
         for row in column_rows {
             let row = row;
-            let DataItem::Chars{ len: _, value: name} = &row[1] else {
+            let DataItem::Chars{ len: _, value: name} = &row[2] else {
                 panic!("column_name column is not Chars");
             };
             if name == column_name {
                 // update is_indexed to true
                 column.update_row(
-                    &row[1],
+                    &row[0],
                     vec![
                         row[0].clone(),
                         row[1].clone(),
@@ -742,6 +737,7 @@ impl SysCatalog {
                         row[3].clone(),
                         row[4].clone(),
                         row[5].clone(),
+                        row[6].clone(),
                         DataItem::Bool(true), // set is_indexed to true
                         DataItem::Bool(unique), // set is_unique
                     ],

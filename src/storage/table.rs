@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 use serde::Serialize;
+use tracing::debug;
 
 use super::storage::Page;
 use crate::config;
@@ -206,6 +207,43 @@ impl Table {
             indexes,
             allocator,
         })
+    }
+    pub fn sync_header(&mut self, tnx_id: u64) -> RsqlResult<()> {
+        let mut page_data: Vec<u8> = vec![0u8; Page::max_size()];
+        
+        // 1. Magic & Version
+        page_data[0..4].copy_from_slice(&HEADER_MAGIC.to_le_bytes());
+        page_data[4..8].copy_from_slice(&1u32.to_le_bytes());
+        
+        // 2. Indexes
+        let indexes_count = self.indexes.len() as u64;
+        let mut offset = 8;
+        page_data[offset..offset+8].copy_from_slice(&indexes_count.to_le_bytes());
+        offset += 8;
+        
+        for (col_name, btree_index) in &self.indexes {
+            let mut col_name_bytes = [0u8; 64];
+            let name_bytes = col_name.as_bytes();
+            let len = name_bytes.len().min(64);
+            col_name_bytes[..len].copy_from_slice(&name_bytes[..len]);
+            
+            page_data[offset..offset+64].copy_from_slice(&col_name_bytes);
+            offset += 64;
+            page_data[offset..offset+8].copy_from_slice(&btree_index.root_page_num().to_le_bytes());
+            offset += 8;
+        }
+        
+        // 3. Allocator
+        self.allocator.reset_begin_with(offset as u64);
+        let allocator_bytes = self.allocator.to_bytes();
+        page_data[offset..offset+allocator_bytes.len()].copy_from_slice(&allocator_bytes);
+
+        // 4. write back to Page 0
+        let mut page = Page::new();
+        page.data = page_data;
+        self.storage.write(tnx_id, 0, &page)?;
+        
+        Ok(())
     }
     /// Create a new table with given schema
     pub fn create(id: u64, schema: TableSchema, tnx_id: u64, is_sys: bool) -> RsqlResult<Self> { 
@@ -458,7 +496,7 @@ impl Table {
         }
         Ok(())
     }
-    pub fn creat_index(&mut self, col_name: &str, tnx_id: u64) -> RsqlResult<()> {
+    pub fn create_index(&mut self, col_name: &str, tnx_id: u64) -> RsqlResult<()> {
         // check if column exists and is already indexed
         let col = self.schema.get_columns().iter().find(|col| col.name == col_name);
         if col.is_none() {
@@ -500,6 +538,8 @@ impl Table {
             )?;
         };
         self.indexes.insert(col_name.to_string(), btree_index);
+        // sync header
+        self.sync_header(tnx_id)?;
         Ok(())
     }
     pub fn drop_index(&mut self, col_name: &str, tnx_id: u64) -> RsqlResult<()> {
@@ -531,6 +571,8 @@ impl Table {
         // remove index
         let index = self.indexes.remove(col_name).unwrap();
         index.drop(tnx_id, &mut self.storage)?;
+        // sync header
+        self.sync_header(tnx_id)?;
         Ok(())
     }
     pub fn get_storage(&mut self) -> &mut ConsistStorageEngine {
@@ -817,7 +859,7 @@ mod tests {
         }
 
         // create index on `age`
-        table.creat_index("age", tnx_id).expect("Failed to create index");
+        table.create_index("age", tnx_id).expect("Failed to create index");
         assert!(table.indexes.contains_key("age"));
 
         // range query on age [20,40] => ages 20,30,40 -> 3 rows

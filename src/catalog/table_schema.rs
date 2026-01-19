@@ -214,7 +214,7 @@ impl TableSchema {
                 return Err(RsqlError::InvalidInput(format!("Unique column {} must be indexed", col.name)));
             }
         }
-        // check if primary key columns are indexed and not null
+        // check if primary key columns are indexed and not null and unique
         for col in &columns {
             if col.pk {
                 if !col.index {
@@ -222,6 +222,9 @@ impl TableSchema {
                 }
                 if col.nullable {
                     return Err(RsqlError::InvalidInput(format!("Primary key column {} cannot be nullable", col.name)));
+                }
+                if !col.unique {
+                    return Err(RsqlError::InvalidInput(format!("Primary key column {} must be unique", col.name)));
                 }
             }
         }
