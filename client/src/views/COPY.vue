@@ -379,8 +379,16 @@ const dropMode = ref(false)
 const dropModalVisible = ref(false)
 const pendingDropTable = ref('')
 
-// WebSocket 相关状态
-const wsUrl = 'ws://127.0.0.1:4455/ws'
+// WebSocket 相关状态（与页面同源，避免跨域端口问题）
+const wsUrl = (() => {
+    const username = 'root'
+    const password = 'password'
+    if (typeof window === 'undefined') {
+        return `ws://127.0.0.1:4456/ws?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`
+    }
+    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
+    return `${protocol}://${window.location.host}/ws?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`
+})()
 const wsRef = ref(null)
 const connected = ref(false)
 const codeInput = ref('')
