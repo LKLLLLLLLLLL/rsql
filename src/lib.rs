@@ -125,6 +125,6 @@ pub fn init_database() -> RsqlResult<()> {
 
 pub fn run() {
     init_log();
-    init_database();
+    init_database().expect("Failed to initialize database");
     server::daemon::daemon();
 }

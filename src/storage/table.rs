@@ -82,7 +82,7 @@ impl Table {
     }
 
     /// Helper function to store a new VarChar data item
-    fn store_varchar(&mut self, varchar: DataItem, tnx_id: u64) -> RsqlResult<DataItem> {
+    fn store_varchar(&mut self, varchar: DataItem, tnx_id: u64, max_len: u64) -> RsqlResult<DataItem> {
         let DataItem::VarChar { head, value } = varchar else {
             panic!("new_varchar called with non-varchar data item");
         };
@@ -95,7 +95,7 @@ impl Table {
         self.storage.write_bytes(tnx_id, heap_page_idx, heap_offset as usize, value.as_bytes())?;
         // write ptr in head
         let new_head = VarCharHead {
-            max_len: head.max_len,
+            max_len: max_len,
             len: heap_len,
             page_ptr: Some(pack_ptr(heap_page_idx, heap_offset)),
         };
@@ -385,15 +385,20 @@ impl Table {
         // 2. allocate entry
         let (entry_page_idx, entry_offset) = self.allocator.alloc_entry(tnx_id, &mut self.storage)?;
         // 3. store VarChar data if any
-        let data = data.into_iter().map(|item| {
-            if let DataItem::VarChar { .. } = item {
-                self.store_varchar(item, tnx_id)
-            } else {
-                Ok(item)
+        let mut converted_data = data.clone();
+        for (i, dataitem) in data.into_iter().enumerate() {
+            if let DataItem::VarChar { .. } = dataitem {
+                let col = &self.schema.get_columns()[i];
+                let max_len = match &col.data_type {
+                    crate::catalog::table_schema::ColType::VarChar(max_len) => *max_len,
+                    _ => panic!("Column type mismatch for VarChar"),
+                } as u64;
+                let stored_varchar = self.store_varchar(dataitem, tnx_id, max_len)?;
+                converted_data[i] = stored_varchar;
             }
-        }).collect::<RsqlResult<Vec<DataItem>>>()?;
+        }
         // 4. write entry data
-        let entry_bytes = Self::row_to_bytes(&data)?;
+        let entry_bytes = Self::row_to_bytes(&converted_data)?;
         self.storage.write_bytes(tnx_id, entry_page_idx, entry_offset as usize, &entry_bytes)?;
         // 5. write index entries
         for (i, col) in self.schema.get_columns().iter().enumerate() {
@@ -401,7 +406,7 @@ impl Table {
                 let index = self.indexes.get_mut(&col.name).unwrap();
                 index.insert_entry(
                     tnx_id,
-                    data[i].clone(),
+                    converted_data[i].clone(),
                     entry_page_idx,
                     entry_offset,
                     &mut self.storage,
