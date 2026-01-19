@@ -2,7 +2,6 @@ use std::sync::{OnceLock, Mutex};
 use std::time;
 
 use bcrypt::{hash, DEFAULT_COST};
-use rand::seq::index;
 use tracing::info;
 
 use crate::storage::table;
@@ -19,7 +18,7 @@ use crate::config::{
     DEFAULT_PASSWORD,
     DEFAULT_USERNAME,
 };
-use crate::utils::PrivilegeConn;
+use crate::common::PrivilegeConn;
 
 use super::table_schema::TableSchema;
 
@@ -726,6 +725,27 @@ impl SysCatalog {
             }
         };
         Ok(index_name_opt)
+    }
+    pub fn get_index_id(&self, tnx_id: u64, index_name: &str) -> RsqlResult<Option<u64>> {
+        let read_table = vec![SYS_INDEX_ID];
+        TnxManager::global().acquire_read_locks(tnx_id, &read_table)?;
+        let index_guard = self.index.lock().unwrap();
+        let index_item = DataItem::Chars { 
+            len: MAX_COL_NAME_SIZE as u64, 
+            value: index_name.to_string(), 
+        };
+        let key = Some(index_item.clone());
+        let index_row_opt = index_guard
+            .get_rows_by_range_indexed_col("index_name", &key, &key)?
+            .next();
+        if let None = index_row_opt {
+            return Ok(None);
+        };
+        let index_row = index_row_opt.unwrap()?;
+        let DataItem::Integer(table_id) = &index_row[1] else {
+            panic!("table_id column is not Integer");
+        };
+        Ok(Some(*table_id as u64))
     }
 
     pub fn validate_user(

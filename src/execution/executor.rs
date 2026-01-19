@@ -158,6 +158,7 @@ fn execute_inner(sql: &str, connection_id: u64) -> RsqlResult<Vec<ExecutionResul
                     return Err(RsqlError::ExecutionError("No active transaction".to_string()));
                 };
                 let res = execute_dml_plan_node(plan_node, tnx_id, false)?;
+                let res = res.to_exec_result()?;
                 results.push(res);
             },
         }

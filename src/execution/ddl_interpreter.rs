@@ -1,5 +1,3 @@
-use sqlparser::ast::{ColumnDef, DataType, ObjectName};
-
 use crate::catalog::SysCatalog;
 use crate::common::{RsqlResult, RsqlError};
 use crate::sql::plan::{PlanNode};
@@ -7,10 +5,6 @@ use crate::sql::plan::DdlOperation;
 use crate::storage::Table;
 use super::result::{ExecutionResult::{self, Ddl}};
 use tracing::info;
-
-// fn create_table(tnx_id: u64, table_name: &str, columns: &Vec<ColumnDef>) -> RsqlResult<ExecutionResult> {
-//     todo!()
-// }
 
 /// table and index relevant sql statements
 pub fn execute_ddl_plan_node(node: &PlanNode, tnx_id: u64) -> RsqlResult<ExecutionResult> {
@@ -56,7 +50,6 @@ pub fn execute_ddl_plan_node(node: &PlanNode, tnx_id: u64) -> RsqlResult<Executi
             let table_id = SysCatalog::global().get_table_id(tnx_id, table_name)?;
             if table_id.is_none() {
                 if *if_exists {
-                    info!("Table {} does not exist, skipping drop table.", table_name);
                     return Ok(Ddl(format!("Table {} does not exist, skipping drop table.", table_name)));
                 } else {
                     return Err(RsqlError::ExecutionError(format!("Table {} does not exist.", table_name)));
@@ -74,15 +67,19 @@ pub fn execute_ddl_plan_node(node: &PlanNode, tnx_id: u64) -> RsqlResult<Executi
         DdlOperation::CreateIndex {
             index_name,
             table_name,
-            columns,
+            column,
             unique,
-            if_not_exists: bool,
+            if_not_exists,
         } => {
-            if columns.len() != 1 {
-                return Err(RsqlError::InvalidInput("Only single-column index is supported currently.".to_string()));
+            // check if index exists
+            let index_id = SysCatalog::global().get_index_id(tnx_id, index_name)?;
+            if index_id.is_some() {
+                if *if_not_exists {
+                    return Ok(Ddl(format!("Index {} already exists, skipping create index.", index_name)));
+                } else {
+                    return Err(RsqlError::ExecutionError(format!("Index {} already exists.", index_name)));
+                }
             }
-            let column = &columns[0];
-            // get table id
             let table_id = SysCatalog::global().get_table_id(tnx_id, table_name)?;
             if table_id.is_none() {
                 return Err(RsqlError::ExecutionError(format!("Table {} does not exist.", table_name)));
@@ -130,8 +127,5 @@ pub fn execute_ddl_plan_node(node: &PlanNode, tnx_id: u64) -> RsqlResult<Executi
             )?;
             Ok(Ddl(format!("Index {} created successfully on table {}.", index_name, table_name)))
         },
-        _ => {
-            panic!("Unsupported DDL operation")
-        }
     }
 }
