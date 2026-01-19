@@ -23,10 +23,13 @@
         <div v-else-if="codeResults.length === 0">暂无响应</div>
         <div v-else>
           <div v-for="(item, idx) in codeResults" :key="idx" class="codeArea-result-item">
-            <div>时间: {{ new Date(item.timestamp * 1000).toLocaleString() }} | Conn: {{ item.connection_id }}</div>
-            <div v-if="item.success">✅ {{ item.rayon_response.response_content }}</div>
-            <div v-else>❌ {{ item.rayon_response.error || '未知错误' }}</div>
-            <div>耗时: {{ item.rayon_response.execution_time }} ms</div>
+            <div class="result-line">
+              <span class="result-prompt">{{ formatTime(item.timestamp) }} USER占位 % </span>
+              <span class="result-content" :class="{ 'result-error': !item.success }">
+                {{ formatResultContent(item) }}
+              </span>
+            </div>
+            <div class="result-timing">耗时: {{ item.rayon_response.execution_time }} ms</div>
           </div>
         </div>
       </div>
@@ -121,6 +124,41 @@ function sendSqlStatement(sql, actionLabel = 'SQL') {
   codeInput.value = trimmed
 }
 
+function formatTime(timestamp) {
+  const date = new Date(timestamp * 1000)
+  const hours = String(date.getHours()).padStart(2, '0')
+  const minutes = String(date.getMinutes()).padStart(2, '0')
+  const seconds = String(date.getSeconds()).padStart(2, '0')
+  return `${hours}:${minutes}:${seconds}`
+}
+
+function formatResultContent(item) {
+  // 特殊处理：WebSocket连接成功
+  if (item.rayon_response.error === 'Websocket Connection Established' && 
+      Array.isArray(item.rayon_response.response_content) && 
+      item.rayon_response.response_content.length === 0) {
+    return 'WebSocket连接成功'
+  }
+  if (item.rayon_response.error === 'Checkpoint Success' && 
+      Array.isArray(item.rayon_response.response_content) && 
+      item.rayon_response.response_content.length === 0) {
+    return 'WebSocket连接正常'
+  }
+  
+  // 正常错误处理
+  if (!item.success) {
+    return item.rayon_response.error || '未知错误'
+  }
+  
+  // 处理响应内容
+  const content = item.rayon_response.response_content
+  if (Array.isArray(content) && content.length === 0) {
+    return '(empty result)'
+  }
+  
+  return content || '(no output)'
+}
+
 onMounted(() => {
   connectWebSocket()
 })
@@ -200,5 +238,34 @@ defineExpose({
   margin-bottom: 12px;
   padding: 8px;
   border-bottom: 1px solid #eee;
+  font-family: 'Courier New', 'Courier', 'Microsoft YaHei', monospace;
+  font-weight: bold;
+}
+
+.result-line {
+  display: flex;
+  align-items: baseline;
+  word-break: break-all;
+}
+
+.result-prompt {
+  color: #666;
+  flex-shrink: 0;
+  margin-right: 8px;
+}
+
+.result-content {
+  color: #333;
+  flex: 1;
+}
+
+.result-content.result-error {
+  color: #d32f2f;
+}
+
+.result-timing {
+  color: #999;
+  font-size: 12px;
+  margin-top: 4px;
 }
 </style>
