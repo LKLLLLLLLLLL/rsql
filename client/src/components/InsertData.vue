@@ -187,18 +187,21 @@ watch(() => props.columns, () => {
 
 <style scoped>
 .insert-operation {
-  display: block;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
 }
 
 .operation-panel {
-  margin-top: 24px;
-  background-color: white;
-  border-radius: 10px;
+  background-color: #ffffff;
+  border-radius: 12px;
+  border: 1px solid #e3e8ef;
   padding: 24px;
-  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
   display: flex;
   flex-direction: column;
   gap: 18px;
+  flex: 1;
+  overflow-y: auto;
 }
 
 .operation-header {
@@ -206,36 +209,47 @@ watch(() => props.columns, () => {
   align-items: center;
   gap: 16px;
   margin-bottom: 8px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #e3e8ef;
 }
 
 .operation-header h4 {
   margin: 0;
   flex-grow: 1;
+  color: #1a1f36;
+  font-size: 1rem;
+}
+
+.operation-header span {
+  color: #3b82f6;
+  font-weight: 600;
 }
 
 .back-btn {
-  padding: 10px 16px;
-  background-color: #95a5a6;
-  color: white;
-  border: none;
+  padding: 8px 16px;
+  background: transparent;
+  color: #6b7280;
+  border: 1px solid #d1d5db;
   border-radius: 6px;
   cursor: pointer;
-  font-weight: 600;
-  font-size: 0.95rem;
-  transition: background-color 0.2s ease;
+  font-weight: 500;
+  font-size: 0.9rem;
+  transition: all 0.2s ease;
   display: flex;
   align-items: center;
   gap: 6px;
 }
 
 .back-btn:hover {
-  background-color: #7f8c8d;
+  background-color: #f3f4f6;
+  color: #1a1f36;
+  border-color: #9ca3af;
 }
 
 .insert-rows-section {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 16px;
 }
 
 .insert-rows-header {
@@ -247,34 +261,45 @@ watch(() => props.columns, () => {
 
 .insert-rows-header h4 {
   margin: 0;
+  color: #1a1f36;
+  font-size: 0.95rem;
+  font-weight: 600;
 }
 
 .add-insert-row-btn {
-  padding: 10px 14px;
-  background-color: #3498db;
+  padding: 8px 16px;
+  background-color: #3b82f6;
   color: white;
   border: none;
   border-radius: 6px;
   cursor: pointer;
-  font-weight: 600;
-  transition: background-color 0.2s ease;
+  font-weight: 500;
+  font-size: 0.9rem;
+  transition: all 0.2s ease;
 }
 
 .add-insert-row-btn:hover {
-  background-color: #217dbb;
+  background-color: #2563eb;
+  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
 }
 
 .insert-rows-list {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
 }
 
 .insert-data-row {
-  background-color: #f8f9fa;
+  background-color: #ffffff;
   padding: 16px;
   border-radius: 8px;
-  border: 1px solid #e1e8f0;
+  border: 1px solid #e3e8ef;
+  transition: all 0.2s ease;
+}
+
+.insert-data-row:hover {
+  border-color: #cbd5e1;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
 }
 
 .insert-row-header {
@@ -283,34 +308,37 @@ watch(() => props.columns, () => {
   align-items: center;
   margin-bottom: 12px;
   padding-bottom: 8px;
-  border-bottom: 1px solid #dee2e6;
+  border-bottom: 1px solid #e3e8ef;
 }
 
 .insert-row-header .row-number {
   font-weight: 600;
-  color: #2c3e50;
-  font-size: 0.95rem;
+  color: #1a1f36;
+  font-size: 0.9rem;
 }
 
 .remove-insert-row {
   padding: 6px 12px;
-  background-color: #e74c3c;
-  color: white;
-  border: none;
+  background: transparent;
+  color: #ef4444;
+  border: 1px solid #ef4444;
   border-radius: 6px;
   cursor: pointer;
-  font-weight: 600;
+  font-weight: 500;
   font-size: 0.85rem;
-  transition: background-color 0.2s ease;
+  transition: all 0.2s ease;
 }
 
 .remove-insert-row:hover:not(:disabled) {
-  background-color: #c0392b;
+  background-color: #ef4444;
+  color: #ffffff;
 }
 
 .remove-insert-row:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+  border-color: #d1d5db;
+  color: #9ca3af;
 }
 
 .insert-fields-grid {
@@ -326,39 +354,69 @@ watch(() => props.columns, () => {
 }
 
 .insert-field label {
-  font-weight: 600;
-  color: #2c3e50;
-  font-size: 0.9rem;
+  font-weight: 500;
+  color: #1a1f36;
+  font-size: 0.85rem;
+}
+
+.insert-field label span {
+  color: #ef4444;
+  margin: 0 4px;
 }
 
 .insert-field .insert-value {
-  padding: 10px 12px;
-  border: 1px solid #dfe4ea;
+  padding: 8px 12px;
+  border: 1px solid #e3e8ef;
   border-radius: 6px;
-  font-size: 0.95rem;
-  transition: border-color 0.2s ease;
+  font-size: 0.9rem;
+  color: #1a1f36;
+  background-color: #ffffff;
+  transition: all 0.2s ease;
 }
 
 .insert-field .insert-value:focus {
   outline: none;
-  border-color: #3498db;
-  box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.1);
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.insert-field .insert-value::placeholder {
+  color: #9ca3af;
 }
 
 .submit-insert-btn {
   align-self: flex-start;
-  padding: 12px 20px;
-  background-color: #2ecc71;
+  padding: 10px 24px;
+  background-color: #10b981;
   color: white;
   border: none;
   border-radius: 6px;
   cursor: pointer;
-  font-weight: 700;
-  font-size: 1rem;
-  transition: background-color 0.2s ease;
+  font-weight: 600;
+  font-size: 0.95rem;
+  transition: all 0.2s ease;
+  margin-top: 12px;
 }
 
 .submit-insert-btn:hover {
-  background-color: #27ae60;
+  background-color: #059669;
+  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3);
+}
+
+.operation-panel::-webkit-scrollbar {
+  width: 6px;
+}
+
+.operation-panel::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+
+.operation-panel::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+  border-radius: 3px;
+}
+
+.operation-panel::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
 }
 </style>

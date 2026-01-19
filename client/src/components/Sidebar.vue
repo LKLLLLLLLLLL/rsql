@@ -1,3 +1,4 @@
+<!-- Sidebar.vue -->
 <template>
   <div class="sidebar">
     <div class="sidebar-header">
@@ -15,93 +16,69 @@
         <h3>FUNCTIONS</h3>
       </div>
       <div class="tables-buttons">
-        <div 
-          class="tables-btn create" 
-          :class="{ active: activeButton === 'create', hovered: hoveredButton === 'create' }" 
-          @click="emit('create')"
-          @mouseenter="hoveredButton = 'create'"
-          @mouseleave="hoveredButton = ''"
-        >
+        <div class="tables-btn create" :class="{ active: activeButton === 'create' }" @click="handleButtonClick('create')">
           <div class="btn-icon">
             <Icon :path="mdiTablePlus" size="18" />
           </div>
           <span>Create New Table</span>
         </div>
-        <div 
-          class="tables-btn rename" 
-          :class="{ active: activeButton === 'rename', hovered: hoveredButton === 'rename' }" 
-          @click="emit('rename')"
-          @mouseenter="hoveredButton = 'rename'"
-          @mouseleave="hoveredButton = ''"
-        >
+        <div class="tables-btn rename" :class="{ active: activeButton === 'rename' }" @click="handleButtonClick('rename')">
           <div class="btn-icon">
             <Icon :path="mdiTableEdit" size="18" />
           </div>
           <span>Rename Table</span>
         </div>
-        <div 
-          class="tables-btn drop" 
-          :class="{ active: activeButton === 'drop', hovered: hoveredButton === 'drop' }" 
-          @click="emit('drop')"
-          @mouseenter="hoveredButton = 'drop'"
-          @mouseleave="hoveredButton = ''"
-        >
+        <div class="tables-btn drop" :class="{ active: activeButton === 'drop' }" @click="handleButtonClick('drop')">
           <div class="btn-icon">
             <Icon :path="mdiTableRemove" size="18" />
           </div>
           <span>Drop Table</span>
         </div>
-        <div 
-          class="tables-btn terminal" 
-          :class="{ active: activeButton === 'terminal', hovered: hoveredButton === 'terminal' }" 
-          @click="emit('terminal')"
-          @mouseenter="hoveredButton = 'terminal'"
-          @mouseleave="hoveredButton = ''"
-        >
+        <div class="tables-btn terminal" :class="{ active: activeButton === 'terminal' }" @click="handleButtonClick('terminal')">
           <div class="btn-icon">
             <Icon :path="mdiConsoleLine" size="18" />
           </div>
           <span>Open Terminal</span>
         </div>
+        <div class="tables-btn list" :class="{ active: showTableList }" @click="toggleTableList">
+          <div class="btn-icon">
+            <Icon :path="mdiFormatListBulleted" size="18" />
+          </div>
+          <span>Table List</span>
+        </div>
       </div>
     </div>
 
-    <div class="tables-list">
+    <div class="tables-list" :class="{ collapsed: !showTableList }">
       <div class="list-header">
         <h3>Table List</h3>
         <span class="table-count">{{ tables.length }} tables</span>
       </div>
-      <div 
-        v-for="table in tables" 
-        :key="table" 
-        class="table-item" 
-        :class="{ active: currentTable === table, hovered: hoveredTable === table }"
-        @mouseenter="hoveredTable = table"
-        @mouseleave="hoveredTable = ''"
-      >
+      <div v-for="table in tables" :key="table" class="table-item" :class="{ active: !showTableList && currentTable === table }" @click="handleTableSelect(table)">
         <div class="table-content">
           <div class="table-icon">
             <Icon :path="mdiTable" size="16" />
           </div>
-          <span class="table-name" @click="emit('select-table', table)">{{ table }}</span>
+          <span class="table-name">{{ table }}</span>
           <button v-if="isDropMode" class="table-delete-btn" @click.stop="emit('delete-table', table)">
             <Icon :path="mdiTrashCanOutline" size="14" />
           </button>
         </div>
       </div>
-    </div>
 
-    <div class="sidebar-footer">
-      <div class="footer-content">
-        <Icon :path="mdiInformationOutline" size="16" />
-        <span>Click table name to view data</span>
+      <div class="sidebar-footer">
+        <div class="footer-content">
+          <Icon :path="mdiInformationOutline" size="16" />
+          <span>Click table name to view data</span>
+        </div>
       </div>
     </div>
+
   </div>
 </template>
 
 <script setup>
-import { defineProps, defineEmits, ref } from 'vue'
+import { ref, defineProps, defineEmits } from 'vue'
 import Icon from './Icon.vue'
 import {
   mdiDatabase,
@@ -109,9 +86,10 @@ import {
   mdiTableEdit,
   mdiTablePlus,
   mdiTableRemove,
-  mdiTrashCanOutline,
+  mdiFormatListBulleted,
   mdiTable,
   mdiInformationOutline,
+  mdiTrashCanOutline,
 } from '@mdi/js'
 
 const props = defineProps({
@@ -121,13 +99,44 @@ const props = defineProps({
   isDropMode: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['create', 'rename', 'drop', 'terminal', 'select-table', 'delete-table'])
+const emit = defineEmits(['create', 'rename', 'drop', 'terminal', 'select-table', 'list-toggle', 'delete-table', 'clear-selection'])
 
-const hoveredButton = ref('')
-const hoveredTable = ref('')
+const showTableList = ref(false)
+
+function toggleTableList() {
+  showTableList.value = !showTableList.value
+  emit('list-toggle', showTableList.value)
+  // 当展开表列表时，清空当前选择
+  if (showTableList.value) {
+    emit('clear-selection')
+  }
+}
+
+function handleButtonClick(button) {
+  // 当点击操作按钮时，折叠表列表
+  if (showTableList.value) {
+    showTableList.value = false
+    emit('list-toggle', false)
+  }
+  
+  if (button === 'create') {
+    emit('create')
+  } else if (button === 'rename') {
+    emit('rename')
+  } else if (button === 'drop') {
+    emit('drop')
+  } else if (button === 'terminal') {
+    emit('terminal')
+  }
+}
+
+function handleTableSelect(table) {
+  // 选择表时保持表列表展开
+  emit('select-table', table)
+}
 </script>
 
-<style scoped lang="scss">
+<style scoped>
 /* 使用系统字体栈，保证字体一致性 */
 .sidebar {
   width: 280px;
@@ -223,23 +232,13 @@ const hoveredTable = ref('')
   align-items: center;
   gap: 12px;
   color: #94a3b8;
-  background: transparent; /* 默认透明背景 */
+  background: transparent;
   border: 1px solid transparent;
   position: relative;
   overflow: hidden;
 }
 
-.tables-btn::before {
-  display: none; /* 移除左侧颜色条 */
-}
-
 .tables-btn:hover {
-  background: #334155;
-  color: #e2e8f0;
-  border-color: #475569;
-}
-
-.tables-btn.hovered {
   background: #334155;
   color: #e2e8f0;
   border-color: #475569;
@@ -252,8 +251,7 @@ const hoveredTable = ref('')
   box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.3);
 }
 
-.tables-btn.active:hover,
-.tables-btn.active.hovered {
+.tables-btn.active:hover {
   background: #475569;
   border-color: #94a3b8;
 }
@@ -271,7 +269,6 @@ const hoveredTable = ref('')
 }
 
 .tables-btn:hover .btn-icon,
-.tables-btn.hovered .btn-icon,
 .tables-btn.active .btn-icon {
   background: #64748b;
   color: #f8fafc;
@@ -282,6 +279,13 @@ const hoveredTable = ref('')
   overflow-y: auto;
   flex-grow: 1;
   background: #0f172a;
+  transition: all 0.3s ease;
+}
+
+.tables-list.collapsed {
+  padding: 0;
+  flex-grow: 0;
+  display: none;
 }
 
 .list-header {
@@ -292,7 +296,7 @@ const hoveredTable = ref('')
   padding: 0 4px;
 }
 
-.tables-list h3 {
+.list-header h3 {
   font-size: 0.875rem;
   font-weight: 600;
   color: #64748b;
@@ -320,7 +324,7 @@ const hoveredTable = ref('')
   align-items: center;
   user-select: none;
   position: relative;
-  background: transparent; /* 默认透明背景 */
+  background: transparent;
   color: #cbd5e1;
   border-radius: 6px;
   margin-bottom: 6px;
@@ -328,12 +332,6 @@ const hoveredTable = ref('')
 }
 
 .table-item:hover {
-  background: #334155;
-  color: #e2e8f0;
-  border-color: #475569;
-}
-
-.table-item.hovered {
   background: #334155;
   color: #e2e8f0;
   border-color: #475569;
@@ -347,8 +345,7 @@ const hoveredTable = ref('')
   box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.3);
 }
 
-.table-item.active:hover,
-.table-item.active.hovered {
+.table-item.active:hover {
   background: #475569;
   border-color: #94a3b8;
 }
@@ -356,7 +353,7 @@ const hoveredTable = ref('')
 .table-content {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 8px;
   width: 100%;
   height: 100%;
 }
@@ -374,7 +371,6 @@ const hoveredTable = ref('')
 }
 
 .table-item:hover .table-icon,
-.table-item.hovered .table-icon,
 .table-item.active .table-icon {
   background: #64748b;
   color: #f8fafc;
@@ -386,10 +382,6 @@ const hoveredTable = ref('')
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 0.95rem;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  padding-left: 8px;
 }
 
 .table-delete-btn {

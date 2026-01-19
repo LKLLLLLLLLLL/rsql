@@ -12,6 +12,7 @@
       @terminal="showSection('terminal')"
       @select-table="selectTable"
       @delete-table="openDropModal"
+      @clear-selection="clearTableSelection"
     />
 
     <div class="main-content">
@@ -27,6 +28,15 @@
       />
 
       <div class="content-container">
+        <!-- 未选择表的提示 -->
+        <div v-if="activeSection === 'empty'" class="page-content">
+          <div class="empty-state">
+            <Icon :path="mdiTable" size="64" color="#cbd5e1" />
+            <h3>请从左侧选择一个表</h3>
+            <p>选择表格后可查看数据、插入或修改数据</p>
+          </div>
+        </div>
+
         <!-- 表格视图 -->
         <DataTable
           v-if="activeSection === 'table'"
@@ -87,6 +97,7 @@
           v-if="activeSection === 'insert'"
           :table-name="currentTableName"
           :columns="currentTableHeaders"
+          @back="showSection('table')"
           @insert="handleInsertData"
         />
 
@@ -129,14 +140,61 @@
           <div class="page-header">
             <div class="header-content">
               <h2><Icon :path="mdiTableEdit" size="20" /> Rename Table</h2>
-              <p class="header-subtitle">Rename existing database tables</p>
+              <p class="header-subtitle">Select a table to rename</p>
             </div>
           </div>
-          <div class="content-placeholder">
-            <div class="placeholder-content">
-              <Icon :path="mdiRenameBox" size="48" />
-              <h3>Rename Table Functionality</h3>
-              <p>Table renaming feature is under development.</p>
+          <div class="table-list-content">
+            <div v-if="tables.length === 0" class="empty-state">
+              <Icon :path="mdiTableOff" size="48" />
+              <p>No tables available</p>
+            </div>
+            <div v-else class="table-operation-list">
+              <div 
+                v-for="table in tables" 
+                :key="table" 
+                class="table-operation-item"
+              >
+                <div class="table-info-section">
+                  <Icon :path="mdiTable" size="20" />
+                  <span class="table-name-text">{{ table }}</span>
+                </div>
+                <button class="operation-btn rename-btn" @click="openRenameModal(table)">
+                  <Icon :path="mdiPencilOutline" size="16" />
+                  Rename
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 删除表 -->
+        <div v-if="activeSection === 'drop'" class="page-content">
+          <div class="page-header">
+            <div class="header-content">
+              <h2><Icon :path="mdiTableRemove" size="20" /> Drop Table</h2>
+              <p class="header-subtitle">Select a table to delete (this action cannot be undone)</p>
+            </div>
+          </div>
+          <div class="table-list-content">
+            <div v-if="tables.length === 0" class="empty-state">
+              <Icon :path="mdiTableOff" size="48" />
+              <p>No tables available</p>
+            </div>
+            <div v-else class="table-operation-list">
+              <div 
+                v-for="table in tables" 
+                :key="table" 
+                class="table-operation-item"
+              >
+                <div class="table-info-section">
+                  <Icon :path="mdiTable" size="20" />
+                  <span class="table-name-text">{{ table }}</span>
+                </div>
+                <button class="operation-btn drop-btn" @click="openDropModal(table)">
+                  <Icon :path="mdiTrashCanOutline" size="16" />
+                  Delete
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -150,12 +208,19 @@
       @confirm="confirmDropTable"
     />
 
+    <RenameTableModal
+      :visible="renameModalVisible"
+      :old-table-name="pendingRenameTable"
+      @cancel="renameModalVisible = false"
+      @confirm="confirmRenameTable"
+    />
+
     <Toast ref="toastRef" :message="toastMessage" :duration="toastDuration" />
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import Sidebar from './Sidebar.vue'
 import Topbar from './Topbar.vue'
 import DataTable from './DataTable.vue'
@@ -163,18 +228,18 @@ import CreateTable from './CreateTable.vue'
 import Terminal from './Terminal.vue'
 import InsertData from './InsertData.vue'
 import DropTableModal from './DropTableModal.vue'
+import RenameTableModal from './RenameTableModal.vue'
 import Toast from '../components/Toast.vue'
 import Icon from './Icon.vue'
-import { mdiMagnify, mdiDownload, mdiTableEdit, mdiChartLine, mdiDatabaseExport, mdiRenameBox } from '@mdi/js'
+import { mdiMagnify, mdiDownload, mdiTableEdit, mdiChartLine, mdiDatabaseExport, mdiRenameBox, mdiTable, mdiTableOff, mdiPencilOutline, mdiTrashCanOutline, mdiTableRemove } from '@mdi/js'
 
 // 响应式数据
 const viewHeaders = ref([])
 const viewRows = ref([])
 const currentTableName = ref('Users')
-const tables = ref(['Users', 'Products', 'Orders', 'Customers'])
-const activeSection = ref(null)
-const activeSidebarButton = ref('')
-const dropMode = ref(false)
+const tables = ref([])
+const activeSection = ref('terminal')
+const activeSidebarButton = ref('terminal')
 
 // 删除相关
 const deletePendingRow = ref(null)
@@ -188,16 +253,22 @@ const updateRenderKey = ref(0)
 // 弹窗相关
 const dropModalVisible = ref(false)
 const pendingDropTable = ref('')
+const renameModalVisible = ref(false)
+const pendingRenameTable = ref('')
 
 // Toast相关
 const toastRef = ref(null)
 const toastMessage = ref('')
 const toastDuration = 2500
 
+// WebSocket连接
+const wsConnected = ref(false)
+let wsRef = null
+
 // 数据缓存
-let currentTableHeaders = []
-let currentTableRows = []
-let currentDisplayHeaders = []
+let currentTableHeaders = [] // 列元数据 (name, type, ableToBeNULL, primaryKey, unique)
+let currentTableRows = [] // 所有数据行
+let currentDisplayHeaders = [] // 显示用的列名
 
 // WebSocket URL
 const wsUrl = computed(() => {
@@ -215,9 +286,71 @@ const recordsCount = computed(() => viewRows.value.length)
 const shouldShowTopBar = computed(() => ['table', 'delete', 'update'].includes(activeSection.value))
 
 // 辅助函数
+function checkTypeMatches(type, data) {
+  const t = String(type || '').trim().toUpperCase()
+  const makeResult = (valid, normalized = data, message = '') => ({ valid, normalized, message })
+
+  switch (t) {
+    case 'INT':
+    case 'INTEGER': {
+      const s = typeof data === 'number' ? String(data) : String(data ?? '').trim()
+      if (!/^[+-]?\d+$/.test(s)) return makeResult(false, null, 'INT expects an integer without decimals')
+      const n = Number(s)
+      if (!Number.isInteger(n)) return makeResult(false, null, 'INT expects an integer')
+      return makeResult(true, n)
+    }
+
+    case 'CHAR': {
+      const s = String(data ?? '')
+      if (s.length > 32) return makeResult(false, null, 'CHAR length must be <= 32')
+      return makeResult(true, s)
+    }
+
+    case 'VARCHAR': {
+      return makeResult(true, String(data ?? ''))
+    }
+
+    case 'FLOAT': {
+      const s = typeof data === 'number' ? String(data) : String(data ?? '').trim()
+      if (!/^[+-]?\d+(\.\d+)?$/.test(s)) return makeResult(false, null, 'FLOAT expects a numeric value')
+      const n = Number(s)
+      if (!Number.isFinite(n)) return makeResult(false, null, 'FLOAT expects a finite number')
+      const normalized = s.includes('.') ? n : Number(n.toFixed(2))
+      return makeResult(true, normalized)
+    }
+
+    case 'BOOLEAN': {
+      if (data === true || data === false) return makeResult(true, data)
+      const s = String(data ?? '').trim().toLowerCase()
+      if (s === 'true' || s === '1' || s === 'True') return makeResult(true, true)
+      if (s === 'false' || s === '0' || s === 'False') return makeResult(true, false)
+      return makeResult(false, null, 'BOOLEAN expects true or false')
+    }
+
+    case 'NULL':
+      return makeResult(true, null)
+
+    default:
+      return makeResult(false, null, `Unknown type: ${t}`)
+  }
+}
+
 function renderTable(headers, rows) {
   viewHeaders.value = Array.isArray(headers) ? headers.slice() : []
   viewRows.value = Array.isArray(rows) ? rows.slice() : []
+}
+
+function renderDeleteTable(headers, rows) {
+  renderTable(headers, rows)
+  deletePendingRow.value = null
+  deleteRenderKey.value += 1
+}
+
+function renderUpdateTable(headers, rows) {
+  renderTable(headers, rows)
+  updateEditingRow.value = null
+  updateDraft.value = []
+  updateRenderKey.value += 1
 }
 
 function triggerToast(msg) {
@@ -228,51 +361,202 @@ function triggerToast(msg) {
 }
 
 function showSection(section) {
+  // 如果再次点击delete或update，则返回到table视图
+  if ((section === 'delete' || section === 'update') && activeSection.value === section) {
+    activeSection.value = 'table'
+    activeSidebarButton.value = ''
+    return
+  }
+  
   activeSection.value = section
   activeSidebarButton.value = section
   
   if (section === 'create' || section === 'terminal') {
-    dropMode.value = false
     loadTablesList()
   }
 }
 
 function toggleDropMode() {
-  dropMode.value = !dropMode.value
-  activeSidebarButton.value = dropMode.value ? 'drop' : ''
+  showSection('drop')
   loadTablesList()
+}
+
+function toggleRenameMode() {
+  showSection('rename')
+}
+function openRenameModal(tableName) {
+  dropModalVisible.value = false  // 关闭删除模态框
+  pendingRenameTable.value = tableName
+  renameModalVisible.value = true
+}
+
+function confirmRenameTable(newName) {
+  const oldName = pendingRenameTable.value
+  if (!oldName || !newName) {
+    renameModalVisible.value = false
+    return
+  }
+  
+  const sql = `ALTER TABLE ${oldName} RENAME TO ${newName};`
+  
+  if (sendSqlViaWebSocket(sql)) {
+    renameModalVisible.value = false
+    triggerToast('重命名表语句已发送')
+  }
 }
 
 function selectTable(tableName) {
   currentTableName.value = tableName
+  activeSidebarButton.value = 'list'
   showSection('table')
   loadTableData(tableName)
 }
 
+function clearTableSelection() {
+  currentTableName.value = ''
+  activeSidebarButton.value = ''
+  showSection('empty')
+}
+
+function handleListToggle(isOpen) {
+  // 当表列表展开时，清空旋上的操作按钮选中状态
+  if (isOpen) {
+    activeSidebarButton.value = ''
+    activeSection.value = 'list-view'
+  }
+}
+
 function openDropModal(tableName) {
+  // 关闭所有其他的模态框
+  renameModalVisible.value = false
   pendingDropTable.value = tableName
   dropModalVisible.value = true
 }
 
+// WebSocket操作函数
+function connectWebSocket() {
+  const socket = new WebSocket(wsUrl.value)
+  wsRef = socket
+
+  socket.onopen = () => {
+    wsConnected.value = true
+    console.log('WebSocket connected')
+  }
+
+  socket.onclose = () => {
+    wsConnected.value = false
+    console.log('WebSocket closed')
+  }
+
+  socket.onerror = (err) => {
+    console.warn('WebSocket error', err)
+    wsConnected.value = false
+  }
+
+  socket.onmessage = (ev) => {
+    try {
+      const data = JSON.parse(ev.data)
+      console.log('WebSocket response:', data)
+      handleSqlResult(data)
+      
+      // 如果操作成功，重新加载数据
+      if (data.success) {
+        // 延迟加载，给后端一点时间完成操作
+        setTimeout(() => {
+          loadTablesList()
+          if (currentTableName.value) {
+            loadTableData(currentTableName.value)
+          }
+        }, 100)
+      }
+    } catch (e) {
+      console.warn('Parse WebSocket message failed', e, ev.data)
+    }
+  }
+}
+
+function sendSqlViaWebSocket(sql) {
+  if (!wsRef || wsRef.readyState !== WebSocket.OPEN) {
+    triggerToast('WebSocket未连接，请稍后重试')
+    return false
+  }
+
+  const payload = {
+    username: 'root',
+    userid: 0,
+    request_content: sql,
+  }
+  
+  console.log('Sending SQL:', sql)
+  wsRef.send(JSON.stringify(payload))
+  return true
+}
+
 // 数据库操作函数
 async function loadTableData(tableName) {
-  // 模拟数据加载
-  console.log('Loading table data for:', tableName)
-  viewHeaders.value = ['ID', 'Name', 'Email', 'Created At']
-  viewRows.value = [
-    [1, 'John Doe', 'john@example.com', '2024-01-15'],
-    [2, 'Jane Smith', 'jane@example.com', '2024-01-16'],
-    [3, 'Bob Johnson', 'bob@example.com', '2024-01-17']
-  ]
+  // 从 public 文件夹中加载表格数据
+  try {
+    const response = await fetch(`/${tableName}.json`)
+    if (!response.ok) {
+      throw new Error(`Failed to load ${tableName}.json: ${response.statusText}`)
+    }
+    const data = await response.json()
+    
+    // 提取表格元数据
+    const headers = data.headers || []
+    const types = data.type || []
+    const ableToBeNULL = data.ableToBeNULL || []
+    const primaryKeys = data.primaryKey || []
+    const uniques = data.unique || []
+    
+    // 构建列元数据对象数组
+    currentTableHeaders = headers.map((name, index) => ({
+      name,
+      type: types[index] || 'VARCHAR',
+      ableToBeNULL: ableToBeNULL[index] || false,
+      primaryKey: primaryKeys[index] || false,
+      unique: uniques[index] || false
+    }))
+    
+    // 存储所有数据行
+    currentTableRows = data.rows || []
+    currentDisplayHeaders = headers.slice()
+    
+    // 渲染表格
+    renderTable(currentDisplayHeaders, currentTableRows)
+    
+    console.log('Table data loaded:', {
+      table: tableName,
+      headers: currentTableHeaders,
+      rowCount: currentTableRows.length
+    })
+  } catch (error) {
+    console.error('Error loading table data:', error)
+    currentTableHeaders = []
+    currentTableRows = []
+    currentDisplayHeaders = []
+    renderTable([], [])
+  }
 }
 
 async function loadTablesList() {
-  console.log('Loading tables list')
-  tables.value = ['Users', 'Products', 'Orders', 'Customers']
+  // 从 public/TABLES.json 加载表格列表
+  try {
+    const response = await fetch('/TABLES.json')
+    if (!response.ok) {
+      throw new Error(`Failed to load TABLES.json: ${response.statusText}`)
+    }
+    const data = await response.json()
+    tables.value = Array.isArray(data.tables) ? data.tables : []
+    console.log('Tables loaded:', tables.value)
+  } catch (error) {
+    console.error('Error loading tables:', error)
+    tables.value = []
+  }
 }
 
 function handleCreateTable({ tableName, columns }) {
-  console.log('Creating table:', tableName, columns)
+  // 生成CREATE TABLE SQL
   let sql = `CREATE TABLE ${tableName} (\n`
   columns.forEach((col, index) => {
     sql += `  ${col.name} ${col.type}`
@@ -283,17 +567,49 @@ function handleCreateTable({ tableName, columns }) {
   })
   sql += `\n);`
   
-  console.log('Generated SQL:', sql)
-  triggerToast('创建表语句已发送')
+  // 通过WebSocket发送
+  if (sendSqlViaWebSocket(sql)) {
+    triggerToast('创建表语句已发送')
+    // 返回到表格视图
+    setTimeout(() => showSection('table'), 500)
+  }
 }
 
 function handleInsertData(insertData) {
-  console.log('Inserting data:', insertData)
-  triggerToast('插入语句已发送')
+  // insertData是行数组: [{ colName: value, ... }]
+  const rows = insertData
+  const tableName = currentTableName.value
+  
+  if (!rows || rows.length === 0) {
+    triggerToast('没有要插入的数据')
+    return
+  }
+
+  // 生成INSERT SQL语句
+  rows.forEach(row => {
+    const columns = Object.keys(row).filter(key => row[key] !== '')
+    const values = columns.map(key => {
+      const value = row[key]
+      // 根据类型判断是否需要加引号
+      const meta = currentTableHeaders.find(h => h.name === key)
+      if (meta && (meta.type === 'INT' || meta.type === 'INTEGER' || meta.type === 'FLOAT')) {
+        return value
+      }
+      // 字符串类型加引号
+      return `'${value.replace(/'/g, "''")}'`
+    })
+    
+    const sql = `INSERT INTO ${tableName} (${columns.join(', ')}) VALUES (${values.join(', ')});`
+    sendSqlViaWebSocket(sql)
+  })
+  
+  triggerToast(`已发送 ${rows.length} 条插入语句`)
+  // 返回到表格视图
+  setTimeout(() => showSection('table'), 500)
 }
 
 function showInsertSection() {
-  if (currentTableHeaders.length === 0) {
+  if (!currentTableHeaders || currentTableHeaders.length === 0) {
     alert('请先选择一个表格查看数据，然后再执行插入操作')
     return
   }
@@ -301,8 +617,36 @@ function showInsertSection() {
 }
 
 function confirmDelete(idx) {
-  console.log('Confirm delete row:', idx)
-  triggerToast('删除语句已发送')
+  if (!currentTableHeaders || currentTableHeaders.length === 0) {
+    triggerToast('无法确定表结构')
+    return
+  }
+
+  const row = currentTableRows[idx]
+  if (!row) {
+    triggerToast('无效的行索引')
+    return
+  }
+
+  // 生成WHERE子句（使用主键或所有列）
+  const whereConditions = []
+  currentTableHeaders.forEach((header, colIdx) => {
+    const value = row[colIdx]
+    if (value !== null && value !== undefined) {
+      if (header.type === 'INT' || header.type === 'INTEGER' || header.type === 'FLOAT') {
+        whereConditions.push(`${header.name} = ${value}`)
+      } else {
+        whereConditions.push(`${header.name} = '${String(value).replace(/'/g, "''")}'`)
+      }
+    }
+  })
+
+  const sql = `DELETE FROM ${currentTableName.value} WHERE ${whereConditions.join(' AND ')};`
+  
+  if (sendSqlViaWebSocket(sql)) {
+    triggerToast('删除语句已发送')
+    deletePendingRow.value = null
+  }
 }
 
 function startUpdate(idx) {
@@ -317,8 +661,52 @@ function cancelUpdate() {
 }
 
 function confirmUpdate(idx) {
-  console.log('Confirm update row:', idx, updateDraft.value)
-  triggerToast('更新语句已发送')
+  if (!currentTableHeaders || currentTableHeaders.length === 0) {
+    triggerToast('无法确定表结构')
+    return
+  }
+
+  const oldRow = currentTableRows[idx]
+  const newRow = updateDraft.value
+  
+  if (!oldRow || !newRow) {
+    triggerToast('无效的数据')
+    return
+  }
+
+  // 生成SET子句
+  const setClause = []
+  currentTableHeaders.forEach((header, colIdx) => {
+    const newValue = newRow[colIdx]
+    if (newValue !== null && newValue !== undefined && newValue !== '') {
+      if (header.type === 'INT' || header.type === 'INTEGER' || header.type === 'FLOAT') {
+        setClause.push(`${header.name} = ${newValue}`)
+      } else {
+        setClause.push(`${header.name} = '${String(newValue).replace(/'/g, "''")}'`)
+      }
+    }
+  })
+
+  // 生成WHERE子句（使用原始值）
+  const whereConditions = []
+  currentTableHeaders.forEach((header, colIdx) => {
+    const value = oldRow[colIdx]
+    if (value !== null && value !== undefined) {
+      if (header.type === 'INT' || header.type === 'INTEGER' || header.type === 'FLOAT') {
+        whereConditions.push(`${header.name} = ${value}`)
+      } else {
+        whereConditions.push(`${header.name} = '${String(value).replace(/'/g, "''")}'`)
+      }
+    }
+  })
+
+  const sql = `UPDATE ${currentTableName.value} SET ${setClause.join(', ')} WHERE ${whereConditions.join(' AND ')};`
+  
+  if (sendSqlViaWebSocket(sql)) {
+    triggerToast('更新语句已发送')
+    updateEditingRow.value = null
+    updateDraft.value = []
+  }
 }
 
 function confirmDropTable() {
@@ -329,14 +717,11 @@ function confirmDropTable() {
   }
   
   const sql = `DROP TABLE ${name};`
-  console.log('Drop table SQL:', sql)
   
-  dropModalVisible.value = false
-  triggerToast('删除表语句已发送')
-  
-  setTimeout(() => {
-    loadTablesList()
-  }, 100)
+  if (sendSqlViaWebSocket(sql)) {
+    dropModalVisible.value = false
+    triggerToast('删除表语句已发送')
+  }
 }
 
 function handleSqlResult(data) {
@@ -345,9 +730,17 @@ function handleSqlResult(data) {
 
 // 生命周期
 onMounted(() => {
+  connectWebSocket()
   loadTablesList()
   loadTableData(currentTableName.value)
-  showSection('table')
+  showSection('terminal')
+})
+
+onBeforeUnmount(() => {
+  if (wsRef) {
+    wsRef.close()
+    wsRef = null
+  }
 })
 </script>
 
@@ -483,6 +876,31 @@ html, body {
   background: #9ca3af;
 }
 
+/* 空状态样式 */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #9ca3af;
+}
+
+.empty-state h3 {
+  font-size: 1.3rem;
+  color: #cbd5e1;
+  margin: 24px 0 12px;
+  font-weight: 600;
+}
+
+.empty-state p {
+  font-size: 0.95rem;
+  color: #9ca3af;
+  max-width: 300px;
+  text-align: center;
+  line-height: 1.6;
+}
+
 /* 响应式设计 */
 @media (max-width: 768px) {
   .app {
@@ -514,5 +932,102 @@ html, body {
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
+}
+
+/* 表格操作列表样式 */
+.table-list-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.table-operation-list {
+  flex: 1;
+  padding: 24px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.table-operation-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  background: #ffffff;
+  border: 1px solid #e3e8ef;
+  border-radius: 8px;
+  transition: all 0.2s ease;
+}
+
+.table-operation-item:hover {
+  border-color: #cbd5e1;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+}
+
+.table-info-section {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+}
+
+.table-info-section span {
+  color: #1a1f36;
+  font-size: 0.95rem;
+  font-weight: 500;
+}
+
+.operation-btn {
+  padding: 8px 16px;
+  border-radius: 6px;
+  border: 1px solid;
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 500;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rename-btn {
+  border-color: #3b82f6;
+  color: #3b82f6;
+}
+
+.rename-btn:hover {
+  background: #3b82f6;
+  color: #ffffff;
+}
+
+.drop-btn {
+  border-color: #ef4444;
+  color: #ef4444;
+}
+
+.drop-btn:hover {
+  background: #ef4444;
+  color: #ffffff;
+}
+
+.table-operation-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.table-operation-list::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+
+.table-operation-list::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+  border-radius: 3px;
+}
+
+.table-operation-list::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
 }
 </style>

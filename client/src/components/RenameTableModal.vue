@@ -1,20 +1,20 @@
-<!-- DropTableModal.vue -->
+<!-- RenameTableModal.vue -->
 <template>
   <div v-if="visible" class="modal-overlay">
     <div class="modal-dialog">
-      <h3><Icon :path="mdiTrashCanOutline" size="18" /> 删除表</h3>
-      <p>确定要删除表 <strong>{{ tableName }}</strong> 吗？此操作无法撤销。</p>
+      <h3><Icon :path="mdiPencilOutline" size="18" /> 重命名表</h3>
+      <p>重命名表 <strong>{{ oldTableName }}</strong></p>
       <input 
-        v-model="confirmText" 
+        v-model="newName" 
         type="text" 
-        class="delete-input" 
-        placeholder="输入表名以确认删除"
+        class="rename-input" 
+        placeholder="输入新的表名"
         @keyup.enter="handleConfirm"
       />
       <div class="modal-actions">
         <button class="modal-cancel" @click="emit('cancel')">取消</button>
         <button class="modal-confirm" @click="handleConfirm">
-          <Icon :path="mdiCheckCircleOutline" size="16" /> 确认删除
+          <Icon :path="mdiCheckCircleOutline" size="16" /> 确认重命名
         </button>
       </div>
     </div>
@@ -25,33 +25,33 @@
 import { ref, watch, defineProps, defineEmits } from 'vue'
 import Icon from './Icon.vue'
 import {
-  mdiTrashCanOutline,
+  mdiPencilOutline,
   mdiCheckCircleOutline,
 } from '@mdi/js'
 
 const props = defineProps({
   visible: { type: Boolean, default: false },
-  tableName: { type: String, default: '' }
+  oldTableName: { type: String, default: '' }
 })
 
 const emit = defineEmits(['cancel', 'confirm'])
 
-const confirmText = ref('')
+const newName = ref('')
 
 // 当模态框打开时，清空输入框
 watch(() => props.visible, (visible) => {
   if (visible) {
-    confirmText.value = ''
+    newName.value = ''
   }
 })
 
 function handleConfirm() {
-  if (confirmText.value.trim() !== props.tableName) {
-    alert('请输入正确的表名以确认删除')
+  if (!newName.value.trim()) {
+    alert('请输入新的表名')
     return
   }
-  emit('confirm')
-  confirmText.value = ''
+  emit('confirm', newName.value.trim())
+  newName.value = ''
 }
 </script>
 
@@ -99,23 +99,9 @@ function handleConfirm() {
   margin-bottom: 16px;
 }
 
-.delete-input {
-  width: 100%;
-  padding: 10px 12px;
-  border: 1px solid #dfe4ea;
-  border-radius: 6px;
-  font-size: 0.95rem;
-  margin-bottom: 16px;
-}
-
 .rename-input:focus {
   outline: none;
   border-color: #3498db;
-}
-
-.delete-input:focus {
-  outline: none;
-  border-color: #e74c3c;
 }
 
 .modal-actions {
@@ -139,7 +125,7 @@ function handleConfirm() {
 }
 
 .modal-confirm {
-  background: #e74c3c;
+  background: #3498db;
   color: #fff;
   border: none;
   border-radius: 6px;
@@ -151,6 +137,6 @@ function handleConfirm() {
 }
 
 .modal-confirm:hover {
-  background: #c0392b;
+  background: #217dbb;
 }
 </style>
