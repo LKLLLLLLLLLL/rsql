@@ -1,4 +1,4 @@
-use crate::catalog::SysCatalog;
+use crate::catalog::{SysCatalog, sys_catalog};
 use crate::common::{RsqlResult, RsqlError};
 use crate::sql::plan::{PlanNode, JoinType};
 use crate::common::data_item::{DataItem};
@@ -277,6 +277,10 @@ pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64, read_only: bool) -> R
         PlanNode::Insert { table_name, columns, values, input: _ } => {
             info!("Implement Insert execution");
             let mut table_object = get_table_object(table_name, false, tnx_id)?;
+            // check if table is system table
+            if sys_catalog::is_sys_table(table_object.table_obj.get_table_id()) {
+                return Err(RsqlError::ExecutionError(format!("System table {} cannot be inserted.", table_name)));
+            }
             if let Some(cols) = columns {
                 let mut null_cols = vec![];
                 for col_type in table_object.cols.1.iter() {
@@ -309,6 +313,10 @@ pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64, read_only: bool) -> R
             info!("Implement Delete execution");
             let input_result = execute_dml_plan_node(input, tnx_id, false)?;
             if let TableWithFilter{mut table_obj, rows} = input_result {
+                // check if table is system table
+                if sys_catalog::is_sys_table(table_obj.table_obj.get_table_id()) {
+                    return Err(RsqlError::ExecutionError(format!("System table {:?} cannot be deleted.", SysCatalog::global().get_table_name(table_obj.table_obj.get_table_id(), tnx_id))));
+                }
                 for row in rows.iter() {
                     let pk_col_idx = table_obj.map.get(&table_obj.pk_col.0).unwrap();
                     table_obj.table_obj.delete_row(&row[*pk_col_idx], tnx_id)?;
@@ -322,6 +330,10 @@ pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64, read_only: bool) -> R
             info!("Implement Update execution");
             let input_result = execute_dml_plan_node(input, tnx_id, false)?;
             if let TableWithFilter {mut table_obj, rows} = input_result {
+                // check if table is system table
+                if sys_catalog::is_sys_table(table_obj.table_obj.get_table_id()) {
+                    return Err(RsqlError::ExecutionError(format!("System table {:?} cannot be deleted.", SysCatalog::global().get_table_name(table_obj.table_obj.get_table_id(), tnx_id))));
+                }
                 handle_update_expr(&mut table_obj, assignments, &rows, tnx_id)?;
                 Ok(Mutation("Update successful".to_string()))
             }else {

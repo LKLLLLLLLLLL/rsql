@@ -12,6 +12,7 @@ use sqlparser::ast::{Expr,
     ObjectName,
     ObjectNamePart,
 };
+// use tracing::info;
 
 fn parse_number(s: &str) -> RsqlResult<DataItem> {
     // 1. try to parse integer
@@ -47,7 +48,7 @@ fn get_func_name(func_obj_name: &ObjectName) -> RsqlResult<String> {
     let name = match func_obj_name {
         ObjectName(obj_name_part) => {
             if let ObjectNamePart::Identifier(ident) = obj_name_part[0].clone() {
-                ident.value
+                ident.value.to_uppercase()
             }else {
                 return Err(RsqlError::ExecutionError(format!("Failed to parse function name: {:?}", func_obj_name)))
             }
@@ -1381,8 +1382,6 @@ pub fn handle_aggr_expr (table_obj: TableObject, group_by: &Vec<Expr>, aggr_expr
         match aggr_expr {
             Expr::Function(func) => {
                 let func_name = get_func_name(&func.name)?;
-                let func_arg = get_func_arg(&func.args)?;
-                let col_idx = table_obj.map.get(&func_arg).unwrap();
                 if func_name == "COUNT" {
                     let col_type = ColType::Integer;
                     let aggr_col_name = "COUNT".to_string();
@@ -1391,11 +1390,14 @@ pub fn handle_aggr_expr (table_obj: TableObject, group_by: &Vec<Expr>, aggr_expr
                     cols_type.push(col_type);
                 }else if func_name == "AVG" {
                     let col_type = ColType::Float;
+                    let func_arg = get_func_arg(&func.args)?;
                     let aggr_col_name = format!("AVG_{}", &func_arg);
                     aggr_cols.push(aggr_col_name.clone());
                     cols_name.push(aggr_col_name.clone());
                     cols_type.push(col_type);
                 }else {
+                    let func_arg = get_func_arg(&func.args)?;
+                    let col_idx = table_obj.map.get(&func_arg).unwrap();
                     let col_type = table_obj.cols.1[*col_idx].clone();
                     let aggr_col_name = format!("{}_{}", &func_name, &func_arg);
                     aggr_cols.push(aggr_col_name.clone());
@@ -1436,8 +1438,6 @@ pub fn handle_aggr_expr (table_obj: TableObject, group_by: &Vec<Expr>, aggr_expr
             match aggr_expr {
                 Expr::Function(func) => {
                     let func_name = get_func_name(&func.name)?;
-                    let func_arg = get_func_arg(&func.args)?;
-                    let col_idx = table_obj.map.get(&func_arg).unwrap(); // get col_idx from func_arg
                     match func_name.as_str() {
                         "COUNT" => {
                             let mut count: i64 = 0;
@@ -1452,6 +1452,8 @@ pub fn handle_aggr_expr (table_obj: TableObject, group_by: &Vec<Expr>, aggr_expr
                         "AVG" => {
                             let mut sum: f64 = 0.0;
                             let mut count: i64 = 0;
+                            let func_arg = get_func_arg(&func.args)?;
+                            let col_idx = table_obj.map.get(&func_arg).unwrap(); // get col_idx from func_arg
                             for r in rows.iter() {
                                 let group_by_row: Vec<DataItem> = group_by_cols_idx.iter().map(|i| r[*i].clone()).collect();
                                 if group_by_row == *row {
@@ -1473,6 +1475,8 @@ pub fn handle_aggr_expr (table_obj: TableObject, group_by: &Vec<Expr>, aggr_expr
                             aggr_row.push(DataItem::Float(sum / count as f64));
                         },
                         "SUM" => {
+                            let func_arg = get_func_arg(&func.args)?;
+                            let col_idx = table_obj.map.get(&func_arg).unwrap(); // get col_idx from func_arg
                             let col_type = table_obj.cols.1[*col_idx].clone();
                             match col_type {
                                 ColType::Integer => {
@@ -1515,6 +1519,8 @@ pub fn handle_aggr_expr (table_obj: TableObject, group_by: &Vec<Expr>, aggr_expr
                             }
                         },
                         "MIN" => {
+                            let func_arg = get_func_arg(&func.args)?;
+                            let col_idx = table_obj.map.get(&func_arg).unwrap(); // get col_idx from func_arg
                             let col_type = table_obj.cols.1[*col_idx].clone();
                             match col_type {
                                 ColType::Integer => {
@@ -1561,6 +1567,8 @@ pub fn handle_aggr_expr (table_obj: TableObject, group_by: &Vec<Expr>, aggr_expr
                             }
                         },
                         "MAX" => {
+                            let func_arg = get_func_arg(&func.args)?;
+                            let col_idx = table_obj.map.get(&func_arg).unwrap(); // get col_idx from func_arg
                             let col_type = table_obj.cols.1[*col_idx].clone();
                             match col_type {
                                 ColType::Integer => {

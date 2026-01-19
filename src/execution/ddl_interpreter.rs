@@ -1,4 +1,4 @@
-use crate::catalog::SysCatalog;
+use crate::catalog::{SysCatalog, sys_catalog};
 use crate::common::{RsqlResult, RsqlError};
 use crate::sql::plan::{PlanNode};
 use crate::sql::plan::DdlOperation;
@@ -36,6 +36,10 @@ pub fn execute_ddl_plan_node(node: &PlanNode, tnx_id: u64) -> RsqlResult<Executi
                 return Err(RsqlError::ExecutionError(format!("Table {} does not exist.", old_name)));
             }
             let table_id = table_id.unwrap();
+            // check if table is system table
+            if sys_catalog::is_sys_table(table_id) {
+                return Err(RsqlError::ExecutionError(format!("System table {} cannot be renamed.", old_name)));
+            }
             // check if new table name already exists
             let new_table_id = SysCatalog::global().get_table_id(tnx_id, new_name)?;
             if new_table_id.is_some() {
@@ -55,8 +59,12 @@ pub fn execute_ddl_plan_node(node: &PlanNode, tnx_id: u64) -> RsqlResult<Executi
                     return Err(RsqlError::ExecutionError(format!("Table {} does not exist.", table_name)));
                 }
             }
-            // drop table itself first
             let table_id = table_id.unwrap();
+            // check if table is system table
+            if sys_catalog::is_sys_table(table_id) {
+                return Err(RsqlError::ExecutionError(format!("System table {} cannot be dropped.", table_name)));
+            }
+            // drop table itself first
             let table_schema = SysCatalog::global().get_table_schema(tnx_id, table_id)?;
             let table = Table::from(table_id, table_schema, false)?;
             table.drop(tnx_id)?;
@@ -85,6 +93,10 @@ pub fn execute_ddl_plan_node(node: &PlanNode, tnx_id: u64) -> RsqlResult<Executi
                 return Err(RsqlError::ExecutionError(format!("Table {} does not exist.", table_name)));
             }
             let table_id = table_id.unwrap();
+            // check if table is system table
+            if sys_catalog::is_sys_table(table_id) {
+                return Err(RsqlError::ExecutionError(format!("System table {} cannot be indexed.", table_name)));
+            }
             // get table object
             let table_schema = SysCatalog::global().get_table_schema(tnx_id, table_id)?;
             let mut table = Table::from(table_id, table_schema, false)?;
