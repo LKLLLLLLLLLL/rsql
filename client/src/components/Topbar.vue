@@ -65,6 +65,7 @@ const emit = defineEmits(['insert', 'delete', 'update', 'query', 'export'])
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-width: 0; /* 允许子元素收缩 */
 }
 
 .table-info h2 {
@@ -72,6 +73,10 @@ const emit = defineEmits(['insert', 'delete', 'update', 'query', 'export'])
   font-weight: 600;
   color: #1a1f36;
   margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 300px; /* 限制最大宽度 */
 }
 
 .table-count {
@@ -82,6 +87,10 @@ const emit = defineEmits(['insert', 'delete', 'update', 'query', 'export'])
   border-radius: 12px;
   display: inline-block;
   font-weight: 500;
+  white-space: nowrap;
+  width: fit-content; /* 宽度跟随内容 */
+  min-width: fit-content; /* 最小宽度跟随内容 */
+  max-width: fit-content; /* 最大宽度跟随内容 */
 }
 
 .action-buttons {
@@ -103,6 +112,7 @@ const emit = defineEmits(['insert', 'delete', 'update', 'query', 'export'])
   font-size: 0.85rem;
   background: #ffffff;
   color: #4b5563;
+  white-space: nowrap;
 }
 
 .action-btn:hover {
@@ -145,6 +155,10 @@ const emit = defineEmits(['insert', 'delete', 'update', 'query', 'export'])
 }
 
 @media (max-width: 1200px) {
+  .table-info h2 {
+    max-width: 200px;
+  }
+  
   .action-btn span {
     display: none;
   }
@@ -164,6 +178,15 @@ const emit = defineEmits(['insert', 'delete', 'update', 'query', 'export'])
     flex-direction: column;
     gap: 16px;
     align-items: stretch;
+  }
+
+  .table-info {
+    align-items: center;
+    text-align: center;
+  }
+  
+  .table-info h2 {
+    max-width: 100%;
   }
 
   .action-buttons {

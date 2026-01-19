@@ -1,8 +1,9 @@
+use serde::{Deserialize, Serialize};
 use crate::common::{RsqlError, RsqlResult};
 use crate::common::DataItem;
 use super::super::config::{MAX_VARCHAR_SIZE, MAX_COL_NAME_SIZE};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ColType {
     Integer,
     Float,

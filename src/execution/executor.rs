@@ -103,14 +103,10 @@ fn rollback_transaction(connection_id: u64) -> RsqlResult<()> {
         sm.free()?;
         Ok(())
     };
-    let mut max_page_idx = |table_id: u64| -> RsqlResult<u64> {
+    let mut max_page_idx = |table_id: u64| -> RsqlResult<Option<u64>> {
         let sm_rc = get_sm(table_id)?;
         let sm = sm_rc.lock().unwrap();
-        let max_idx = match sm.max_page_index() {
-            Some(idx) => idx,
-            None => 0,
-        };
-        Ok(max_idx)
+        Ok(sm.max_page_index())
     };
     // Execute WAL operation
     WAL::global().rollback_tnx(

@@ -84,7 +84,7 @@ const codeResults = ref([])
 let wsRef = null
 
 function connectWebSocket() {
-  const socket = new WebSocket(props.wsUrl)
+  const socket = new new WebSocket(props.wsUrl)
   wsRef = socket
 
   socket.onopen = () => {
@@ -287,6 +287,8 @@ defineExpose({
   padding: 24px;
   border-bottom: 1px solid #e3e8ef;
   min-height: 200px;
+  max-height: 45vh; /* 限制最大高度 */
+  overflow-y: auto;
 }
 
 .terminal-actions {

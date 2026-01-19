@@ -79,7 +79,14 @@ impl Allocator {
 
 impl Allocator {
     pub fn create(entry_size: u64, begin_with: u64) -> Self {
-        let entries_per_page = storage::Page::max_size() as u64 / entry_size;
+        // 8 + 8 + bitmap:((entry_num * 1 + 7) / 8) + entry_num * entry_size <= page_size
+        let mut entry_num = 0;
+        let mut left = 16 + (entry_num + 7) / 8 + entry_num * entry_size;
+        while left < storage::Page::max_size() as u64 {
+            entry_num += 1;
+            left = 16 + (entry_num + 7) / 8 + entry_num * entry_size;
+        }
+        let entries_per_page = entry_num - 1;
         Allocator {
             begin_with,
             entry_size,
@@ -171,7 +178,13 @@ impl Allocator {
             storage.write(tnx_id, next_free_page, &next_page_data)?;
         }
         // free the page
-        storage.free_page(tnx_id, page_idx)?;
+        let max_page = match storage.max_page_index() {
+            None => -1 as i64,
+            Some(n) => n as i64,
+        };
+        if page_idx as i64 == max_page {
+            storage.free_page(tnx_id, page_idx)?;
+        }
         Ok(())
     }
     /// Allocate an empty entry
