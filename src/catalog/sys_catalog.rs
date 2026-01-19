@@ -5,7 +5,7 @@ use bcrypt::{hash, DEFAULT_COST};
 use tracing::info;
 
 use crate::storage::storage::StorageManager;
-use crate::storage::table;
+use crate::storage::{WAL, table};
 use crate::storage::Table;
 use crate::common::DataItem;
 use crate::catalog::table_schema::TableColumn;
@@ -242,7 +242,7 @@ impl SysCatalog {
         };
         info!("First time starting database, initializing system catalog...");
         let tnx_id = TnxManager::global()
-            .begin_transaction(PrivilegeConn::INIT); // connection id 0 for privileged operations
+            .begin_transaction(PrivilegeConn::INIT);
         let table_ids = vec![
             SYS_TABLE_ID,
             SYS_COLUMN_ID,
@@ -322,6 +322,7 @@ impl SysCatalog {
             ],
             tnx_id,
         )?;
+        WAL::global().commit_tnx(tnx_id)?;
         TnxManager::global().end_transaction(0);
         info!("System catalog initialized successfully!");
         Ok(())
