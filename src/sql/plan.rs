@@ -204,7 +204,7 @@ impl Plan {
                     let rest: &str = &sql_trimmed[("create user".len())..].trim_start();
                     let mut user_name = String::new();
                     let mut password: Option<String> = None;
-                    // let mut if_not_exists = false;
+                    let mut if_not_exists = false;
                     // Tokenize rest
                     let tokens: Vec<&str> = rest.split_whitespace().collect();
                     let mut i = 0;
@@ -214,7 +214,7 @@ impl Plan {
                         && tokens[1].eq_ignore_ascii_case("not")
                         && tokens[2].eq_ignore_ascii_case("exists")
                     {
-                        // if_not_exists = true;
+                        if_not_exists = true;
                         i += 3;
                     }
                     // Get user_name
@@ -276,7 +276,7 @@ impl Plan {
         } else if lower.starts_with("drop user") {
             // Parse: DROP USER [IF EXISTS] <user_name>[;]
             let rest: &str = &sql_trimmed[("drop user".len())..].trim_start();
-            let mut tokens: Vec<&str> = rest.split_whitespace().collect();
+            let tokens: Vec<&str> = rest.split_whitespace().collect();
             let mut i = 0;
             let mut if_exists = false;
             // Check for IF EXISTS
@@ -833,7 +833,7 @@ impl Plan {
             exprs.iter().map(|e| format!("{}", e)).collect::<Vec<_>>().join(", ")
         }
 
-        fn fmt_alter_op(op: &AlterTableOperation, table_name: &str) -> String {
+        fn fmt_alter_op(op: &AlterTableOperation, _table_name: &str) -> String {
             match op {
                 AlterTableOperation::AddColumn { column_def, .. } => {
                     format!(
@@ -1068,8 +1068,7 @@ impl Plan {
         }
 
         // Print all expression fields of a PlanNode, with their field paths.
-        fn print_plan_expr_paths(plan: &PlanNode, prefix: &str, plan_path: &str) {
-            use sqlparser::ast::AlterTableOperation;
+        fn print_plan_expr_paths(plan: &PlanNode, prefix: &str, _plan_path: &str) {
             match plan {
                 PlanNode::Filter { predicate, .. } => {
                     let path = format!("(PlanNode::Filter.predicate)");
@@ -1111,7 +1110,7 @@ impl Plan {
                 }
                 PlanNode::DDL { op } => {
                     match op {
-                        DdlOperation::CreateTable { table_name, schema, if_not_exists } => {
+                        DdlOperation::CreateTable { table_name: _, schema, if_not_exists } => {
                             // Print if_not_exists path first
                             let path_exists = "(PlanNode::DDL.op[CreateTable].if_not_exists)";
                             println!("{}{} -> {}", prefix, path_exists, if_not_exists);
