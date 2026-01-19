@@ -6,10 +6,6 @@ use crate::storage::Table;
 use super::result::{ExecutionResult::{self, Ddl}};
 use tracing::info;
 
-// fn create_table(tnx_id: u64, table_name: &str, columns: &Vec<ColumnDef>) -> RsqlResult<ExecutionResult> {
-//     todo!()
-// }
-
 /// table and index relevant sql statements
 pub fn execute_ddl_plan_node(node: &PlanNode, tnx_id: u64) -> RsqlResult<ExecutionResult> {
     let PlanNode::DDL { op } = node else {
@@ -71,14 +67,10 @@ pub fn execute_ddl_plan_node(node: &PlanNode, tnx_id: u64) -> RsqlResult<Executi
         DdlOperation::CreateIndex {
             index_name,
             table_name,
-            columns,
+            column,
             unique,
             if_not_exists,
         } => {
-            if columns.len() != 1 {
-                return Err(RsqlError::InvalidInput("Only single-column index is supported currently.".to_string()));
-            }
-            let column = &columns[0];
             // check if index exists
             let index_id = SysCatalog::global().get_index_id(tnx_id, index_name)?;
             if index_id.is_some() {

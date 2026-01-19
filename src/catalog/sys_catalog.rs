@@ -18,7 +18,7 @@ use crate::config::{
     DEFAULT_PASSWORD,
     DEFAULT_USERNAME,
 };
-use crate::utils::PrivilegeConn;
+use crate::common::PrivilegeConn;
 
 use super::table_schema::TableSchema;
 
