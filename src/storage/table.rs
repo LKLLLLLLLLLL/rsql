@@ -284,8 +284,12 @@ impl Table {
     /// This implements will only set the table file length to 0
     /// TODO: support deleting the table file
     pub fn drop(mut self, tnx_id: u64) -> RsqlResult<()> {
-        let page_max_idx = self.storage.max_page_index().unwrap_or(0);
+        let page_max_idx = self.storage.max_page_index();
         // truncate the file
+        if page_max_idx.is_none() {
+            return Ok(());
+        }
+        let page_max_idx = page_max_idx.unwrap();
         for page_idx in (0..=page_max_idx).rev() {
             self.storage.free_page(tnx_id, page_idx)?;
         };
