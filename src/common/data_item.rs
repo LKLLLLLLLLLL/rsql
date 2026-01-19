@@ -47,7 +47,7 @@ impl DataItem {
             DataItem::Integer(_) | DataItem::NullInt => 1 + 8,
             DataItem::Float(_) | DataItem::NullFloat => 1 + 8,
             DataItem::Chars { len, .. } | DataItem::NullChars { len } => 1 + 8 + *len as usize,
-            DataItem::VarChar { .. } | DataItem::NullVarChar => 1 + size_of::<VarCharHead>(),
+            DataItem::VarChar { .. } | DataItem::NullVarChar => 1 + 24,
             DataItem::Bool(_) | DataItem::NullBool => 1 + 1,
         }
     }
@@ -56,7 +56,7 @@ impl DataItem {
             table_schema::ColType::Integer => 1 + 8,
             table_schema::ColType::Float => 1 + 8,
             table_schema::ColType::Chars(len) => 1 + 8 + *len as usize,
-            table_schema::ColType::VarChar(_) => 1 + size_of::<VarCharHead>(),
+            table_schema::ColType::VarChar(_) => 1 + 24,
             table_schema::ColType::Bool => 1 + 1,
         }
     }
