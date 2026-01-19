@@ -205,6 +205,81 @@ pub fn handle_table_obj_filter_expr(table_obj: &TableObject, predicate: &Expr) -
                         }
                     }
                 },
+                BinaryOperator::NotEq => {
+                    match (&**left, &**right) {
+                        (Expr::Identifier(ident), Expr::Value(value)) => {
+                            match &value.value {
+                                Boolean(b) => {
+                                    let col = ident.value.clone();
+                                    let col_idx = table_obj.map.get(&col).unwrap();
+                                    let bool_value = DataItem::Bool(*b);
+                                    let rows_iter = table_obj.table_obj.get_all_rows()?;
+                                    let mut rows = vec![];
+                                    for row in rows_iter {
+                                        let row = row?;
+                                        if row[*col_idx] != bool_value {
+                                            rows.push(row);
+                                        }
+                                    }
+                                    Ok(rows)
+                                },
+                                Number(n, _) => {
+                                    let col = ident.value.clone();
+                                    let col_idx = table_obj.map.get(&col).unwrap();
+                                    let number_value = parse_number(n)?;
+                                    let rows_iter = table_obj.table_obj.get_all_rows()?;
+                                    let mut rows = vec![];
+                                    for row in rows_iter {
+                                        let row = row?;
+                                        if row[*col_idx] != number_value {
+                                            rows.push(row);
+                                        }
+                                    }
+                                    Ok(rows)
+                                },
+                                SingleQuotedString(s) => {
+                                    let col = ident.value.clone();
+                                    let col_idx = table_obj.map.get(&col).unwrap();
+                                    let col_type = table_obj.cols.1[*col_idx].clone();
+                                    let string_value = match col_type {
+                                        ColType::Chars(size) => DataItem::Chars{len: size as u64, value: s.clone()},
+                                        _ => return Err(RsqlError::ExecutionError(format!("Unsupported char type on table {col}")))
+                                    };
+                                    let rows_iter = table_obj.table_obj.get_all_rows()?;
+                                    let mut rows = vec![];
+                                    for row in rows_iter {
+                                        let row = row?;
+                                        if row[*col_idx] != string_value {
+                                            rows.push(row);
+                                        }
+                                    }
+                                    Ok(rows)
+                                },
+                                _ => {
+                                    Err(RsqlError::ExecutionError(format!("Unsupported filter expression: {:?}", predicate)))
+                                },
+                            }
+                        },
+                        (Expr::Identifier(left_ident), Expr::Identifier(right_ident)) => {
+                            let left_col = left_ident.value.clone();
+                            let left_col_idx = table_obj.map.get(&left_col).unwrap();
+                            let right_col = right_ident.value.clone();
+                            let right_col_idx = table_obj.map.get(&right_col).unwrap();
+                            let rows_iter = table_obj.table_obj.get_all_rows()?;
+                            let mut rows = vec![];
+                            for row in rows_iter {
+                                let row = row?;
+                                if row[*left_col_idx] != row[*right_col_idx] {
+                                    rows.push(row);
+                                }
+                            }
+                            Ok(rows)
+                        },
+                        _ => {
+                            Err(RsqlError::ExecutionError(format!("Unsupported filter expression: {:?}", predicate)))
+                        },
+                    }
+                },
                 BinaryOperator::LtEq => {
                     match (&**left, &**right) {
                         (Expr::Identifier(ident), Expr::Value(value)) => {
@@ -529,6 +604,71 @@ pub fn handle_temp_table_filter_expr(cols: &Vec<String>, cols_type: &Vec<ColType
                         _ => {
                             Err(RsqlError::ExecutionError(format!("Unsupported filter expression: {:?}", predicate)))
                         }
+                    }
+                },
+                BinaryOperator::NotEq => {
+                    match (&**left, &**right) {
+                        (Expr::Identifier(ident), Expr::Value(value)) => {
+                            let col = ident.value.clone();
+                            let col_idx = cols.iter().position(|c| c == &col).unwrap();
+                            match &value.value {
+                                Boolean(b) => {
+                                    let bool_value = DataItem::Bool(*b);
+                                    let mut filtered_rows = vec![];
+                                    for row in rows.iter() {
+                                        if row[col_idx] != bool_value {
+                                            filtered_rows.push(row.clone());
+                                        }
+                                    }
+                                    Ok(filtered_rows)
+                                },
+                                Number(n, _) => {
+                                    let number_value = parse_number(n)?;
+                                    let mut filtered_rows = vec![];
+                                    for row in rows.iter() {
+                                        if row[col_idx] != number_value {
+                                            filtered_rows.push(row.clone());
+                                        }
+                                    }
+                                    Ok(filtered_rows)
+                                },
+                                SingleQuotedString(s) => {
+                                    let col_type = cols_type[col_idx].clone();
+                                    let string_value = match col_type {
+                                        ColType::Chars(size) => DataItem::Chars{len: size as u64, value: s.clone()},
+                                        _ => {
+                                            return Err(RsqlError::ExecutionError(format!("Unsupported filter expression: {:?}", predicate)))
+                                        },
+                                    };
+                                    let mut filtered_rows = vec![];
+                                    for row in rows.iter() {
+                                        if row[col_idx] != string_value {
+                                            filtered_rows.push(row.clone());
+                                        }
+                                    }
+                                    Ok(filtered_rows)
+                                },
+                                _ => {
+                                    Err(RsqlError::ExecutionError(format!("Unsupported filter expression: {:?}", predicate)))
+                                }
+                            }
+                        },
+                        (Expr::Identifier(left_ident), Expr::Identifier(right_ident)) => {
+                            let left_col = left_ident.value.clone();
+                            let left_col_idx = cols.iter().position(|col| col == &left_col).unwrap();
+                            let right_col = right_ident.value.clone();
+                            let right_col_idx = cols.iter().position(|col| col == &right_col).unwrap();
+                            let mut filtered_rows = vec![];
+                            for row in rows.iter() {
+                                if row[left_col_idx] != row[right_col_idx] {
+                                    filtered_rows.push(row.clone());
+                                }
+                            }
+                            Ok(filtered_rows)
+                        },
+                        _ => {
+                            Err(RsqlError::ExecutionError(format!("Unsupported filter expression: {:?}", predicate)))
+                        },
                     }
                 },
                 BinaryOperator::LtEq => {
