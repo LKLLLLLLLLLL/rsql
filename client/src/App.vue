@@ -1,5 +1,5 @@
 <script setup>
-import DatabasePage from './views/DatabasePage.vue'
+import DatabasePage from './components/DatabasePage.vue'
 </script>
 
 <template>
