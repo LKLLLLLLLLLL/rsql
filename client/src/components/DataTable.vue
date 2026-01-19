@@ -1,3 +1,4 @@
+<!-- DataTable.vue -->
 <template>
   <div class="table-container" :class="{ 'delete-table-container': mode === 'delete', 'update-table-container': mode === 'update' }">
     <div class="page-header">
