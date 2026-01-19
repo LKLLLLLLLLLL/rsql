@@ -43,10 +43,10 @@ fn convert_execution_result(result: &ExecutionResult) -> UniformedResult {
                 .collect();
             
             let data = serde_json::json!({
-                "columns": cols,
+                "columns": cols.0,
                 "rows": json_rows,
                 "row_count": rows.len(),
-                "column_count": cols.len(),
+                "column_count": cols.0.len(),
             });
             
             UniformedResult {
