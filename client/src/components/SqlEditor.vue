@@ -70,7 +70,8 @@ onMounted(() => {
       if (update.docChanged) {
         emit('update:modelValue', update.state.doc.toString())
       }
-    })
+    }),
+    EditorView.editable.of(!props.disabled)  // 设置初始可编辑状态
   ]
 
   editorView = new EditorView({
@@ -80,13 +81,6 @@ onMounted(() => {
     }),
     parent: editorRef.value
   })
-
-  // 设置只读状态
-  if (props.disabled) {
-    editorView.dispatch({
-      effects: EditorState.readOnly.reconfigure(EditorState.readOnly.of(true))
-    })
-  }
 })
 
 watch(
@@ -109,7 +103,7 @@ watch(
   (newDisabled) => {
     if (editorView) {
       editorView.dispatch({
-        effects: EditorState.readOnly.reconfigure(EditorState.readOnly.of(newDisabled))
+        effects: EditorView.editable.of(!newDisabled)
       })
     }
   }
@@ -132,12 +126,12 @@ onBeforeUnmount(() => {
 
 .sql-editor :deep(.cm-editor) {
   height: 100%;
-  font-size: 24px;
+  font-size: 14px;
   font-family: 'Consolas', 'Courier New', monospace;
 }
 
 .sql-editor :deep(.cm-content) {
-  font-size: 24px;
+  font-size: 14px;
 }
 
 .sql-editor :deep(.cm-line) {
