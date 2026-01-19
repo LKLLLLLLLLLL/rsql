@@ -132,9 +132,8 @@
                         :disabled="!connected"
                         @click="submitSql"
                     >
-                        {{ connected ? 'Submit' : '连接中' }}
+                        {{ connected ? 'Submit' : 'Connecting' }}
                     </button>
-                    <!-- 结果展示区 -->
                     <div class="codeArea-result">
                         <div v-if="!connected">WebSocket 未连接，请稍等或检查后端是否运行。</div>
                         <div v-else-if="codeResults.length === 0">暂无响应</div>
@@ -298,7 +297,6 @@
             <div class="export-operation"></div>
         </div>
         </div>
-    <!-- 删除确认弹窗 -->
     <div v-if="dropModalVisible" class="modal-overlay">
         <div class="modal-dialog">
             <h3><Icon :path="mdiAlertOctagonOutline" size="18" /> 确认删除</h3>
@@ -374,12 +372,12 @@ const toastDuration = 2500
 let currentTableHeaders = []
 let currentTableRows = []
 let currentDisplayHeaders = []
-// Drop 模式与弹窗
+// Drop mode and modal state
 const dropMode = ref(false)
 const dropModalVisible = ref(false)
 const pendingDropTable = ref('')
 
-// WebSocket 相关状态（与页面同源，避免跨域端口问题）
+// WebSocket state and functions
 const wsUrl = (() => {
     const username = 'root'
     const password = 'password'
@@ -463,10 +461,10 @@ function sendSqlStatement(sql, actionLabel = 'SQL') {
     }
     wsRef.value.send(JSON.stringify(payload))
     codeInput.value = trimmed
-    triggerToast(`${actionLabel} 已发送`) // 轻量提示
+    triggerToast(`${actionLabel} 已发送`)
 }
 
-// 将包含多个语句的文本拆分为多条 INSERT/SQL 逐条发送
+// split and send multiple SQL statements
 function sendSqlBatch(sqlText, actionLabel = 'SQL 批量') {
     if (!ensureWsReady()) return
     const parts = (sqlText || '')
@@ -488,7 +486,7 @@ function sendSqlBatch(sqlText, actionLabel = 'SQL 批量') {
         console.log(`${actionLabel} 第 ${idx + 1} 条`, sql)
     })
     codeInput.value = parts.map(s => (s.endsWith(';') ? s : `${s};`)).join('\n')
-    triggerToast(`${actionLabel} 已逐条发送 (${parts.length} 条)`) // 轻量提示
+    triggerToast(`${actionLabel} 已逐条发送 (${parts.length} 条)`)
 }
 
 onMounted(() => {
@@ -583,7 +581,7 @@ function confirmDropTable() {
     const sql = `DROP TABLE ${name};`
     sendSqlStatement(sql, '删除表')
     dropModalVisible.value = false
-    // 重新获取并渲染表列表
+    // reload table list after a short delay
     setTimeout(() => {
         loadTablesList()
     }, 100)
@@ -900,16 +898,16 @@ onMounted(() => {
         })
     }
 
-    async function loadTableData(tableName) { // 导入表数据
+    async function loadTableData(tableName) { // load table data from JSON file
         if (tableName) {
             currentTableName.value = tableName
         }
         const candidates = []
         if (tableName) {
-            candidates.push(buildAssetUrl(`${tableName}.json`)) // 【查表路径】
+            candidates.push(buildAssetUrl(`${tableName}.json`)) // [try specific table first]
         }
 
-        for (const url of candidates) { // 逐个尝试候选路径
+        for (const url of candidates) { // try candidate URLs one by one
             try {
                 const res = await fetch(url, { cache: 'no-store' })
                 if (!res.ok) throw new Error(`Fetch failed: ${url}`)
@@ -969,7 +967,7 @@ onMounted(() => {
         renderUpdateTable(displayHeaders, currentTableRows)
     }
 
-    async function loadTablesList() { // 加载左侧导航栏的表列表
+    async function loadTablesList() { // load table names from TABLES.json on left sidebar
         const url = buildAssetUrl('TABLES.json')
         let names = ['Users', 'Products']
         try {
@@ -991,7 +989,7 @@ onMounted(() => {
         renderTablesList(sorted)
     }
 
-    function renderTablesList(names) { // 动态渲染左侧导航栏的表列表（按字典序升序）
+    function renderTablesList(names) { // render table names into sidebar
         if (!tablesListEl) return
         const header = '<h3>Table List</h3>'
         const sorted = Array.isArray(names)
@@ -1014,7 +1012,7 @@ onMounted(() => {
         attachTableItemClickHandlers()
     }
 
-    function showSection(key) { // 切换右侧内容区显示的部分
+    function showSection(key) { // show only the specified section, hide others
         Object.values(sections).forEach((el) => {
             if (!el) return
             el.style.display = 'none'
@@ -1171,18 +1169,18 @@ onMounted(() => {
         })
     }
 
-    function attachTableItemClickHandlers() { // 绑定左侧导航栏表项点击事件及删除按钮
+    function attachTableItemClickHandlers() { // attach click handlers to table items in the left sidebar
         document.querySelectorAll('.table-item').forEach((item) => {
         const newItem = item.cloneNode(true)
         if (item.parentNode) item.parentNode.replaceChild(newItem, item)
         newItem.addEventListener('click', async function (e) {
-            // 点击删除按钮时，不触发表项切换
+            // Do not trigger table switch when clicking the delete button
             if (e && e.target && e.target.classList && e.target.classList.contains('table-delete-btn')) {
                 return
             }
-            // 点击任意表项时，将顶部四个按钮恢复为未选中（蓝色）
+            // When clicking any table item, reset the top four buttons to unselected (blue)
             document.querySelectorAll('.tables-btn').forEach((el) => el.classList.remove('active'))
-            // 退出删除模式并刷新列表隐藏删除按钮
+            // exit drop mode and refresh list to hide delete buttons
             const clickedSpan = newItem.querySelector('span')
             const clickedName = clickedSpan && clickedSpan.textContent ? clickedSpan.textContent.split(' ')[0] : ''
             dropMode.value = false
@@ -1200,7 +1198,7 @@ onMounted(() => {
             if (headerTitle) headerTitle.textContent = `${tableName} Table Data`
             console.log(`Switched to table: ${tableName}`)
             await loadTableData(tableName)
-            // 确保刷新列表后仍然保持当前表高亮
+            // Highlight the active table after a short delay to ensure rendering is complete
             setTimeout(() => {
                 document.querySelectorAll('.table-item').forEach((el) => {
                     const sp = el.querySelector('span')
@@ -1411,7 +1409,7 @@ onMounted(() => {
                 return
             }
 
-            // 主键不能为空：逐行检查所有 primaryKey 列
+            // Validate primary keys: must be filled
             const pkErrors = []
             dataRows.forEach((dataRow, idx) => {
                 const missingPK = []
@@ -1587,7 +1585,7 @@ onMounted(() => {
 
     document.querySelectorAll('.tables-btn').forEach((button) => {
         button.addEventListener('click', function () {
-        // 仅允许一个按钮为激活态（红色）
+        // only one button can be active at a time
         document.querySelectorAll('.tables-btn').forEach((el) => el.classList.remove('active'))
         this.classList.add('active')
         const action = this.classList.contains('create') ? 'Create' : 
@@ -1602,7 +1600,6 @@ onMounted(() => {
             })
             showSection('create')
         } else if (action === 'Drop') {
-            // 开启删除模式，在列表每个表后显示删除按钮
             dropMode.value = true
             loadTablesList()
 
@@ -1699,19 +1696,19 @@ body {
 .tables-btn.drop,
 .tables-btn.rename,
 .tables-btn.terminal {
-    background-color: #3c8dc3; /* 默认蓝色 */
+    background-color: #3c8dc3; /* default blue */
     color: white;
 }
 
 .tables-btn.active {
-    background-color: #f08080; /* 激活红色 */
+    background-color: #f08080; /* active red */
     color: white;
 }
 
 .terminal-panel {
     display: flex; 
     flex-direction: column; 
-    height: 800px; 
+    height: 800px; /* fixed height */
     min-height: 320px; 
     background: #f8f8f8; 
     border-radius: 8px; 
