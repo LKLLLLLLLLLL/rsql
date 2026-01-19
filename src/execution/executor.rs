@@ -67,8 +67,6 @@ fn rollback_transaction(connection_id: u64) -> RsqlResult<()> {
         let mut tmp_storages = tmp_storages.borrow_mut();
         if let Some(sm) = tmp_storages.get(&table_id) {
             Ok(sm.clone())
-        } else if is_sys_table(table_id) {
-            Ok(SysCatalog::global().get_storage(table_id))
         } else {
             let file_path = get_table_path(table_id, is_sys_table(table_id));
             let sm = StorageManager::new(file_path.to_str().unwrap())?;
