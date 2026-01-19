@@ -104,16 +104,23 @@ impl WAL {
         table_id: &u64,
         append_page: &mut impl FnMut(u64) -> RsqlResult<u64>,
         trunc_page: &mut impl FnMut(u64) -> RsqlResult<()>,
-        max_page_idx: &mut impl FnMut(u64) -> RsqlResult<u64>,
+        max_page_idx: &mut impl FnMut(u64) -> RsqlResult<Option<u64>>,
     ) -> RsqlResult<()> {
-        // if too short, append pages until enough
-        while max_page_idx(*table_id)? < num {
-            append_page(*table_id)?;
+        let mut max_page: i64 = match max_page_idx(*table_id)? {
+            Some(idx) => idx as i64,
+            None => -1,
         };
-        // if too long, delete pages until enough
-        while max_page_idx(*table_id)? > num {
-            trunc_page(*table_id)?;
-        };
+        while max_page != num as i64 {
+            if max_page < num as i64 {
+                // if too short, append pages until enough
+                append_page(*table_id)?;
+                max_page += 1;
+            } else { 
+                // if too long, delete pages until enough
+                trunc_page(*table_id)?;
+                max_page -= 1;
+            }
+        }
         Ok(())
     }
     /// Recovery the database to a consistent state using the WAL log.
@@ -132,7 +139,7 @@ impl WAL {
         update_page: &mut impl FnMut(u64, u64, u64, u64, &[u8]) -> RsqlResult<()>,
         append_page: &mut impl FnMut(u64) -> RsqlResult<u64>,
         trunc_page: &mut impl FnMut(u64) -> RsqlResult<()>,
-        max_page_idx: &mut impl FnMut(u64) -> RsqlResult<u64>,
+        max_page_idx: &mut impl FnMut(u64) -> RsqlResult<Option<u64>>,
     ) -> RsqlResult<u64> {
         info!("Starting WAL recovery");
         let buf = {
@@ -195,7 +202,8 @@ impl WAL {
             match entry {
                 WALEntry::UpdatePage { tnx_id, table_id, page_id, offset, len, new_data, .. } => {
                     if redo_tnx_ids.contains(tnx_id) {
-                        if *page_id > max_page_idx(*table_id)? {
+                        let max_page = max_page_idx(*table_id)?;
+                        if max_page.is_none() || *page_id > max_page.unwrap() {
                             Self::align_page_num(*page_id, table_id, append_page, trunc_page, max_page_idx)?;
                         }
                         update_page(*table_id, *page_id, *offset, *len, &new_data)?;
@@ -223,7 +231,8 @@ impl WAL {
             match entry {
                 WALEntry::UpdatePage { tnx_id, table_id, page_id, offset, len, old_data, .. } => {
                     if undo_tnx_ids.contains(tnx_id) {
-                        if *page_id > max_page_idx(*table_id)? {
+                        let max_page = max_page_idx(*table_id)?;
+                        if max_page.is_none() || *page_id > max_page.unwrap() {
                             Self::align_page_num(*page_id, table_id, append_page, trunc_page, max_page_idx)?;
                         }
                         update_page(*table_id, *page_id, *offset, *len, &old_data)?;
@@ -271,7 +280,7 @@ impl WAL {
         update_page: &mut impl FnMut(u64, u64, u64, u64, &[u8]) -> RsqlResult<()>,
         append_page: &mut impl FnMut(u64) -> RsqlResult<u64>,
         trunc_page: &mut impl FnMut(u64) -> RsqlResult<()>,
-        max_page_idx: &mut impl FnMut(u64) -> RsqlResult<u64>,
+        max_page_idx: &mut impl FnMut(u64) -> RsqlResult<Option<u64>>,
     ) -> RsqlResult<u64> {
         Self::recovery_with_instance(WAL::global(), write_page, update_page, append_page, trunc_page, max_page_idx)
     }
@@ -359,7 +368,6 @@ impl WAL {
         check_recovered();
         let entry_bytes = entry.to_bytes();
         let mut log_file = self.log_file.lock().unwrap();
-        debug!("Appending WAL entry: {:?}", &entry);
         // 1. write entry bytes
         log_file.write_all(&entry_bytes)?;
         // 2. update length
@@ -458,11 +466,11 @@ impl WAL {
     pub fn rollback_tnx(
         &self, 
         tnx_id: u64,
-        write_page: &mut dyn FnMut(u64, u64, &[u8]) -> RsqlResult<()>,
-        update_page: &mut dyn FnMut(u64, u64, u64, u64, &[u8]) -> RsqlResult<()>,
-        append_page: &mut dyn FnMut(u64) -> RsqlResult<u64>,
-        trunc_page: &mut dyn FnMut(u64) -> RsqlResult<()>,
-        max_page_idx: &mut dyn FnMut(u64) -> RsqlResult<u64>,
+        write_page: &mut impl FnMut(u64, u64, &[u8]) -> RsqlResult<()>,
+        update_page: &mut impl FnMut(u64, u64, u64, u64, &[u8]) -> RsqlResult<()>,
+        append_page: &mut impl FnMut(u64) -> RsqlResult<u64>,
+        trunc_page: &mut impl FnMut(u64) -> RsqlResult<()>,
+        max_page_idx: &mut impl FnMut(u64) -> RsqlResult<Option<u64>>,
     ) -> RsqlResult<()> {
         check_recovered();
         // 1. find all entries related to this transaction
@@ -487,27 +495,17 @@ impl WAL {
         for entry in undo_entries.iter().rev() {
             match entry {
                 WALEntry::UpdatePage { table_id, page_id, offset, len, old_data, .. } => {
+                    let max_page = max_page_idx(*table_id)?;
+                    if max_page.is_none() || *page_id > max_page.unwrap() {
+                        Self::align_page_num(*page_id, table_id, append_page, trunc_page, max_page_idx)?;
+                    }
                     update_page(*table_id, *page_id, *offset, *len, &old_data)?;
                 },
                 WALEntry::NewPage { table_id, page_id, .. } => {
-                    // if too short, append pages until enough
-                    while max_page_idx(*table_id)? < *page_id - 1 {
-                        append_page(*table_id)?;
-                    }
-                    // if too long, delete pages until enough
-                    while max_page_idx(*table_id)? > *page_id - 1 {
-                        trunc_page(*table_id)?;
-                    }
+                    Self::align_page_num(*page_id - 1, table_id, append_page, trunc_page, max_page_idx)?;
                 },
                 WALEntry::DeletePage { table_id, page_id, old_data, .. } => {
-                    // if too short, append pages until enough
-                    while max_page_idx(*table_id)? < *page_id {
-                        append_page(*table_id)?;
-                    }
-                    // if too long, delete pages until enough
-                    while max_page_idx(*table_id)? > *page_id {
-                        trunc_page(*table_id)?;
-                    }
+                    Self::align_page_num(*page_id, table_id, append_page, trunc_page, max_page_idx)?;
                     write_page(*table_id, *page_id, &old_data)?;
                 },
                 _ => {},
@@ -578,7 +576,7 @@ mod tests {
         };
         let mut append_page = |_: u64| -> RsqlResult<u64> { appended.push(()); Ok(0) };
         let mut trunc_page = |_: u64| -> RsqlResult<()> { truncated.push(()); Ok(()) };
-        let mut max_page_idx = |_: u64| -> RsqlResult<u64> { Ok(0) };
+        let mut max_page_idx = |_: u64| -> RsqlResult<Option<u64>> { Ok(Some(0)) };
 
         WAL::recovery_with_instance(wal, &mut write_page, &mut update_page, &mut append_page, &mut trunc_page, &mut max_page_idx).unwrap();
 
@@ -610,7 +608,7 @@ mod tests {
             },
             &mut |_| Ok(0),
             &mut |_| Ok(()),
-            &mut |_| Ok(0)
+            &mut |_| Ok(Some(0))
         ).unwrap();
     }
 
@@ -675,7 +673,7 @@ mod tests {
             &mut update_fn,
             &mut |_| Ok(0),
             &mut |_| Ok(()),
-            &mut |_| Ok(0),
+            &mut |_| Ok(Some(0)),
         ).unwrap();
 
         // Since t2 was active during checkpoint, it should be in undo_tnx_ids

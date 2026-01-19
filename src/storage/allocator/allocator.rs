@@ -171,7 +171,13 @@ impl Allocator {
             storage.write(tnx_id, next_free_page, &next_page_data)?;
         }
         // free the page
-        storage.free_page(tnx_id, page_idx)?;
+        let max_page = match storage.max_page_index() {
+            None => -1 as i64,
+            Some(n) => n as i64,
+        };
+        if page_idx as i64 == max_page {
+            storage.free_page(tnx_id, page_idx)?;
+        }
         Ok(())
     }
     /// Allocate an empty entry

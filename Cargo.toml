@@ -18,7 +18,7 @@ num_cpus = "1.17.0"
 thiserror = "1.0"
 actix-web-actors = "4.3.1"
 actix = "0.13.5"
-tokio = { version = "1.49.0", features = ["process"]}
+tokio = { version = "1.49.0", features = ["full"]}
 serde_json = "1.0.149"
 rand = "0.9.2"
 bcrypt = "0.18.0"
@@ -28,5 +28,12 @@ rust-embed = "8.11.0"
 mime_guess = "2.0.5"
 
 [dev-dependencies]
+criterion = { version = "0.5", features = ["async_tokio"] }
+futures-util = "0.3.31"
 serial_test = "3.3.1"
 tempfile = "3.24.0"
+tokio-tungstenite = { version = "0.20", features = ["native-tls"] }
+
+[[bench]]
+name = "perf"
+harness = false
