@@ -5,7 +5,7 @@ use crate::common::data_item::{DataItem};
 use crate::catalog::table_schema::{ColType};
 use crate::storage::table::{Table};
 use crate::transaction::TnxManager;
-use super::result::{ExecutionResult::{self, Query, Mutation, TableObj, TableWithFilter, TempTable, AggrTable}, TableObject};
+use super::result::{MiddleResult::{self, Query, Mutation, TableObj, TableWithFilter, TempTable, AggrTable}, TableObject};
 use super::expr_interpreter::{handle_on_expr, 
     handle_table_obj_filter_expr, 
     handle_temp_table_filter_expr, 
@@ -56,7 +56,7 @@ fn get_table_object (table_name: &str, read_only: bool, tnx_id: u64) -> RsqlResu
     Ok(table_object)
 }
 
-pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64, read_only: bool) -> RsqlResult<ExecutionResult> {
+pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64, read_only: bool) -> RsqlResult<MiddleResult> {
     match node {
         PlanNode::TableScan { table } => {
             info!("Implement TableScan execution");
