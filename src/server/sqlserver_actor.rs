@@ -1,9 +1,11 @@
 use super::thread_pool::WorkingThreadPool;
-use super::types::{RayonQueryRequest, WebsocketResponse, RayonQueryResponse};
+use super::types::{RayonQueryRequest, WebsocketResponse, RayonQueryResponse, UniformedResult};
+use crate::common::data_item::DataItem;
+use crate::execution::result::ExecutionResult;
 
 use actix_web_actors::ws;
 use actix::{Actor, StreamHandler, AsyncContext};
-use serde_json;
+use serde_json::{self, Value};
 use tracing::{info, error};
 use futures::executor;
 
@@ -11,8 +13,131 @@ use std::time::{SystemTime, UNIX_EPOCH, Instant};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+fn data_item_to_value(item: &DataItem) -> Value {
+    match item {
+        DataItem::Integer(i) => Value::Number((*i).into()),
+        DataItem::Float(f) => {
+            if let Some(num) = serde_json::Number::from_f64(*f) {
+                Value::Number(num)
+            } else {
+                Value::String(f.to_string())
+            }
+        }
+        DataItem::Chars { value, .. } => Value::String(value.clone()),
+        DataItem::VarChar { value, .. } => Value::String(value.clone()),
+        DataItem::Bool(b) => Value::Bool(*b),
+        DataItem::NullInt
+        | DataItem::NullFloat
+        | DataItem::NullChars { .. }
+        | DataItem::NullVarChar
+        | DataItem::NullBool => Value::Null,
+    }
+}
+
+fn convert_execution_result(result: &ExecutionResult) -> UniformedResult {
+    match result {
+        ExecutionResult::Query { cols, rows } => {
+            let json_rows: Vec<Vec<Value>> = rows
+                .iter()
+                .map(|row| row.iter().map(data_item_to_value).collect())
+                .collect();
+            
+            let data = serde_json::json!({
+                "columns": cols,
+                "rows": json_rows,
+                "row_count": rows.len(),
+                "column_count": cols.len(),
+            });
+            
+            UniformedResult {
+                result_type: "query".to_string(),
+                data,
+            }
+        }
+        
+        ExecutionResult::Mutation(msg) => {
+            let affected_rows = msg
+                .split_whitespace()
+                .find_map(|s| s.parse::<usize>().ok())
+                .unwrap_or(1);
+            
+            let data = serde_json::json!({
+                "message": msg,
+                "affected_rows": affected_rows,
+            });
+            
+            UniformedResult {
+                result_type: "mutation".to_string(),
+                data,
+            }
+        }
+        
+        ExecutionResult::TnxBeginSuccess => {
+            let data = serde_json::json!({
+                "message": "Transaction started successfully",
+            });
+            
+            UniformedResult {
+                result_type: "transaction_begin".to_string(),
+                data,
+            }
+        }
+        
+        ExecutionResult::CommitSuccess => {
+            let data = serde_json::json!({
+                "message": "Transaction committed successfully",
+            });
+            
+            UniformedResult {
+                result_type: "transaction_commit".to_string(),
+                data,
+            }
+        }
+        
+        ExecutionResult::RollbackSuccess => {
+            let data = serde_json::json!({
+                "message": "Transaction rolled back successfully",
+            });
+            
+            UniformedResult {
+                result_type: "transaction_rollback".to_string(),
+                data,
+            }
+        }
+        
+        ExecutionResult::Ddl(msg) => {
+            let data = serde_json::json!({
+                "message": msg,
+            });
+            
+            UniformedResult {
+                result_type: "ddl".to_string(),
+                data,
+            }
+        }
+        
+        ExecutionResult::Dcl(msg) => {
+            let data = serde_json::json!({
+                "message": msg,
+            });
+            
+            UniformedResult {
+                result_type: "dcl".to_string(),
+                data,
+            }
+        }
+    }
+}
+
+fn convert_execution_results(exec_results: &[ExecutionResult]) -> Vec<UniformedResult> {
+    exec_results
+        .iter()
+        .map(convert_execution_result)
+        .collect()
+}
+
 // one SQLWebsocketActor corresponds to one websocket connection and multiple transactions
-pub struct SQLWebsocketActor{
+pub struct SQLWebsocketActor {
     working_thread_pool: Arc<WorkingThreadPool>,
     working_query: Arc<AtomicU64>,
     current_connection_id: u64,
@@ -20,7 +145,7 @@ pub struct SQLWebsocketActor{
     username: String,
 }
 
-impl Actor for SQLWebsocketActor{
+impl Actor for SQLWebsocketActor {
     type Context = ws::WebsocketContext<Self>;
 
     //start the websocket connection
@@ -32,6 +157,7 @@ impl Actor for SQLWebsocketActor{
         let welcome_msg = WebsocketResponse {
             rayon_response: RayonQueryResponse {
                 response_content: Vec::new(),
+                uniform_result: Vec::new(),
                 error: String::from("Websocket Connection Established"),
                 execution_time: 0,
             },
@@ -62,6 +188,7 @@ impl Actor for SQLWebsocketActor{
                         let checkpoint_msg = WebsocketResponse {
                             rayon_response: RayonQueryResponse {
                                 response_content: Vec::new(),
+                                uniform_result: Vec::new(),
                                 error: String::from("Checkpoint Success"),
                                 execution_time: 0,
                             },
@@ -131,22 +258,28 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for SQLWebsocketActor
                             let exec_ms = start.elapsed().as_millis() as u64;
                             
                             let response = match result {
-                                Ok(content) => WebsocketResponse {
-                                    rayon_response: RayonQueryResponse {
-                                        response_content: content,
-                                        error: String::from("Query Success"),
-                                        execution_time: exec_ms,
-                                    },
-                                    timestamp: SystemTime::now()
-                                        .duration_since(UNIX_EPOCH)
-                                        .unwrap_or_default()
-                                        .as_secs(),
-                                    success: true,
-                                    connection_id,
+                                Ok(content) => {
+                                    let uniform_results = convert_execution_results(&content);
+                                    
+                                    WebsocketResponse {
+                                        rayon_response: RayonQueryResponse {
+                                            response_content: content,
+                                            uniform_result: uniform_results,
+                                            error: String::from("Query Success"),
+                                            execution_time: exec_ms,
+                                        },
+                                        timestamp: SystemTime::now()
+                                            .duration_since(UNIX_EPOCH)
+                                            .unwrap_or_default()
+                                            .as_secs(),
+                                        success: true,
+                                        connection_id,
+                                    }
                                 },
                                 Err(e) => WebsocketResponse {
                                     rayon_response: RayonQueryResponse {
                                         response_content: Vec::new(),
+                                        uniform_result: Vec::new(),
                                         error: e.to_string(),
                                         execution_time: exec_ms,
                                     },
@@ -172,6 +305,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for SQLWebsocketActor
                         let error_response = WebsocketResponse {
                             rayon_response: RayonQueryResponse {
                                 response_content: Vec::new(),
+                                uniform_result: Vec::new(),
                                 error: format!("Invalid request format: {}", e),
                                 execution_time: 0,
                             },
@@ -204,16 +338,16 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for SQLWebsocketActor
                 ctx.pong(&msg);
             }
             Ok(ws::Message::Pong(_)) => {
-
+                // ignore
             }
             Ok(ws::Message::Binary(_)) => {
-
+                // ignore
             }
             Ok(ws::Message::Continuation(_)) => {
-
+                // ignore
             }
             Ok(ws::Message::Nop) => {
-
+                // ignore
             }
             Err(e) => {
                 error!("WebSocket protocol error: {:?}", e);
@@ -226,20 +360,20 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for SQLWebsocketActor
     }
 }
 
-impl SQLWebsocketActor{
+impl SQLWebsocketActor {
     pub fn new(
         working_thread_pool: Arc<WorkingThreadPool>,
         working_query: Arc<AtomicU64>,
         current_connection_id: u64,
         authenticated: bool,
         username: String,
-    ) -> Self{
-        Self{
+    ) -> Self {
+        Self {
             working_thread_pool,
             working_query,
             current_connection_id,
             authenticated,
-            username
+            username,
         }
     }
 }
