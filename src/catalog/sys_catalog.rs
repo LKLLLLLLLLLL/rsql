@@ -285,10 +285,53 @@ impl SysCatalog {
         }
         // sys_column
         let column_schema = sys_column_schema();
-        let _ = Table::create(SYS_COLUMN_ID, column_schema, tnx_id, true)?;
+        let mut column = Table::create(SYS_COLUMN_ID, column_schema, tnx_id, true)?;
+        // init sys table columns
+        for table_id in &table_ids {
+            let schema = match *table_id {
+                SYS_TABLE_ID => sys_table_schema(),
+                SYS_COLUMN_ID => sys_column_schema(),
+                SYS_INDEX_ID => sys_index_schema(),
+                SYS_SEQUENCE_ID => sys_sequence_schema(),
+                SYS_USER_ID => sys_user_schema(),
+                _ => unreachable!(),
+            };
+            for col in schema.get_columns() {
+                let data_type = match &col.data_type {
+                    super::table_schema::ColType::Integer => 0,
+                    super::table_schema::ColType::Float => 1,
+                    super::table_schema::ColType::Chars(_) => 2,
+                    super::table_schema::ColType::VarChar(_) => 3,
+                    super::table_schema::ColType::Bool => 4,
+                };
+                let extra = match &col.data_type {
+                    super::table_schema::ColType::Chars(size) => *size as i64,
+                    super::table_schema::ColType::VarChar(size) => *size as i64,
+                    _ => 0,
+                };
+                column.insert_row(
+                    vec![
+                        DataItem::Integer(*table_id as i64),
+                        DataItem::Chars { 
+                            len: MAX_COL_NAME_SIZE as u64, 
+                            value: col.name.clone(), 
+                        },
+                        DataItem::Integer(data_type),
+                        DataItem::Integer(extra),
+                        DataItem::Bool(col.pk),
+                        DataItem::Bool(col.nullable),
+                        DataItem::Bool(col.index),
+                        DataItem::Bool(col.unique),
+                    ],
+                    tnx_id,
+                )?;
+            }
+        }
         // sys_index
         let index_schema = sys_index_schema();
         let _ = Table::create(SYS_INDEX_ID, index_schema, tnx_id, true)?;
+        // no need to insert default indexes
+
         // sys_sequence
         let sequence_schema = sys_sequence_schema();
         let mut sequence = Table::create(SYS_SEQUENCE_ID, sequence_schema, tnx_id, true)?;
