@@ -5,12 +5,11 @@ use futures::channel::oneshot;
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
 
-use crate::execution::executor;
 use crate::execution::result::ExecutionResult;
 use crate::{config::THREAD_MAXNUM};
 use crate::common::{ RsqlResult};
 use super::types::{ RayonQueryRequest };
-use crate::execution::execute;
+use crate::execution::{execute, checkpoint, validate_user, disconnect_callback};
 
 pub struct WorkingThreadPool{
     thread_pool: rayon::ThreadPool,
@@ -58,7 +57,7 @@ impl WorkingThreadPool{
 
             let _conn_guard = conn_mutex.lock().unwrap();
 
-            match executor::validate_user(&username, &password){
+            match validate_user(&username, &password){
                 Ok(valid) => {
                     sender.send(Ok(valid)).unwrap();
                 }
@@ -125,7 +124,7 @@ impl WorkingThreadPool{
 
             let _conn_guard = conn_mutex.lock().unwrap();
 
-            match executor::disconnect_callback(connection_id){
+            match disconnect_callback(connection_id){
                 Ok(_) => {
                     sender.send(Ok(format!("rollbacking transaction for connection id: {}", connection_id))).unwrap();
                 }
@@ -157,7 +156,7 @@ impl WorkingThreadPool{
 
             let _conn_guard = conn_mutex.lock().unwrap();
 
-            match executor::checkpoint(){
+            match checkpoint(){
                 Ok(_) => {
                     sender.send(Ok(format!("checkpointing for connection id: {}", connection_id))).unwrap();
                 }

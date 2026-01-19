@@ -1,6 +1,7 @@
-/target
+target/
 .DS_Store
 .vscode/
 .idea/
 logs/
 data/
+node_modules/
