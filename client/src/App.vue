@@ -1,9 +1,9 @@
 <script setup>
-import DatabasePage from './components/DatabasePage.vue'
+// Use router-view as the app shell
 </script>
 
 <template>
-  <DatabasePage />
+  <router-view />
 </template>
 
 <style scoped></style>
