@@ -10,6 +10,7 @@
       @drop="toggleDropMode"
       @terminal="showSection('terminal')"
       @select-table="selectTable"
+      @list-toggle="handleListToggle"
     />
 
     <div class="main-content">
@@ -143,6 +144,12 @@
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+
+        <div v-if="activeSection === 'list-view'" class="list-view-operation">
+          <div class="empty-state">
+            <p>请与左侧表列表中选择表</p>
           </div>
         </div>
       </div>
@@ -354,8 +361,17 @@ function confirmRenameTable(newName) {
 
 function selectTable(tableName) {
   currentTableName.value = tableName
+  activeSidebarButton.value = 'list'
   showSection('table')
   loadTableData(tableName)
+}
+
+function handleListToggle(isOpen) {
+  // 当表列表展开时，清空旋上的操作按钮选中状态
+  if (isOpen) {
+    activeSidebarButton.value = ''
+    activeSection.value = 'list-view'
+  }
 }
 
 function openDropModal(tableName) {

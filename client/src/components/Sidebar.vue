@@ -5,46 +5,51 @@
       <h2>Database Management</h2>
     </div>
     <div class="tables-buttons">
-      <div class="tables-btn create" :class="{ active: activeButton === 'create' }" @click="emit('create')">
+      <div class="tables-btn create" :class="{ active: activeButton === 'create' }" @click="handleButtonClick('create')">
         <Icon :path="mdiTablePlus" size="18" />
         <span>Create New Table</span>
       </div>
-      <div class="tables-btn rename" :class="{ active: activeButton === 'rename' }" @click="emit('rename')">
+      <div class="tables-btn rename" :class="{ active: activeButton === 'rename' }" @click="handleButtonClick('rename')">
         <Icon :path="mdiTableEdit" size="18" />
         <span>Rename Table</span>
       </div>
-      <div class="tables-btn drop" :class="{ active: activeButton === 'drop' }" @click="emit('drop')">
+      <div class="tables-btn drop" :class="{ active: activeButton === 'drop' }" @click="handleButtonClick('drop')">
         <Icon :path="mdiTableRemove" size="18" />
         <span>Drop Table</span>
       </div>
-      <div class="tables-btn terminal" :class="{ active: activeButton === 'terminal' }" @click="emit('terminal')">
+      <div class="tables-btn terminal" :class="{ active: activeButton === 'terminal' }" @click="handleButtonClick('terminal')">
         <Icon :path="mdiConsoleLine" size="18" />
         <span>Open Terminal</span>
       </div>
-    </div>
-
-    <div class="tables-list">
-      <h3>Table List</h3>
-      <div v-for="table in tables" :key="table" class="table-item" :class="{ active: currentTable === table }" @click="emit('select-table', table)">
-        <span>{{ table }}</span>
+      <div class="tables-btn list" :class="{ active: showTableList }" @click="toggleTableList">
+        <Icon :path="mdiFormatListBulleted" size="18" />
+        <span>Table List</span>
       </div>
     </div>
 
-    <div class="sidebar-footer">
+    <div class="tables-list" :class="{ collapsed: !showTableList }">
+      <div v-for="table in tables" :key="table" class="table-item" :class="{ active: !showTableList && currentTable === table }" @click="handleTableSelect(table)">
+        <span>{{ table }}</span>
+      </div>
+
+      <div class="sidebar-footer">
       <p>Total <span id="tables-counts">{{ tables.length }}</span> tables</p>
       <p>Click table name to view data</p>
     </div>
+    </div>
+
   </div>
 </template>
 
 <script setup>
-import { defineProps, defineEmits } from 'vue'
+import { ref, defineProps, defineEmits } from 'vue'
 import Icon from './Icon.vue'
 import {
   mdiConsoleLine,
   mdiTableEdit,
   mdiTablePlus,
   mdiTableRemove,
+  mdiFormatListBulleted,
 } from '@mdi/js'
 
 const props = defineProps({
@@ -53,7 +58,37 @@ const props = defineProps({
   activeButton: { type: String, default: '' }
 })
 
-const emit = defineEmits(['create', 'rename', 'drop', 'terminal', 'select-table'])
+const emit = defineEmits(['create', 'rename', 'drop', 'terminal', 'select-table', 'list-toggle'])
+
+const showTableList = ref(false)
+
+function toggleTableList() {
+  showTableList.value = !showTableList.value
+  emit('list-toggle', showTableList.value)
+}
+
+function handleButtonClick(button) {
+  // 当点击操作按钮时，折叠表列表
+  if (showTableList.value) {
+    showTableList.value = false
+    emit('list-toggle', false)
+  }
+  
+  if (button === 'create') {
+    emit('create')
+  } else if (button === 'rename') {
+    emit('rename')
+  } else if (button === 'drop') {
+    emit('drop')
+  } else if (button === 'terminal') {
+    emit('terminal')
+  }
+}
+
+function handleTableSelect(table) {
+  // 选择表时保持表列表展开
+  emit('select-table', table)
+}
 </script>
 
 <style scoped>
@@ -103,9 +138,14 @@ const emit = defineEmits(['create', 'rename', 'drop', 'terminal', 'select-table'
 .tables-btn.create,
 .tables-btn.drop,
 .tables-btn.rename,
-.tables-btn.terminal {
+.tables-btn.terminal,
+.tables-btn.list {
   background-color: #3c8dc3;
   color: white;
+}
+
+.tables-btn.list {
+  margin-top: 100px;
 }
 
 .tables-btn.active {
@@ -114,18 +154,15 @@ const emit = defineEmits(['create', 'rename', 'drop', 'terminal', 'select-table'
 }
 
 .tables-list {
-  padding: 20px 0;
   overflow-y: auto;
   flex-grow: 1;
+  transition: all 0.3s ease;
 }
 
-.tables-list h3 {
-  padding: 0 20px 15px;
-  font-size: 1rem;
-  font-weight: 500;
-  color: #bdc3c7;
-  border-bottom: 1px solid #34495e;
-  margin-bottom: 15px;
+.tables-list.collapsed {
+  padding: 0;
+  flex-grow: 0;
+  display: none;
 }
 
 .table-item {
