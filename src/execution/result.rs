@@ -1,22 +1,15 @@
-use crate::common::RsqlResult;
-use crate::sql::{Plan, plan::{PlanItem}};
+use crate::common::{RsqlResult, RsqlError};
 use crate::common::data_item::{DataItem};
-use super::{dml_interpreter::execute_dml_plan_node, ddl_interpreter::execute_ddl_plan_node, dcl_interpreter::execute_dcl_plan_node};
-use serde::{Deserialize, Serialize};
-use tracing::info;
-use crate::catalog::table_schema::{TableSchema, ColType, TableColumn};
-use crate::transaction::TnxManager;
+use crate::catalog::table_schema::{ColType};
 use std::collections::HashMap;
 use crate::storage::table::{Table};
 
-pub enum ExecutionResult {
+pub enum MiddleResult {
     Query {
         cols: (Vec<String>, Vec<ColType>),
         rows: Vec<Vec<DataItem>>, // query result
     },
     Mutation(String), // update, delete, insert
-    Ddl(String), // create, drop
-    Dcl(String), // users
     TableObj(TableObject), // table object after scan
     TableWithFilter {
         table_obj: TableObject,
@@ -32,14 +25,35 @@ pub enum ExecutionResult {
         rows: Vec<Vec<DataItem>>,
         aggr_cols: Vec<String>, // aggregate columns
     },
-    TnxBeginSuccess,
-    CommitSuccess,
-    RollbackSuccess,
 }
+
+impl MiddleResult {
+    pub fn to_exec_result(&self) -> RsqlResult<ExecutionResult> {
+        match self {
+            MiddleResult::Query{cols, rows} => Ok(ExecutionResult::Query{cols: cols.clone(), rows: rows.clone()}),
+            MiddleResult::Mutation(msg) => Ok(ExecutionResult::Mutation(msg.clone())),
+            _ => Err(RsqlError::ExecutionError(format!("unexpected middle result")))
+        }
+    }
+}
+
 pub struct TableObject {
     pub table_obj: Table,
     pub map: HashMap<String, usize>, // col_name -> col_index
     pub cols: (Vec<String>, Vec<ColType>), // (cols_name, cols_type)
     pub indexed_cols: Vec<String>, // indexed columns
     pub pk_col: (String, ColType), // primary key column name
+}
+
+pub enum ExecutionResult {
+    TnxBeginSuccess,
+    CommitSuccess,
+    RollbackSuccess,
+    Ddl(String), // create, drop
+    Dcl(String), // users 
+    Query {
+        cols: (Vec<String>, Vec<ColType>),
+        rows: Vec<Vec<DataItem>>, // query result
+    },
+    Mutation(String), // update, delete, insert
 }
