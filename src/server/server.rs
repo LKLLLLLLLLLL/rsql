@@ -1,17 +1,16 @@
-use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer, Responder};
+use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer};
 use actix_web::middleware::NormalizePath;
 use actix_web_actors::ws;
 use tracing::info;
 use rust_embed::RustEmbed;
 
 use crate::config::{PORT};
-use super::types::{RayonQueryResponse, HttpQueryRequest, HttpQueryResponse};
 use super::sqlserver_actor::SQLWebsocketActor;
 use super::thread_pool::WorkingThreadPool;
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH, Instant};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(RustEmbed)]
 #[folder = "client/dist"] 
@@ -154,58 +153,58 @@ async fn handle_ws_query(
 }
 
 // handle http query
-async fn handle_http_query(
-    query_request: web::Json<HttpQueryRequest>,
-    state: web::Data<AppState>
-)-> impl Responder {
+// async fn handle_http_query(
+//     query_request: web::Json<HttpQueryRequest>,
+//     state: web::Data<AppState>
+// )-> impl Responder {
 
-    info!("Received query request: {:?}", query_request);
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
+//     info!("Received query request: {:?}", query_request);
+//     let now = SystemTime::now()
+//         .duration_since(UNIX_EPOCH)
+//         .unwrap_or_default()
+//         .as_secs();
 
-    let start = Instant::now();
+//     let start = Instant::now();
 
-    let current = state.working_query.fetch_add(1, Ordering::SeqCst) + 1;
-    info!("Current working query count: {}", current);
+//     let current = state.working_query.fetch_add(1, Ordering::SeqCst) + 1;
+//     info!("Current working query count: {}", current);
 
-    let request = query_request.rayon_request.clone();
+//     let request = query_request.rayon_request.clone();
 
-    let result = state.working_thread_pool.parse_and_execute_query(request,0).await;
+//     let result = state.working_thread_pool.parse_and_execute_query(request,0).await;
 
-    let current_after = state.working_query.fetch_sub(1, Ordering::SeqCst) - 1;
-    info!("Query execution completed. current working query count: {}", current_after);
+//     let current_after = state.working_query.fetch_sub(1, Ordering::SeqCst) - 1;
+//     info!("Query execution completed. current working query count: {}", current_after);
 
-    let exec_ms = start.elapsed().as_millis() as u64;
+//     let exec_ms = start.elapsed().as_millis() as u64;
 
-    match result {
-        Ok(result)=>{
-            let response = HttpQueryResponse {
-                rayon_response: RayonQueryResponse {
-                    response_content: result,
-                    error: String::new(),
-                    execution_time: exec_ms,
-                },
-                timestamp: now,
-                success: true,
-            };
-            HttpResponse::Ok().json(response)
-        }
-        Err(e)=>{
-            let response = HttpQueryResponse {
-                rayon_response: RayonQueryResponse {
-                    response_content: Vec::new(),
-                    error: e.to_string(),
-                    execution_time: exec_ms,
-                },
-                timestamp: now,
-                success: false,
-            };
-            HttpResponse::InternalServerError().json(response)
-        }
-    }
-}
+//     match result {
+//         Ok(result)=>{
+//             let response = HttpQueryResponse {
+//                 rayon_response: RayonQueryResponse {
+//                     response_content: result,
+//                     error: String::new(),
+//                     execution_time: exec_ms,
+//                 },
+//                 timestamp: now,
+//                 success: true,
+//             };
+//             HttpResponse::Ok().json(response)
+//         }
+//         Err(e)=>{
+//             let response = HttpQueryResponse {
+//                 rayon_response: RayonQueryResponse {
+//                     response_content: Vec::new(),
+//                     error: e.to_string(),
+//                     execution_time: exec_ms,
+//                 },
+//                 timestamp: now,
+//                 success: false,
+//             };
+//             HttpResponse::InternalServerError().json(response)
+//         }
+//     }
+// }
 
 pub async fn start_server() -> std::io::Result<()> {
     info!("Starting server on port {}", PORT);
