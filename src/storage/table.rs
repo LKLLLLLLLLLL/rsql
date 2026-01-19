@@ -286,7 +286,7 @@ impl Table {
     pub fn drop(mut self, tnx_id: u64) -> RsqlResult<()> {
         let page_max_idx = self.storage.max_page_index().unwrap_or(0);
         // truncate the file
-        for page_idx in 0..=page_max_idx {
+        for page_idx in (0..=page_max_idx).rev() {
             self.storage.free_page(tnx_id, page_idx)?;
         };
         Ok(())
@@ -531,6 +531,9 @@ impl Table {
     }
     pub fn get_storage(&mut self) -> &mut ConsistStorageEngine {
         &mut self.storage
+    }
+    pub fn get_table_id(&self) -> u64 {
+        self.id
     }
 }
 
