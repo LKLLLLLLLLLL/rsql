@@ -1,6 +1,6 @@
 use crate::common::{RsqlResult, RsqlError};
 use crate::sql::plan::{JoinType};
-use crate::common::data_item::{DataItem};
+use crate::common::data_item::{DataItem, VarCharHead};
 use crate::catalog::table_schema::{ColType};
 use super::result::{TableObject};
 use sqlparser::ast::{Expr, 
@@ -150,6 +150,10 @@ pub fn handle_table_obj_filter_expr(table_obj: &TableObject, predicate: &Expr) -
                                     let col_type = table_obj.cols.1[*col_idx].clone();
                                     let string_value = match col_type {
                                         ColType::Chars(size) => DataItem::Chars{len: size as u64, value: s.clone()},
+                                        ColType::VarChar(_) => DataItem::VarChar {
+                                            head: VarCharHead {max_len: s.len() as u64, len: s.len() as u64, page_ptr: None},
+                                            value: s.clone(),
+                                        },
                                         _ => return Err(RsqlError::ExecutionError(format!("Unsupported char type on table {col}")))
                                     };
                                     let some_string_value = Some(string_value.clone());
@@ -243,6 +247,10 @@ pub fn handle_table_obj_filter_expr(table_obj: &TableObject, predicate: &Expr) -
                                     let col_type = table_obj.cols.1[*col_idx].clone();
                                     let string_value = match col_type {
                                         ColType::Chars(size) => DataItem::Chars{len: size as u64, value: s.clone()},
+                                        ColType::VarChar(_) => DataItem::VarChar {
+                                            head: VarCharHead {max_len: s.len() as u64, len: s.len() as u64, page_ptr: None},
+                                            value: s.clone(),
+                                        },
                                         _ => return Err(RsqlError::ExecutionError(format!("Unsupported char type on table {col}")))
                                     };
                                     let rows_iter = table_obj.table_obj.get_all_rows()?;
@@ -571,6 +579,10 @@ pub fn handle_temp_table_filter_expr(cols: &Vec<String>, cols_type: &Vec<ColType
                                     let col_type = cols_type[col_idx].clone();
                                     let string_value = match col_type {
                                         ColType::Chars(size) => DataItem::Chars{len: size as u64, value: s.clone()},
+                                        ColType::VarChar(_) => DataItem::VarChar {
+                                            head: VarCharHead {max_len: s.len() as u64, len: s.len() as u64, page_ptr: None},
+                                            value: s.clone(),
+                                        },
                                         _ => {
                                             return Err(RsqlError::ExecutionError(format!("Unsupported filter expression: {:?}", predicate)))
                                         },
@@ -636,6 +648,10 @@ pub fn handle_temp_table_filter_expr(cols: &Vec<String>, cols_type: &Vec<ColType
                                     let col_type = cols_type[col_idx].clone();
                                     let string_value = match col_type {
                                         ColType::Chars(size) => DataItem::Chars{len: size as u64, value: s.clone()},
+                                        ColType::VarChar(_) => DataItem::VarChar {
+                                            head: VarCharHead {max_len: s.len() as u64, len: s.len() as u64, page_ptr: None},
+                                            value: s.clone(),
+                                        },
                                         _ => {
                                             return Err(RsqlError::ExecutionError(format!("Unsupported filter expression: {:?}", predicate)))
                                         },
@@ -1046,6 +1062,12 @@ pub fn handle_insert_expr(table_object: &TableObject, cols: &Vec<String>, null_c
                             ColType::Chars(size) => {
                                 data_item[*col_idx] = DataItem::Chars{len: size as u64, value: s.clone()};
                             },
+                            ColType::VarChar(_) => {
+                                data_item[*col_idx] = DataItem::VarChar {
+                                    head: VarCharHead {max_len: s.len() as u64, len: s.len() as u64, page_ptr: None},
+                                    value: s.clone(),
+                                }
+                            },
                             _ => {
                                 return Err(RsqlError::ExecutionError(format!("Unsupported insert value type: {:?}", value.value)))
                             },
@@ -1104,6 +1126,10 @@ pub fn handle_update_expr(table_object: &mut TableObject, assignments: &Vec<(Str
                         let col_type = table_object.cols.1[*tar_col_idx].clone();
                         let string_value = match col_type {
                             ColType::Chars(size) => DataItem::Chars{len: size as u64, value: s.clone()},
+                            ColType::VarChar(_) => DataItem::VarChar {
+                                head: VarCharHead {max_len: s.len() as u64, len: s.len() as u64, page_ptr: None},
+                                value: s.clone(),
+                            },
                             _ => {
                                 return Err(RsqlError::ExecutionError(format!("Unsupported update value type: {:?}", value.value)))
                             },
