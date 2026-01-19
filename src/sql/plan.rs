@@ -17,10 +17,11 @@ use sqlparser::ast::{
     AlterTableOperation as AstAlterTableOperation,
     ColumnDef,
     RenameTableNameKind,
+    Ident,
 };
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
-use sqlparser;
+use sqlparser::tokenizer::{Span, Location};
 
 // Internal modules
 use crate::sql::utils::is_aggregate_expr;
@@ -405,38 +406,27 @@ impl Plan {
         }
 
         // === Projection handling ===
-        // Distinguish three cases:
-        // 1) SELECT *        -> identity projection (no Projection node)
-        // 2) SELECT a, b     -> Projection [a, b]
-        // 3) SELECT <empty>  -> illegal (π[]), reject here
-
-        let has_wildcard = select.projection.iter().any(|item| matches!(item, SelectItem::Wildcard(_)));
+        // Always build a Projection node, including for SELECT *
         let proj_exprs = Self::extract_projection(&select.projection);
 
-        // Case 3: empty projection without wildcard is illegal
-        if !has_wildcard && proj_exprs.is_empty() {
+        if proj_exprs.is_empty() {
             return Err(RsqlError::ParserError(
                 "SELECT list cannot be empty".to_string(),
             ));
         }
 
-        // Case 2: explicit projection
-        if !proj_exprs.is_empty() {
-            let (clean_exprs, sub_info) =
-                Self::extract_subqueries_from_exprs(&proj_exprs)?;
-            plan = PlanNode::Projection {
-                exprs: clean_exprs,
+        let (clean_exprs, sub_info) = Self::extract_subqueries_from_exprs(&proj_exprs)?;
+        plan = PlanNode::Projection {
+            exprs: clean_exprs,
+            input: Box::new(plan),
+        };
+        if let Some((sub_plan, apply_type)) = sub_info {
+            plan = PlanNode::Apply {
                 input: Box::new(plan),
+                subquery: Box::new(sub_plan),
+                apply_type,
             };
-            if let Some((sub_plan, apply_type)) = sub_info {
-                plan = PlanNode::Apply {
-                    input: Box::new(plan),
-                    subquery: Box::new(sub_plan),
-                    apply_type,
-                };
-            }
         }
-        // Case 1 (SELECT *): do nothing, identity projection
 
         Ok(plan)
     }
@@ -514,7 +504,14 @@ impl Plan {
         items.iter().filter_map(|item| match item {
             SelectItem::UnnamedExpr(expr) => Some(expr.clone()),
             SelectItem::ExprWithAlias { expr, .. } => Some(expr.clone()),
-            SelectItem::Wildcard(_) => None,
+            SelectItem::Wildcard(_) => Some(Expr::Identifier(Ident {
+                value: "*".to_string(),
+                quote_style: None,
+                span: Span {
+                    start: Location { line: 0, column: 0 },
+                    end: Location { line: 0, column: 0 },
+                },
+            })),
             _ => None,
         }).collect()
     }
@@ -1403,27 +1400,9 @@ mod tests {
         //     _ => panic!("Not a DML plan item"),
         // };
         // Plan::pretty_print_pro(plan_node);
-        // let sql = "\
-        //     UPDATE student
-        //     SET    score = score + 5
-        //     WHERE  class = '3班';
-        // ";
-        // let plan = Plan::build_plan(sql).unwrap();
-        // let plan_node= match &plan.items[0] {
-        //     PlanItem::DML(pn) => pn,
-        //     _ => panic!("Not a DML plan item"),
-        // };
-        // Plan::pretty_print_pro(plan_node);
+
         let sql = "\
-            SELECT  dept_id,
-                    job_title,
-                    COUNT(*),
-                    SUM(salary),
-                    AVG(salary),
-                    MAX(salary),
-                    MIN(salary),
-            FROM    employee
-            GROUP BY dept_id, job_title;
+            Select * from users
         ";
         let plan = Plan::build_plan(sql).unwrap();
         let plan_node= match &plan.items[0] {
@@ -1431,6 +1410,24 @@ mod tests {
             _ => panic!("Not a DML plan item"),
         };
         Plan::pretty_print_pro(plan_node);
+
+        // let sql = "\
+        //     SELECT  dept_id,
+        //             job_title,
+        //             COUNT(*),
+        //             SUM(salary),
+        //             AVG(salary),
+        //             MAX(salary),
+        //             MIN(salary),
+        //     FROM    employee
+        //     GROUP BY dept_id, job_title;
+        // ";
+        // let plan = Plan::build_plan(sql).unwrap();
+        // let plan_node= match &plan.items[0] {
+        //     PlanItem::DML(pn) => pn,
+        //     _ => panic!("Not a DML plan item"),
+        // };
+        // Plan::pretty_print_pro(plan_node);
         // assert!(false);
     }
 }

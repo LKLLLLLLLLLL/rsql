@@ -87,11 +87,13 @@ pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64, read_only: bool) -> R
             let input_result = execute_dml_plan_node(input, tnx_id, true)?;
             if let TableWithFilter {table_obj, rows: input_rows} = input_result {
                 // 0. handle * column
-                if exprs.len() == 0 {
-                    return Ok(Query {
-                        cols: (table_obj.cols.0.clone(), table_obj.cols.1.clone()),
-                        rows: input_rows,
-                    })
+                if let Expr::Identifier(ident) = &exprs[0] {
+                    if ident.value == "*" {
+                        return Ok(Query {
+                            cols: table_obj.cols,
+                            rows: input_rows,
+                        })
+                    }
                 }
                 // 1. get projection columns
                 let mut cols_name = vec![];
@@ -125,11 +127,13 @@ pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64, read_only: bool) -> R
             }else {
                 if let TempTable{cols: input_cols, rows: input_rows, table_name: _} = input_result {
                     // 0. handle * column
-                    if exprs.len() == 0 {
-                        return Ok(Query {
-                            cols: input_cols,
-                            rows: input_rows,
-                        })
+                    if let Expr::Identifier(ident) = &exprs[0] {
+                        if ident.value == "*" {
+                            return Ok(Query {
+                                cols: input_cols,
+                                rows: input_rows,
+                            })
+                        }
                     }
                     // 1. get projection columns
                     let mut cols_name = vec![];
@@ -188,7 +192,52 @@ pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64, read_only: bool) -> R
                             rows,
                         }) // get aggr query result
                     }else {
-                        Err(RsqlError::ExecutionError(format!("Projection input must be a TableWithFilter, TempTable or AggrTable")))
+                        if let TableObj(table_obj) = input_result {
+                            // -1. get rows from table_obj
+                            let input_rows_iter = table_obj.table_obj.get_all_rows()?;
+                            let mut input_rows = vec![];
+                            for row in input_rows_iter {
+                                let row = row?;
+                                input_rows.push(row);
+                            }
+                            // 0. handle * column
+                            if let Expr::Identifier(ident) = &exprs[0] {
+                                if ident.value == "*" {
+                                    return Ok(Query { cols: table_obj.cols, rows: input_rows})
+                                }
+                            }
+                            // 1. get project columns
+                            let mut cols_name = vec![];
+                            let mut cols_type = vec![];
+                            for expr in exprs {
+                                match expr {
+                                    Expr::Identifier(ident) => {
+                                        let col_idx = table_obj.map.get(&ident.value).unwrap();
+                                        cols_name.push(ident.value.clone());
+                                        cols_type.push(table_obj.cols.1[*col_idx].clone());
+                                    },
+                                    _ => {
+                                        return Err(RsqlError::ExecutionError(format!("Projection expr {:?} is not supported", expr)))
+                                    }
+                                }
+                            }
+                            // 2. get projection rows
+                            let mut rows = vec![];
+                            for row in input_rows.iter() {
+                                let mut r = vec![];
+                                for col in cols_name.iter() {
+                                    let col_idx = table_obj.map.get(col).unwrap();
+                                    r.push(row[*col_idx].clone());
+                                }
+                                rows.push(r);
+                            }
+                            Ok(Query {
+                                cols: (cols_name, cols_type),
+                                rows,
+                            }) // get projection query result without where clause
+                        }else {
+                            Err(RsqlError::ExecutionError(format!("Projection input must be a TableWithFilter, TempTable, AggrTable or TableObj")))
+                        }
                     }
                 }
             }
