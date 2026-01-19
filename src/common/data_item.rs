@@ -8,7 +8,7 @@ use crate::common::{RsqlError, RsqlResult};
 use crate::catalog::table_schema;
 
 /// Data item representation in one block in table.
-#[derive(Debug, PartialEq,Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DataItem {
     Integer(i64),
     Float(f64),
@@ -323,6 +323,35 @@ impl PartialOrd for DataItem {
             (DataItem::Bool(b1), DataItem::Bool(b2)) => Some(b1.cmp(b2)),
 
             _ => panic!("DataItem compare should be covered by same_group check"),
+        }
+    }
+}
+
+impl PartialEq for DataItem {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            // Integer comparisons
+            (DataItem::Integer(v1), DataItem::Integer(v2)) => v1 == v2,
+            (DataItem::NullInt, DataItem::NullInt) => true,
+            
+            // Float comparisons
+            (DataItem::Float(v1), DataItem::Float(v2)) => v1 == v2,
+            (DataItem::NullFloat, DataItem::NullFloat) => true,
+            
+            // Chars comparisons
+            (DataItem::Chars { value: v1, .. }, DataItem::Chars { value: v2, .. }) => v1 == v2,
+            (DataItem::NullChars { .. }, DataItem::NullChars { .. }) => true,
+            
+            // VarChar comparisons - only compare values, ignore page_ptr and other metadata
+            (DataItem::VarChar { value: v1, .. }, DataItem::VarChar { value: v2, .. }) => v1 == v2,
+            (DataItem::NullVarChar, DataItem::NullVarChar) => true,
+            
+            // Bool comparisons
+            (DataItem::Bool(b1), DataItem::Bool(b2)) => b1 == b2,
+            (DataItem::NullBool, DataItem::NullBool) => true,
+            
+            // Different types are not equal
+            _ => false,
         }
     }
 }
