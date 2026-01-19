@@ -96,10 +96,10 @@ impl WorkingThreadPool{
 
             match result {
                 Ok(results) => {
-                    sender.send(Ok(results));
+                    sender.send(Ok(results)).unwrap();
                 }
                 Err(e) => {
-                    sender.send(Err(e));
+                    sender.send(Err(e)).unwrap();
                 }
             }
         });

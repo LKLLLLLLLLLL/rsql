@@ -34,7 +34,6 @@ fn get_table_guard() -> &'static Mutex<HashSet<u64>> {
 /// - indexes count: 8 bytes
 /// - each index [column_name: 64bytes][root_page: 8bytes]
 /// - allocator metadata: rest of the page
-#[derive(Debug, Serialize, Deserialize)]
 pub struct Table {
     id: u64,
     schema: TableSchema,

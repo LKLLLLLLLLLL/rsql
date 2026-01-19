@@ -46,7 +46,7 @@ pub struct TableObject {
     pub pk_col: (String, ColType), // primary key column name
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ExecutionResult {
     TnxBeginSuccess,
     CommitSuccess,
