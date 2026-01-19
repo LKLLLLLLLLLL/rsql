@@ -63,7 +63,7 @@ pub enum DdlOperation {
     CreateIndex {
         index_name: String,
         table_name: String,
-        columns: Vec<String>,
+        column: String,
         unique: bool,
         if_not_exists: bool,
     },
@@ -139,6 +139,7 @@ pub enum PlanNode {
     /// Creates a new user.
     CreateUser {
         user_name: String,
+        password: Option<String>,
     },
     /// Drops a user.
     DropUser {
@@ -172,21 +173,89 @@ impl Plan {
         let lower = sql_trimmed.to_ascii_lowercase();
         // Only handle single statement for DCL shortcut
         if lower.starts_with("create user") {
-            // Parse: CREATE USER <user_name>[;]
-            // Accepts: "CREATE USER alice;", etc.
-            let rest: &str = &sql_trimmed[("create user".len())..].trim_start();
-            // Now rest should be user name (possibly followed by ';' or whitespace)
-            let user_name = rest
-                .split(|c: char| c == ';' || c.is_whitespace())
-                .next()
-                .unwrap_or("")
-                .trim_matches(|c: char| c == ';' || c.is_whitespace())
-                .to_string();
-            if user_name.is_empty() {
-                return Err(RsqlError::ParserError("CREATE USER missing user name".to_string()));
+            // Try AST parse first
+            let dialect = GenericDialect {};
+            match Parser::parse_sql(&dialect, sql) {
+                Ok(ast) => {
+                    if ast.is_empty() {
+                        return Err(RsqlError::ParserError("Empty SQL".to_string()));
+                    }
+                    for stmt in ast.iter() {
+                        use sqlparser::ast::Statement::*;
+                        match stmt {
+                            CreateUser { .. } => {
+                                let node = Self::from_ast(&stmt)?;
+                                items.push(PlanItem::DCL(node));
+                            }
+                            _ => {
+                                let node = Self::from_ast(&stmt)?;
+                                items.push(PlanItem::DML(node));
+                            }
+                        }
+                    }
+                    return Ok(Plan { items });
+                }
+                Err(_e) => {
+                    // Fallback: manual parse for CREATE USER with/without PASSWORD
+                    // Do NOT propagate AST error for CREATE USER, fallback to manual
+                    let rest: &str = &sql_trimmed[("create user".len())..].trim_start();
+                    let mut user_name = String::new();
+                    let mut password: Option<String> = None;
+                    let mut if_not_exists = false;
+                    // Tokenize rest
+                    let mut tokens: Vec<&str> = rest.split_whitespace().collect();
+                    let mut i = 0;
+                    // Check for IF NOT EXISTS
+                    if tokens.len() >= 3
+                        && tokens[0].eq_ignore_ascii_case("if")
+                        && tokens[1].eq_ignore_ascii_case("not")
+                        && tokens[2].eq_ignore_ascii_case("exists")
+                    {
+                        if_not_exists = true;
+                        i += 3;
+                    }
+                    // Get user_name
+                    if i < tokens.len() {
+                        user_name = tokens[i].trim_matches(|c: char| c == ';').to_string();
+                        i += 1;
+                    }
+                    // Look for PASSWORD keyword and handle = or whitespace
+                    let mut password_found = false;
+                    while i < tokens.len() {
+                        if tokens[i].eq_ignore_ascii_case("password") {
+                            password_found = true;
+                            i += 1;
+                            // Support PASSWORD = 'xxx' and PASSWORD 'xxx'
+                            if i < tokens.len() && tokens[i] == "=" {
+                                i += 1;
+                            }
+                            break;
+                        }
+                        i += 1;
+                    }
+                    if password_found && i < tokens.len() {
+                        // The password may be quoted or not
+                        let pw_token = tokens[i];
+                        let pw = pw_token.trim_matches(|c: char| c == ';');
+                        // Remove surrounding quotes if present
+                        let pw_value = if (pw.starts_with('\'') && pw.ends_with('\'')) || (pw.starts_with('"') && pw.ends_with('"')) {
+                            if pw.len() >= 2 {
+                                pw[1..pw.len()-1].to_string()
+                            } else {
+                                "".to_string()
+                            }
+                        } else {
+                            pw.to_string()
+                        };
+                        password = Some(pw_value);
+                    }
+                    if user_name.is_empty() {
+                        return Err(RsqlError::ParserError("CREATE USER missing user name".to_string()));
+                    }
+                    items.push(PlanItem::DCL(PlanNode::CreateUser { user_name, password }));
+                    return Ok(Plan { items });
+                }
             }
-            items.push(PlanItem::DCL(PlanNode::CreateUser { user_name }));
-            return Ok(Plan { items });
         } else if lower.starts_with("drop user") {
             // Parse: DROP USER <user_name>[;]
             let rest: &str = &sql_trimmed[("drop user".len())..].trim_start();
@@ -556,16 +625,18 @@ impl Plan {
                         ))
                     }
                 };
-
+                // Only support single column index for now
+                if create_index.columns.len() != 1 {
+                    return Err(RsqlError::ParserError(
+                        "CREATE INDEX only supports a single column".to_string(),
+                    ));
+                }
+                let column = create_index.columns[0].to_string();
                 Ok(PlanNode::DDL {
                     op: DdlOperation::CreateIndex {
                         index_name,
                         table_name: create_index.table_name.to_string(),
-                        columns: create_index
-                            .columns
-                            .iter()
-                            .map(|c| c.to_string())
-                            .collect(),
+                        column,
                         unique: create_index.unique,
                         if_not_exists: create_index.if_not_exists,
                     },
@@ -580,10 +651,16 @@ impl Plan {
 
                 match &alter.operations[0] {
                     AstAlterTableOperation::RenameTable { table_name } => {
+                        let new_name = match table_name {
+                            RenameTableNameKind::To(obj_name) => obj_name.to_string(),
+                            _ => return Err(RsqlError::ParserError(
+                                "Unsupported RENAME TABLE target".to_string(),
+                            )),
+                        };
                         Ok(PlanNode::DDL {
                             op: DdlOperation::RenameTable {
                                 old_name: alter.name.to_string(),
-                                new_name: table_name.to_string(),
+                                new_name,
                             },
                         })
                     }
@@ -706,6 +783,7 @@ impl Plan {
             Statement::CreateUser(inner) => {
                 Ok(PlanNode::CreateUser {
                     user_name: inner.name.to_string(),
+                    password: None,
                 })
             }
             Statement::Drop { object_type, names, .. }
@@ -843,8 +921,8 @@ impl Plan {
                 PlanNode::Update { assignments, .. } => {
                     format!("Update [assigns={}]", assignments.len())
                 }
-                PlanNode::CreateUser { user_name } => {
-                    format!("CreateUser [{}]", user_name)
+                PlanNode::CreateUser { user_name, password } => {
+                    format!("CreateUser [{} password={:?}]", user_name, password)
                 }
                 PlanNode::DropUser { user_name } => {
                     format!("DropUser [{}]", user_name)
@@ -1031,19 +1109,17 @@ impl Plan {
                             let path_exists = "(PlanNode::DDL.op[DropTable].if_exists)";
                             println!("{}{} -> {}", prefix, path_exists, if_exists);
                         }
-                        DdlOperation::CreateIndex { index_name, table_name, columns, unique, if_not_exists } => {
+                        DdlOperation::CreateIndex { index_name, table_name, column, unique, if_not_exists } => {
                             let path_index = "(PlanNode::DDL.op[CreateIndex].index_name)";
                             println!("{}{} -> {}", prefix, path_index, index_name);
                             let path_table = "(PlanNode::DDL.op[CreateIndex].table_name)";
                             println!("{}{} -> {}", prefix, path_table, table_name);
+                            let path_column = "(PlanNode::DDL.op[CreateIndex].column)";
+                            println!("{}{} -> {}", prefix, path_column, column);
                             let path_unique = "(PlanNode::DDL.op[CreateIndex].unique)";
                             println!("{}{} -> {}", prefix, path_unique, unique);
                             let path_if_not_exists = "(PlanNode::DDL.op[CreateIndex].if_not_exists)";
                             println!("{}{} -> {}", prefix, path_if_not_exists, if_not_exists);
-                            for (i, col) in columns.iter().enumerate() {
-                                let path_col = format!("(PlanNode::DDL.op[CreateIndex].columns[{}])", i);
-                                println!("{}{} -> {}", prefix, path_col, col);
-                            }
                         }
                         DdlOperation::RenameTable { old_name, new_name } => {
                             let path_old = "(PlanNode::DDL.op[RenameTable].old_name)";
@@ -1054,9 +1130,11 @@ impl Plan {
                     }
                 }
                 // ---- Add pretty print for CreateUser ----
-                PlanNode::CreateUser { user_name } => {
+                PlanNode::CreateUser { user_name, password } => {
                     let path_user = "(PlanNode::CreateUser.user_name)";
                     println!("{}{} -> {}", prefix, path_user, user_name);
+                    let path_pw = "(PlanNode::CreateUser.password)";
+                    println!("{}{} -> {:?}", prefix, path_pw, password);
                 }
                 // ---- Add pretty print for DropUser ----
                 PlanNode::DropUser { user_name } => {
@@ -1104,7 +1182,6 @@ impl Plan {
                 Expr::Function(func) => {
                     let name_path = format!("{}.name", path);
                     println!("{}{} -> {:?}", prefix, name_path, func.name);
-                    // 不深入遍历函数参数，保持与原始代码一致，避免 FunctionArguments 兼容问题
                 }
                 Expr::Cast { expr: inner, data_type, .. } => {
                     let expr_path = format!("{}.expr", path);
@@ -1226,8 +1303,8 @@ impl Plan {
                 PlanNode::Update { assignments, .. } => {
                     format!("Update [assigns={}]", assignments.len())
                 }
-                PlanNode::CreateUser { user_name } => {
-                    format!("CreateUser [{}]", user_name)
+                PlanNode::CreateUser { user_name, password } => {
+                    format!("CreateUser [{} password={:?}]", user_name, password)
                 }
                 PlanNode::DropUser { user_name } => {
                     format!("DropUser [{}]", user_name)

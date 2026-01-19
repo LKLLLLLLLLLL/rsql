@@ -8,13 +8,17 @@ use tracing::info;
 /// user relevent sql statements
 pub fn execute_dcl_plan_node(node: &PlanNode, tnx_id: u64) -> RsqlResult<ExecutionResult> {
     match node {
-        PlanNode::CreateUser {user_name} => {
+        PlanNode::CreateUser {user_name, password} => {
             // check if user exists
             let all_users = SysCatalog::global().get_all_users(tnx_id)?;
             if all_users.contains(user_name) {
                 return Err(RsqlError::ExecutionError(format!("User {} already exists.", user_name)));
             }
-            SysCatalog::global().register_user(tnx_id, user_name, DEFAULT_PASSWORD)?;
+            let password = match password {
+                Some(pw) => pw.clone(),
+                None => DEFAULT_PASSWORD.to_string(),
+            };
+            SysCatalog::global().register_user(tnx_id, user_name, &password)?;
             Ok(Dcl(format!("User {} created successfully.", user_name)))
         },
         PlanNode::DropUser {user_name} => {
