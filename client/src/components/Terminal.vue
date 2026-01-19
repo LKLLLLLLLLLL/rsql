@@ -1,35 +1,64 @@
 <!-- Terminal.vue -->
 <template>
   <div class="terminal-operation">
-    <h1>Terminal</h1>
+    <div class="page-header">
+      <div class="header-content">
+        <h2><Icon :path="mdiConsole" size="20" /> Terminal</h2>
+        <p class="header-subtitle">Execute SQL commands directly</p>
+      </div>
+      <div class="header-status" :class="{ connected: connected }">
+        <span class="status-dot"></span>
+        {{ connected ? 'Connected' : 'Connecting...' }}
+      </div>
+    </div>
+    
     <div class="terminal-panel">
       <div class="code-area">
         <SqlEditor
           v-model="codeInput"
-          :placeholder="connected ? '输入 SQL 后提交' : '正在连接到 WebSocket...'"
+          :placeholder="connected ? '输入 SQL 后提交 (例如: SELECT * FROM users)' : '正在连接到 WebSocket...'"
           :disabled="!connected"
         />
       </div>
-      <button
-        class="codeArea-submit"
-        type="button"
-        :disabled="!connected"
-        @click="submitSql"
-      >
-        {{ connected ? 'Submit' : 'Connecting' }}
-      </button>
+      <div class="terminal-actions">
+        <button
+          class="codeArea-submit"
+          type="button"
+          :disabled="!connected || !codeInput.trim()"
+          @click="submitSql"
+        >
+          {{ connected ? 'Execute SQL' : 'Connecting' }}
+        </button>
+        <button v-if="codeResults.length > 0" class="clear-results" @click="codeResults = []">Clear Results</button>
+      </div>
       <div class="codeArea-result">
-        <div v-if="!connected">WebSocket 未连接，请稍等或检查后端是否运行。</div>
-        <div v-else-if="codeResults.length === 0">暂无响应</div>
-        <div v-else>
+        <div class="result-header">
+          <h4>Execution Results</h4>
+        </div>
+        <div v-if="!connected" class="empty-state">
+          <Icon :path="mdiLanDisconnect" size="48" />
+          <p>WebSocket 未连接，请稍等或检查后端是否运行。</p>
+        </div>
+        <div v-else-if="codeResults.length === 0" class="empty-state">
+          <Icon :path="mdiConsole" size="48" />
+          <p>暂无执行结果，请输入 SQL 并执行</p>
+        </div>
+        <div v-else class="results-list">
           <div v-for="(item, idx) in codeResults" :key="idx" class="codeArea-result-item">
-            <div class="result-line">
-              <span class="result-prompt">{{ formatTime(item.timestamp) }} USER占位 % </span>
-              <span class="result-content" :class="{ 'result-error': !item.success }">
-                {{ formatResultContent(item) }}
+            <div class="result-header-item">
+              <span class="result-time">{{ formatTime(item.timestamp) }}</span>
+              <span class="result-status" :class="{ success: item.success }">
+                {{ item.success ? '✓ Success' : '✗ Error' }}
               </span>
             </div>
-            <div class="result-timing">耗时: {{ item.rayon_response.execution_time }} ms</div>
+            <div class="result-content">
+              <pre v-if="item.success">{{ formatResultContent(item) }}</pre>
+              <pre v-else class="error">{{ item.rayon_response.error || '未知错误' }}</pre>
+            </div>
+            <div class="result-footer">
+              <span>Connection: {{ item.connection_id }}</span>
+              <span class="execution-time">耗时: {{ item.rayon_response.execution_time }} ms</span>
+            </div>
           </div>
         </div>
       </div>
@@ -40,6 +69,8 @@
 <script setup>
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import SqlEditor from './SqlEditor.vue'
+import Icon from './Icon.vue'
+import { mdiLanDisconnect, mdiConsole } from '@mdi/js'
 
 const props = defineProps({
   wsUrl: { type: String, required: true }
@@ -177,95 +208,259 @@ defineExpose({
 
 <style scoped>
 .terminal-operation {
-  display: block;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: #ffffff;
+  border-radius: 12px;
+  border: 1px solid #e3e8ef;
+}
+
+.page-header {
+  padding: 24px;
+  border-bottom: 1px solid #e3e8ef;
+  background: #f8fafc;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.header-content {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.page-header h2 {
+  font-size: 1.1rem;
+  color: #1a1f36;
+  margin: 0;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.header-subtitle {
+  font-size: 0.9rem;
+  color: #6b7280;
+  margin: 0;
+}
+
+.header-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  color: #9ca3af;
+  padding: 8px 16px;
+  background: #ffffff;
+  border-radius: 20px;
+  border: 1px solid #e5e7eb;
+}
+
+.header-status.connected {
+  color: #10b981;
+  background: #d1fae5;
+  border-color: #a7f3d0;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #9ca3af;
+}
+
+.header-status.connected .status-dot {
+  background: #10b981;
 }
 
 .terminal-panel {
-  display: flex; 
-  flex-direction: column; 
-  height: 800px;
-  min-height: 320px; 
-  background: #f8f8f8; 
-  border-radius: 8px; 
-  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
-}
-
-.code-area {
-  flex: 0 0 30%; 
-  position: relative; 
-  padding: 0;
-  background: white; 
-  border-bottom: 1px solid #ddd;
-  border-radius: 4px 4px 0 0;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
   overflow: hidden;
 }
 
-.codeArea-text {
-  width: 100%; 
-  height: 100%; 
-  resize: none; 
-  font-family: monospace; 
-  font-size: 24px; 
-  border-radius: 4px; 
-  border: 1px solid #ccc; 
-  padding: 8px;
+.code-area {
+  padding: 24px;
+  border-bottom: 1px solid #e3e8ef;
+  min-height: 200px;
+}
+
+.terminal-actions {
+  padding: 0 24px;
+  margin: 20px 0;
+  display: flex;
+  gap: 12px;
 }
 
 .codeArea-submit {
-  padding: 10px 24px; 
-  background: #4caf50; 
-  color: #fff;
-  border: none; 
-  border-radius: 4px; 
-  cursor: pointer; 
-  font-weight: 600; 
-  font-size: 15px;
-  flex: 0 0 auto;
-  align-self: center;
-  margin: 12px 0;
-  margin-left: auto
+  padding: 12px 24px;
+  background: #3b82f6;
+  color: #ffffff;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 500;
+  font-size: 0.9rem;
+  transition: all 0.2s ease;
+  min-width: 120px;
+}
+
+.codeArea-submit:hover:not(:disabled) {
+  background: #2563eb;
+  transform: translateY(-1px);
+}
+
+.codeArea-submit:disabled {
+  background: #e5e7eb;
+  color: #9ca3af;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.clear-results {
+  padding: 12px 24px;
+  background: #f3f4f6;
+  color: #6b7280;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 500;
+  font-size: 0.9rem;
+  transition: all 0.2s ease;
+}
+
+.clear-results:hover {
+  background: #e5e7eb;
+  color: #4b5563;
 }
 
 .codeArea-result {
-  flex: 1 1 60%; 
-  padding: 16px; 
-  background: #fff; 
-  min-height: 120px;
+  flex: 1;
+  padding: 0 24px 24px;
   overflow-y: auto;
 }
 
-.codeArea-result-item {
-  margin-bottom: 12px;
-  padding: 8px;
-  border-bottom: 1px solid #eee;
-  font-family: 'Courier New', 'Courier', 'Microsoft YaHei', monospace;
-  font-weight: bold;
+.result-header h4 {
+  margin: 0 0 16px 0;
+  color: #1a1f36;
+  font-size: 0.95rem;
+  font-weight: 600;
 }
 
-.result-line {
+.empty-state {
   display: flex;
-  align-items: baseline;
-  word-break: break-all;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 200px;
+  color: #9ca3af;
+  text-align: center;
+  gap: 16px;
 }
 
-.result-prompt {
-  color: #666;
-  flex-shrink: 0;
-  margin-right: 8px;
+.empty-state p {
+  margin: 0;
+  color: #6b7280;
+  max-width: 300px;
+}
+
+.results-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.codeArea-result-item {
+  background: #f9fafb;
+  border-radius: 8px;
+  padding: 16px;
+  border: 1px solid #e5e7eb;
+  transition: all 0.2s ease;
+}
+
+.codeArea-result-item:hover {
+  border-color: #d1d5db;
+}
+
+.result-header-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 0 0 12px 0;
+}
+
+.result-time {
+  font-size: 0.85rem;
+  color: #6b7280;
+  font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', Monaco, Consolas, monospace;
+}
+
+.result-status {
+  font-size: 0.85rem;
+  font-weight: 500;
+  padding: 4px 8px;
+  border-radius: 12px;
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.result-status.success {
+  background: #d1fae5;
+  color: #065f46;
 }
 
 .result-content {
-  color: #333;
-  flex: 1;
+  margin: 12px 0;
 }
 
-.result-content.result-error {
-  color: #d32f2f;
+.result-content pre {
+  margin: 0;
+  font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', Monaco, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #1a1f36;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
-.result-timing {
-  color: #999;
-  font-size: 12px;
-  margin-top: 4px;
+.result-content pre.error {
+  color: #dc2626;
+}
+
+.result-footer {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.85rem;
+  color: #6b7280;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #e5e7eb;
+}
+
+.execution-time {
+  color: #10b981;
+  font-weight: 500;
+}
+
+.codeArea-result::-webkit-scrollbar {
+  width: 6px;
+}
+
+.codeArea-result::-webkit-scrollbar-track {
+  background: #f3f4f6;
+  border-radius: 3px;
+}
+
+.codeArea-result::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+  border-radius: 3px;
+}
+
+.codeArea-result::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
 }
 </style>

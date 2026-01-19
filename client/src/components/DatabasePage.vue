@@ -5,18 +5,21 @@
       :tables="tables"
       :current-table="currentTableName"
       :active-button="activeSidebarButton"
+      :is-drop-mode="dropMode"
       @create="showSection('create')"
-      @rename="toggleRenameMode"
+      @rename="showSection('rename')"
       @drop="toggleDropMode"
       @terminal="showSection('terminal')"
       @select-table="selectTable"
-      @list-toggle="handleListToggle"
+      @delete-table="openDropModal"
+      @clear-selection="clearTableSelection"
     />
 
     <div class="main-content">
       <Topbar
         v-if="shouldShowTopBar"
         :current-table-name="currentTableName"
+        :table-count="recordsCount"
         @insert="showInsertSection"
         @delete="showSection('delete')"
         @update="showSection('update')"
@@ -24,7 +27,16 @@
         @export="showSection('export')"
       />
 
-      <div class="data-display">
+      <div class="content-container">
+        <!-- 未选择表的提示 -->
+        <div v-if="activeSection === 'empty'" class="page-content">
+          <div class="empty-state">
+            <Icon :path="mdiTable" size="64" color="#cbd5e1" />
+            <h3>请从左侧选择一个表</h3>
+            <p>选择表格后可查看数据、插入或修改数据</p>
+          </div>
+        </div>
+
         <!-- 表格视图 -->
         <DataTable
           v-if="activeSection === 'table'"
@@ -71,7 +83,6 @@
         <CreateTable
           v-if="activeSection === 'create'"
           @create-table="handleCreateTable"
-          @back="showSection('table')"
         />
 
         <!-- 终端 -->
@@ -90,66 +101,101 @@
           @insert="handleInsertData"
         />
 
-        <!-- 其他占位区域 -->
-        <div v-if="activeSection === 'query'" class="query-operation">
-          <div class="operation-panel">
-            <h4>查询功能</h4>
-            <p>查询功能开发中...</p>
+        <!-- 查询功能 -->
+        <div v-if="activeSection === 'query'" class="page-content">
+          <div class="page-header">
+            <div class="header-content">
+              <h2><Icon :path="mdiMagnify" size="20" /> Query Builder</h2>
+              <p class="header-subtitle">Build advanced queries with visual tools</p>
+            </div>
+          </div>
+          <div class="content-placeholder">
+            <div class="placeholder-content">
+              <Icon :path="mdiChartLine" size="48" />
+              <h3>Advanced Query Builder</h3>
+              <p>Query builder with visual interface is under development.</p>
+            </div>
           </div>
         </div>
 
-        <div v-if="activeSection === 'export'" class="export-operation">
-          <div class="operation-panel">
-            <h4>导出功能</h4>
-            <p>导出功能开发中...</p>
+        <!-- 导出功能 -->
+        <div v-if="activeSection === 'export'" class="page-content">
+          <div class="page-header">
+            <div class="header-content">
+              <h2><Icon :path="mdiDownload" size="20" /> Export Data</h2>
+              <p class="header-subtitle">Export table data in various formats</p>
+            </div>
+          </div>
+          <div class="content-placeholder">
+            <div class="placeholder-content">
+              <Icon :path="mdiDatabaseExport" size="48" />
+              <h3>Export Functionality</h3>
+              <p>Export to CSV, JSON, and Excel formats is under development.</p>
+            </div>
           </div>
         </div>
 
-        <div v-if="activeSection === 'rename'" class="rename-operation">
-          <div class="operation-panel">
-            <h4>重命名表</h4>
-            <p>请选择要重命名的表。</p>
-            <div class="rename-table-list">
+        <!-- 重命名表 -->
+        <div v-if="activeSection === 'rename'" class="page-content">
+          <div class="page-header">
+            <div class="header-content">
+              <h2><Icon :path="mdiTableEdit" size="20" /> Rename Table</h2>
+              <p class="header-subtitle">Select a table to rename</p>
+            </div>
+          </div>
+          <div class="table-list-content">
+            <div v-if="tables.length === 0" class="empty-state">
+              <Icon :path="mdiTableOff" size="48" />
+              <p>No tables available</p>
+            </div>
+            <div v-else class="table-operation-list">
               <div 
                 v-for="table in tables" 
                 :key="table" 
-                class="rename-table-item"
-                @click="openRenameModal(table)"
+                class="table-operation-item"
               >
-                <span>{{ table }}</span>
-                <button class="rename-table-btn">
+                <div class="table-info-section">
+                  <Icon :path="mdiTable" size="20" />
+                  <span class="table-name-text">{{ table }}</span>
+                </div>
+                <button class="operation-btn rename-btn" @click="openRenameModal(table)">
                   <Icon :path="mdiPencilOutline" size="16" />
-                  重命名
+                  Rename
                 </button>
               </div>
             </div>
           </div>
         </div>
 
-        <div v-if="activeSection === 'drop'" class="drop-operation">
-          <div class="operation-panel">
-            <h4>删除表</h4>
-            <p>请选择要删除的表。此操作无法撤销,请谨慎操作。</p>
-            <div class="drop-table-list">
+        <!-- 删除表 -->
+        <div v-if="activeSection === 'drop'" class="page-content">
+          <div class="page-header">
+            <div class="header-content">
+              <h2><Icon :path="mdiTableRemove" size="20" /> Drop Table</h2>
+              <p class="header-subtitle">Select a table to delete (this action cannot be undone)</p>
+            </div>
+          </div>
+          <div class="table-list-content">
+            <div v-if="tables.length === 0" class="empty-state">
+              <Icon :path="mdiTableOff" size="48" />
+              <p>No tables available</p>
+            </div>
+            <div v-else class="table-operation-list">
               <div 
                 v-for="table in tables" 
                 :key="table" 
-                class="drop-table-item"
-                @click="openDropModal(table)"
+                class="table-operation-item"
               >
-                <span>{{ table }}</span>
-                <button class="drop-table-btn">
+                <div class="table-info-section">
+                  <Icon :path="mdiTable" size="20" />
+                  <span class="table-name-text">{{ table }}</span>
+                </div>
+                <button class="operation-btn drop-btn" @click="openDropModal(table)">
                   <Icon :path="mdiTrashCanOutline" size="16" />
-                  删除
+                  Delete
                 </button>
               </div>
             </div>
-          </div>
-        </div>
-
-        <div v-if="activeSection === 'list-view'" class="list-view-operation">
-          <div class="empty-state">
-            <p>请与左侧表列表中选择表</p>
           </div>
         </div>
       </div>
@@ -175,9 +221,7 @@
 
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
-import { mdiPencilOutline, mdiTrashCanOutline } from '@mdi/js'
 import Sidebar from './Sidebar.vue'
-import Icon from './Icon.vue'
 import Topbar from './Topbar.vue'
 import DataTable from './DataTable.vue'
 import CreateTable from './CreateTable.vue'
@@ -186,6 +230,8 @@ import InsertData from './InsertData.vue'
 import DropTableModal from './DropTableModal.vue'
 import RenameTableModal from './RenameTableModal.vue'
 import Toast from '../components/Toast.vue'
+import Icon from './Icon.vue'
+import { mdiMagnify, mdiDownload, mdiTableEdit, mdiChartLine, mdiDatabaseExport, mdiRenameBox, mdiTable, mdiTableOff, mdiPencilOutline, mdiTrashCanOutline, mdiTableRemove } from '@mdi/js'
 
 // 响应式数据
 const viewHeaders = ref([])
@@ -364,6 +410,12 @@ function selectTable(tableName) {
   activeSidebarButton.value = 'list'
   showSection('table')
   loadTableData(tableName)
+}
+
+function clearTableSelection() {
+  currentTableName.value = ''
+  activeSidebarButton.value = ''
+  showSection('empty')
 }
 
 function handleListToggle(isOpen) {
@@ -693,13 +745,15 @@ onBeforeUnmount(() => {
 </script>
 
 <style>
+/* DatabasePage.vue - 更新全局样式部分 */
 /* 全局样式 */
 html, body {
   margin: 0;
   padding: 0;
   height: 100%;
-  background-color: #f5f7fa;
-  font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+  background-color: #f8fafc;
+  font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif;
+  color: #1a1f36;
 }
 
 #app {
@@ -710,193 +764,270 @@ html, body {
   margin: 0;
   padding: 0;
   box-sizing: border-box;
-  font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+  font-family: inherit;
 }
 
 .app {
   display: flex;
   height: 100vh;
-  background-color: #f5f7fa;
-  color: #333;
+  background-color: #f8fafc;
+  color: #1a1f36;
+  overflow: hidden;
 }
 
 .main-content {
-  width: 80%;
+  flex: 1;
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
 
-.data-display {
-  flex-grow: 1;
-  padding: 30px;
-  overflow-y: auto;
-  background-color: #f9fafc;
-}
-
-.query-operation,
-.export-operation,
-.rename-operation {
-  display: block;
-}
-
-.operation-panel {
-  margin-top: 24px;
-  background-color: white;
-  border-radius: 10px;
+.content-container {
+  flex: 1;
   padding: 24px;
-  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
+  overflow: hidden;
   display: flex;
   flex-direction: column;
-  gap: 18px;
 }
 
-.operation-panel h4 {
-  font-size: 1.2rem;
-  color: #2c3e50;
+.page-content {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: #ffffff;
+  border-radius: 12px;
+  border: 1px solid #e3e8ef;
+}
+
+.content-placeholder {
+  flex: 1;
   display: flex;
   align-items: center;
+  justify-content: center;
+  padding: 48px;
+}
+
+.placeholder-content {
+  text-align: center;
+  max-width: 400px;
+  color: #6b7280;
+}
+
+.placeholder-content h3 {
+  font-size: 1.1rem;
+  margin: 16px 0 8px;
+  color: #1a1f36;
+  font-weight: 600;
+}
+
+.placeholder-content p {
+  font-size: 0.95rem;
+  line-height: 1.5;
+  margin: 0;
+}
+
+/* 统一页面标题样式 */
+.page-header {
+  padding: 24px;
+  border-bottom: 1px solid #e3e8ef;
+  background: #f8fafc;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.header-content {
+  display: flex;
+  flex-direction: column;
   gap: 8px;
 }
 
-.icon {
-  vertical-align: middle;
-  display: inline-block;
-  transform: translateY(0px);
+.page-header h2 {
+  font-size: 1.1rem;
+  color: #1a1f36;
+  margin: 0;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
+.header-subtitle {
+  font-size: 0.9rem;
+  color: #6b7280;
+  margin: 0;
+}
+
+/* 滚动条优化 */
+.content-container::-webkit-scrollbar {
+  width: 6px;
+}
+
+.content-container::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+
+.content-container::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+  border-radius: 3px;
+}
+
+.content-container::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
+}
+
+/* 空状态样式 */
 .empty-state {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   height: 100%;
-  color: #95a5a6;
-  padding: 40px;
-  text-align: center;
-}
-
-.empty-state i {
-  font-size: 4rem;
-  margin-bottom: 20px;
-  opacity: 0.5;
+  color: #9ca3af;
 }
 
 .empty-state h3 {
-  font-size: 1.5rem;
-  margin-bottom: 10px;
-  color: #7f8c8d;
+  font-size: 1.3rem;
+  color: #cbd5e1;
+  margin: 24px 0 12px;
+  font-weight: 600;
 }
 
-.rename-table-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  margin-top: 20px;
+.empty-state p {
+  font-size: 0.95rem;
+  color: #9ca3af;
+  max-width: 300px;
+  text-align: center;
+  line-height: 1.6;
 }
 
-.rename-table-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 16px 20px;
-  background: #f8f9fa;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  border: 2px solid transparent;
-}
-
-.rename-table-item:hover {
-  background: #e9ecef;
-  border-color: #3498db;
-}
-
-.rename-table-item span {
-  font-size: 1rem;
-  font-weight: 500;
-  color: #2c3e50;
-}
-
-.rename-table-btn {
-  background: #3498db;
-  color: #fff;
-  border: none;
-  border-radius: 6px;
-  padding: 6px 12px;
-  font-size: 0.9rem;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  transition: background 0.2s ease;
-}
-
-.rename-table-btn:hover {
-  background: #217dbb;
-}
-
-.drop-table-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  margin-top: 20px;
-}
-
-.drop-table-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 16px 20px;
-  background: #f8f9fa;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  border: 2px solid transparent;
-}
-
-.drop-table-item:hover {
-  background: #ffe5e5;
-  border-color: #e74c3c;
-}
-
-.drop-table-item span {
-  font-size: 1rem;
-  font-weight: 500;
-  color: #2c3e50;
-}
-
-.drop-table-btn {
-  background: #e74c3c;
-  color: #fff;
-  border: none;
-  border-radius: 6px;
-  padding: 6px 12px;
-  font-size: 0.9rem;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  transition: background 0.2s ease;
-}
-
-.drop-table-btn:hover {
-  background: #c0392b;
-}
-
+/* 响应式设计 */
 @media (max-width: 768px) {
   .app {
     flex-direction: column;
   }
 
-  .sidebar {
-    width: 100%;
-    height: auto;
-    max-height: 40vh;
+  .content-container {
+    padding: 16px;
   }
 
-  .main-content {
-    width: 100%;
+  .page-header {
+    padding: 20px;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
   }
+
+  .content-placeholder {
+    padding: 32px 24px;
+  }
+}
+
+/* 动画效果 */
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
+/* 表格操作列表样式 */
+.table-list-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.table-operation-list {
+  flex: 1;
+  padding: 24px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.table-operation-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  background: #ffffff;
+  border: 1px solid #e3e8ef;
+  border-radius: 8px;
+  transition: all 0.2s ease;
+}
+
+.table-operation-item:hover {
+  border-color: #cbd5e1;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+}
+
+.table-info-section {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+}
+
+.table-info-section span {
+  color: #1a1f36;
+  font-size: 0.95rem;
+  font-weight: 500;
+}
+
+.operation-btn {
+  padding: 8px 16px;
+  border-radius: 6px;
+  border: 1px solid;
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 500;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rename-btn {
+  border-color: #3b82f6;
+  color: #3b82f6;
+}
+
+.rename-btn:hover {
+  background: #3b82f6;
+  color: #ffffff;
+}
+
+.drop-btn {
+  border-color: #ef4444;
+  color: #ef4444;
+}
+
+.drop-btn:hover {
+  background: #ef4444;
+  color: #ffffff;
+}
+
+.table-operation-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.table-operation-list::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+
+.table-operation-list::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+  border-radius: 3px;
+}
+
+.table-operation-list::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
 }
 </style>

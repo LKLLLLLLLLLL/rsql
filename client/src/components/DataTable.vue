@@ -1,11 +1,13 @@
 <!-- DataTable.vue -->
 <template>
   <div class="table-container" :class="{ 'delete-table-container': mode === 'delete', 'update-table-container': mode === 'update' }">
-    <div class="table-header">
-      <h3>{{ currentTableName }} Table Data</h3>
-      <div class="table-info">
-        <span>Total {{ recordsCount }} records</span>
-        <span>Updated on <span id="update-time">1970-01-01 00:00</span></span>
+    <div class="page-header">
+      <div class="header-content">
+        <h2><Icon :path="mdiTable" size="20" /> {{ currentTableName }} Table Data</h2>
+        <div class="header-info">
+          <span class="record-count">Total {{ recordsCount }} records</span>
+          <span class="last-update">Updated on <span id="update-time">1970-01-01 00:00</span></span>
+        </div>
       </div>
     </div>
     
@@ -76,7 +78,7 @@
             </div>
           </template>
           <template v-else>
-            {{ rowIndex + 1 }}
+            <span class="row-index">{{ rowIndex + 1 }}</span>
           </template>
         </template>
         
@@ -92,7 +94,7 @@
             />
           </template>
           <template v-else>
-            {{ value }}
+            <span class="cell-value">{{ value }}</span>
           </template>
         </template>
       </VirtualList>
@@ -103,6 +105,8 @@
 <script setup>
 import { defineProps, defineEmits, computed } from 'vue'
 import VirtualList from './List.vue'
+import Icon from './Icon.vue'
+import { mdiTable } from '@mdi/js'
 
 const props = defineProps({
   headers: { type: Array, default: () => [] },
@@ -146,14 +150,15 @@ function getPlaceholder(headerName) {
 
 <style scoped>
 .table-container {
-  background-color: white;
-  border-radius: 10px;
+  background-color: #ffffff;
+  border-radius: 12px;
   overflow: hidden;
-  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
   height: 100%;
   flex-direction: column;
   display: flex;
   min-height: 360px;
+  border: 1px solid #e3e8ef;
 }
 
 .table-scroll-wrapper {
@@ -162,42 +167,63 @@ function getPlaceholder(headerName) {
   overflow-x: auto;
 }
 
-.table-header {
-  padding: 20px 25px;
-  background-color: #f8f9fa;
-  border-bottom: 1px solid #eee;
+.page-header {
+  padding: 24px;
+  border-bottom: 1px solid #e3e8ef;
+  background: #f8fafc;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  flex-shrink: 0;
 }
 
-.table-header h3 {
-  color: #2c3e50;
-  font-size: 1.3rem;
+.header-content {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
-.table-info {
+.page-header h2 {
+  font-size: 1.1rem;
+  color: #1a1f36;
+  margin: 0;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.header-info {
   display: flex;
   gap: 20px;
-  color: #7f8c8d;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
+}
+
+.record-count {
+  color: #4b5563;
+  font-weight: 500;
+  background: #f3f4f6;
+  padding: 4px 12px;
+  border-radius: 12px;
+}
+
+.last-update {
+  color: #6b7280;
 }
 
 .delete-table-container th:first-child,
 .delete-table-container td:first-child {
-  width: 180px;
-  min-width: 180px;
-  max-width: 180px;
+  width: 160px;
+  min-width: 160px;
+  max-width: 160px;
   text-align: center;
   vertical-align: middle;
 }
 
 .update-table-container th:first-child,
 .update-table-container td:first-child {
-  width: 180px;
-  min-width: 180px;
-  max-width: 180px;
+  width: 160px;
+  min-width: 160px;
+  max-width: 160px;
   text-align: center;
   vertical-align: middle;
 }
@@ -217,85 +243,98 @@ function getPlaceholder(headerName) {
   border: none;
   border-radius: 6px;
   cursor: pointer;
-  font-weight: 600;
-  font-size: 0.85rem;
-  width: 80px;
+  font-weight: 500;
+  font-size: 0.8rem;
+  width: 70px;
   text-align: center;
-}
-
-.delete-row-btn {
-  background-color: #e74c3c;
-  color: white;
+  transition: all 0.2s ease;
+  background: #f3f4f6;
+  color: #4b5563;
 }
 
 .delete-row-btn:hover {
-  background-color: #c0392b;
-}
-
-.update-row-btn {
-  background-color: #3498db;
-  color: white;
+  background: #fee2e2;
+  color: #dc2626;
 }
 
 .update-row-btn:hover {
-  background-color: #217dbb;
+  background: #e0f2fe;
+  color: #0284c7;
 }
 
 .cancel-delete-btn,
 .cancel-update-btn {
   padding: 6px 12px;
-  background-color: #95a5a6;
-  color: white;
+  background: #f3f4f6;
+  color: #6b7280;
   border: none;
   border-radius: 6px;
   cursor: pointer;
-  font-weight: 600;
-  font-size: 0.85rem;
-  width: 80px;
+  font-weight: 500;
+  font-size: 0.8rem;
+  transition: all 0.2s ease;
 }
 
 .cancel-delete-btn:hover,
 .cancel-update-btn:hover {
-  background-color: #7f8c8d;
+  background: #e5e7eb;
 }
 
 .confirm-delete-btn {
   padding: 6px 12px;
-  background-color: #e74c3c;
-  color: white;
+  background: #fee2e2;
+  color: #dc2626;
   border: none;
   border-radius: 6px;
   cursor: pointer;
-  font-weight: 600;
-  font-size: 0.85rem;
-  width: 80px;
+  font-weight: 500;
+  font-size: 0.8rem;
+  transition: all 0.2s ease;
 }
 
 .confirm-delete-btn:hover {
-  background-color: #c0392b;
+  background: #fecaca;
 }
 
 .confirm-update-btn {
   padding: 6px 12px;
-  background-color: #3498db;
-  color: white;
+  background: #e0f2fe;
+  color: #0284c7;
   border: none;
   border-radius: 6px;
   cursor: pointer;
-  font-weight: 600;
-  font-size: 0.85rem;
-  width: 80px;
+  font-weight: 500;
+  font-size: 0.8rem;
+  transition: all 0.2s ease;
 }
 
 .confirm-update-btn:hover {
-  background-color: #217dbb;
+  background: #bae6fd;
 }
 
 .update-value {
-  padding: 8px 10px;
-  border: 1px solid #dfe4ea;
+  padding: 8px 12px;
+  border: 1px solid #e5e7eb;
   border-radius: 6px;
-  font-size: 0.95rem;
+  font-size: 0.9rem;
   min-width: 160px;
+  transition: all 0.2s ease;
+  background: #ffffff;
+  color: #1a1f36;
+}
+
+.update-value:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.row-index {
+  font-weight: 500;
+  color: #6b7280;
+}
+
+.cell-value {
+  color: #1a1f36;
 }
 </style>
