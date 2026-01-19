@@ -6,7 +6,7 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock, atomic::{AtomicU64, Ordering}};
 
-use tracing::{warn, info};
+use tracing::{warn, info, debug};
 
 use crate::config::{DB_DIR, MAX_WAL_SIZE};
 use crate::common::{RsqlError, RsqlResult};
@@ -363,6 +363,7 @@ impl WAL {
         check_recovered();
         let entry_bytes = entry.to_bytes();
         let mut log_file = self.log_file.lock().unwrap();
+        debug!("Appending WAL entry: {:?}", &entry);
         // 1. write entry bytes
         log_file.write_all(&entry_bytes)?;
         // 2. update length

@@ -256,7 +256,33 @@ impl SysCatalog {
         ).unwrap(); // should not fail
         // sys_table
         let table_schema = sys_table_schema();
-        let _ = Table::create(SYS_TABLE_ID, table_schema, tnx_id, true)?;
+        let mut table = Table::create(SYS_TABLE_ID, table_schema, tnx_id, true)?;
+        // insert sys tables
+        for table_id in &table_ids {
+            let table_name = match *table_id {
+                SYS_TABLE_ID => "sys_table",
+                SYS_COLUMN_ID => "sys_column",
+                SYS_INDEX_ID => "sys_index",
+                SYS_SEQUENCE_ID => "sys_sequence",
+                SYS_USER_ID => "sys_user",
+                _ => unreachable!(),
+            };
+            let created_at = time::SystemTime::now()
+                .duration_since(time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            table.insert_row(
+                vec![
+                    DataItem::Integer(*table_id as i64),
+                    DataItem::Chars { 
+                        len: MAX_TABLE_NAME_SIZE as u64, 
+                        value: table_name.to_string(), 
+                    },
+                    DataItem::Integer(created_at as i64),
+                ],
+                tnx_id,
+            )?;
+        }
         // sys_column
         let column_schema = sys_column_schema();
         let _ = Table::create(SYS_COLUMN_ID, column_schema, tnx_id, true)?;
@@ -404,12 +430,8 @@ impl SysCatalog {
         TnxManager::global().acquire_read_locks(tnx_id, &read_table)?;
         // query sys_table to get table id
         let table_guard = self.table.lock().unwrap();
-        let index = DataItem::VarChar {
-            head: VarCharHead {
-                max_len: MAX_TABLE_NAME_SIZE as u64,
-                len: table_name.len() as u64,
-                page_ptr: None,
-            },
+        let index = DataItem::Chars {
+            len: MAX_TABLE_NAME_SIZE as u64,
             value: table_name.to_string(),
         };
         let key = Some(index.clone());

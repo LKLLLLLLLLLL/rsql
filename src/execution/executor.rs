@@ -140,25 +140,55 @@ fn execute_inner(sql: &str, connection_id: u64) -> RsqlResult<Vec<ExecutionResul
                 results.push(ExecutionResult::RollbackSuccess);
             },
             PlanItem::DCL(plan_node) => {
-                let Some(tnx_id) = TnxManager::global().get_transaction_id(connection_id) else {
-                    return Err(RsqlError::ExecutionError("No active transaction".to_string()));
+                let tnx_id = TnxManager::global().get_transaction_id(connection_id);
+                let mut auto_tnx = false;
+                let tnx_id = match tnx_id {
+                    Some(id) => id,
+                    None => {
+                        // auto begin transaction
+                        auto_tnx = true;
+                        TnxManager::global().begin_transaction(connection_id)
+                    },
                 };
                 let res = execute_dcl_plan_node(plan_node, tnx_id)?;
+                if auto_tnx {
+                    commit_transaction(connection_id)?;
+                };
                 results.push(res);
             },
             PlanItem::DDL(plan_node) => {
-                let Some(tnx_id) = TnxManager::global().get_transaction_id(connection_id) else {
-                    return Err(RsqlError::ExecutionError("No active transaction".to_string()));
+                let tnx_id = TnxManager::global().get_transaction_id(connection_id);
+                let mut auto_tnx = false;
+                let tnx_id = match tnx_id {
+                    Some(id) => id,
+                    None => {
+                        // auto begin transaction
+                        auto_tnx = true;
+                        TnxManager::global().begin_transaction(connection_id)
+                    },
                 };
                 let res = execute_ddl_plan_node(plan_node, tnx_id)?;
+                if auto_tnx {
+                    commit_transaction(connection_id)?;
+                };
                 results.push(res);
             },
             PlanItem::DML(plan_node) => {
-                let Some(tnx_id) = TnxManager::global().get_transaction_id(connection_id) else {
-                    return Err(RsqlError::ExecutionError("No active transaction".to_string()));
+                let tnx_id = TnxManager::global().get_transaction_id(connection_id);
+                let mut auto_tnx = false;
+                let tnx_id = match tnx_id {
+                    Some(id) => id,
+                    None => {
+                        // auto begin transaction
+                        auto_tnx = true;
+                        TnxManager::global().begin_transaction(connection_id)
+                    },
                 };
                 let res = execute_dml_plan_node(plan_node, tnx_id, false)?;
                 let res = res.to_exec_result()?;
+                if auto_tnx {
+                    commit_transaction(connection_id)?;
+                };
                 results.push(res);
             },
         }
