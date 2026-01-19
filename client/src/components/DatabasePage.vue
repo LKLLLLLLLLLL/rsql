@@ -108,7 +108,7 @@
         <div v-if="activeSection === 'rename'" class="rename-operation">
           <div class="operation-panel">
             <h4>重命名表</h4>
-            <p>请在左侧表格列表中选择要重命名的表</p>
+            <p>请选择要重命名的表。</p>
             <div class="rename-table-list">
               <div 
                 v-for="table in tables" 

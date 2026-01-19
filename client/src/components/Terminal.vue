@@ -4,12 +4,11 @@
     <h1>Terminal</h1>
     <div class="terminal-panel">
       <div class="code-area">
-        <textarea
-          class="codeArea-text"
+        <SqlEditor
           v-model="codeInput"
           :placeholder="connected ? '输入 SQL 后提交' : '正在连接到 WebSocket...'"
           :disabled="!connected"
-        ></textarea>
+        />
       </div>
       <button
         class="codeArea-submit"
@@ -37,6 +36,7 @@
 
 <script setup>
 import { ref, onMounted, onBeforeUnmount } from 'vue'
+import SqlEditor from './SqlEditor.vue'
 
 const props = defineProps({
   wsUrl: { type: String, required: true }
@@ -155,9 +155,11 @@ defineExpose({
 .code-area {
   flex: 0 0 30%; 
   position: relative; 
-  padding: 16px; 
-  background: #f5f5f5; 
-  border-bottom: 1px solid #eee;
+  padding: 0;
+  background: white; 
+  border-bottom: 1px solid #ddd;
+  border-radius: 4px 4px 0 0;
+  overflow: hidden;
 }
 
 .codeArea-text {
