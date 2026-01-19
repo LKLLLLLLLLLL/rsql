@@ -25,8 +25,8 @@
 
     <div class="tables-list">
       <h3>Table List</h3>
-      <div v-for="table in tables" :key="table" class="table-item" :class="{ active: currentTable === table }">
-        <span @click="emit('select-table', table)">{{ table }}</span>
+      <div v-for="table in tables" :key="table" class="table-item" :class="{ active: currentTable === table }" @click="emit('select-table', table)">
+        <span>{{ table }}</span>
         <button v-if="isDropMode" class="table-delete-btn" @click.stop="emit('delete-table', table)">
           <Icon :path="mdiTrashCanOutline" size="14" />
           删除

@@ -18,9 +18,6 @@
           >
             <div class="header-content">
               <span>{{ header }}</span>
-              <button class="sort-btn" @click="toggleSort(idx)">
-                <Icon :path="getSortIcon(idx)" size="14" />
-              </button>
             </div>
           </th>
         </tr>
@@ -92,10 +89,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { 
-  mdiTable, 
-  mdiArrowUp, 
-  mdiArrowDown, 
-  mdiSortVariant,
+  mdiTable,
   mdiInformation
 } from '@mdi/js'
 
@@ -130,7 +124,6 @@ const props = defineProps({
   buffer: { type: Number, default: 4 },
   minWidth: { type: Number, default: 140 },
   maxWidth: { type: Number, default: 240 },
-  enableSorting: { type: Boolean, default: true },
   enableHighlighting: { type: Boolean, default: false }
 })
 
@@ -138,7 +131,6 @@ const emit = defineEmits(['row-click', 'cell-click', 'row-double-click'])
 
 const scrollRef = ref(null)
 const startIndex = ref(0)
-const sortState = ref({ columnIndex: -1, direction: null }) // null: none, 'asc': ascending, 'desc': descending
 const highlightedCells = ref(new Set())
 
 const maxHeightPx = computed(() => 
@@ -164,37 +156,6 @@ const paddingTop = computed(() => safeStart.value * props.rowHeight)
 const paddingBottom = computed(() => 
   Math.max(props.rows.length - endIndex.value, 0) * props.rowHeight
 )
-
-// Sorting methods
-const toggleSort = (columnIndex) => {
-  if (!props.enableSorting) return;
-  
-  if (sortState.value.columnIndex === columnIndex) {
-    // Cycle through sort states: asc -> desc -> none
-    if (sortState.value.direction === 'asc') {
-      sortState.value.direction = 'desc';
-    } else if (sortState.value.direction === 'desc') {
-      sortState.value.direction = null;
-      sortState.value.columnIndex = -1;
-    } else {
-      sortState.value.direction = 'asc';
-    }
-  } else {
-    sortState.value.columnIndex = columnIndex;
-    sortState.value.direction = 'asc';
-  }
-  
-  // In a real implementation, you would sort the data here
-  console.log(`Sorting by column ${columnIndex} in ${sortState.value.direction} order`);
-}
-
-const getSortIcon = (columnIndex) => {
-  if (sortState.value.columnIndex !== columnIndex) {
-    return mdiSortVariant;
-  }
-  
-  return sortState.value.direction === 'asc' ? mdiArrowUp : mdiArrowDown;
-}
 
 // Cell formatting
 const formatValue = (value) => {
@@ -327,27 +288,7 @@ onBeforeUnmount(() => {
 .header-content {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-}
-
-.sort-btn {
-  background: none;
-  border: none;
-  color: #64748b;
-  cursor: pointer;
-  padding: 4px;
-  border-radius: 4px;
-  display: flex;
-  align-items: center;
   justify-content: center;
-  opacity: 0.7;
-  transition: all 0.2s ease;
-}
-
-.sort-btn:hover {
-  opacity: 1;
-  background: rgba(255, 255, 255, 0.3);
-  color: #475569;
 }
 
 .data-cell {
@@ -448,11 +389,6 @@ onBeforeUnmount(() => {
     flex-direction: column;
     align-items: flex-start;
     gap: 4px;
-  }
-  
-  .sort-btn {
-    align-self: flex-end;
-    margin-top: -20px;
   }
 }
 </style>

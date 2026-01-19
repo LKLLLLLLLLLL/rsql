@@ -141,7 +141,7 @@ import Toast from '../components/Toast.vue'
 const viewHeaders = ref([])
 const viewRows = ref([])
 const currentTableName = ref('Users')
-const tables = ref(['Users', 'Products'])
+const tables = ref([])
 const activeSection = ref(null)
 const activeSidebarButton = ref('')
 const dropMode = ref(false)
@@ -164,10 +164,14 @@ const toastRef = ref(null)
 const toastMessage = ref('')
 const toastDuration = 2500
 
+// WebSocket连接
+const wsConnected = ref(false)
+let wsRef = null
+
 // 数据缓存
-let currentTableHeaders = []
-let currentTableRows = []
-let currentDisplayHeaders = []
+let currentTableHeaders = [] // 列元数据 (name, type, ableToBeNULL, primaryKey, unique)
+let currentTableRows = [] // 所有数据行
+let currentDisplayHeaders = [] // 显示用的列名
 
 // WebSocket URL
 const wsUrl = computed(() => {
@@ -286,22 +290,130 @@ function openDropModal(tableName) {
   dropModalVisible.value = true
 }
 
+// WebSocket操作函数
+function connectWebSocket() {
+  const socket = new WebSocket(wsUrl.value)
+  wsRef = socket
+
+  socket.onopen = () => {
+    wsConnected.value = true
+    console.log('WebSocket connected')
+  }
+
+  socket.onclose = () => {
+    wsConnected.value = false
+    console.log('WebSocket closed')
+  }
+
+  socket.onerror = (err) => {
+    console.warn('WebSocket error', err)
+    wsConnected.value = false
+  }
+
+  socket.onmessage = (ev) => {
+    try {
+      const data = JSON.parse(ev.data)
+      console.log('WebSocket response:', data)
+      handleSqlResult(data)
+      
+      // 如果操作成功，重新加载数据
+      if (data.success) {
+        // 延迟加载，给后端一点时间完成操作
+        setTimeout(() => {
+          loadTablesList()
+          if (currentTableName.value) {
+            loadTableData(currentTableName.value)
+          }
+        }, 100)
+      }
+    } catch (e) {
+      console.warn('Parse WebSocket message failed', e, ev.data)
+    }
+  }
+}
+
+function sendSqlViaWebSocket(sql) {
+  if (!wsRef || wsRef.readyState !== WebSocket.OPEN) {
+    triggerToast('WebSocket未连接，请稍后重试')
+    return false
+  }
+
+  const payload = {
+    username: 'root',
+    userid: 0,
+    request_content: sql,
+  }
+  
+  console.log('Sending SQL:', sql)
+  wsRef.send(JSON.stringify(payload))
+  return true
+}
+
 // 数据库操作函数
 async function loadTableData(tableName) {
-  // 实现数据加载逻辑
-  console.log('Loading table data for:', tableName)
-  // 这里应该从API加载数据
+  // 从 public 文件夹中加载表格数据
+  try {
+    const response = await fetch(`/${tableName}.json`)
+    if (!response.ok) {
+      throw new Error(`Failed to load ${tableName}.json: ${response.statusText}`)
+    }
+    const data = await response.json()
+    
+    // 提取表格元数据
+    const headers = data.headers || []
+    const types = data.type || []
+    const ableToBeNULL = data.ableToBeNULL || []
+    const primaryKeys = data.primaryKey || []
+    const uniques = data.unique || []
+    
+    // 构建列元数据对象数组
+    currentTableHeaders = headers.map((name, index) => ({
+      name,
+      type: types[index] || 'VARCHAR',
+      ableToBeNULL: ableToBeNULL[index] || false,
+      primaryKey: primaryKeys[index] || false,
+      unique: uniques[index] || false
+    }))
+    
+    // 存储所有数据行
+    currentTableRows = data.rows || []
+    currentDisplayHeaders = headers.slice()
+    
+    // 渲染表格
+    renderTable(currentDisplayHeaders, currentTableRows)
+    
+    console.log('Table data loaded:', {
+      table: tableName,
+      headers: currentTableHeaders,
+      rowCount: currentTableRows.length
+    })
+  } catch (error) {
+    console.error('Error loading table data:', error)
+    currentTableHeaders = []
+    currentTableRows = []
+    currentDisplayHeaders = []
+    renderTable([], [])
+  }
 }
 
 async function loadTablesList() {
-  // 实现表格列表加载逻辑
-  console.log('Loading tables list')
-  // 这里应该从API加载表格列表
+  // 从 public/TABLES.json 加载表格列表
+  try {
+    const response = await fetch('/TABLES.json')
+    if (!response.ok) {
+      throw new Error(`Failed to load TABLES.json: ${response.statusText}`)
+    }
+    const data = await response.json()
+    tables.value = Array.isArray(data.tables) ? data.tables : []
+    console.log('Tables loaded:', tables.value)
+  } catch (error) {
+    console.error('Error loading tables:', error)
+    tables.value = []
+  }
 }
 
 function handleCreateTable({ tableName, columns }) {
-  console.log('Creating table:', tableName, columns)
-  // 生成SQL并发送
+  // 生成CREATE TABLE SQL
   let sql = `CREATE TABLE ${tableName} (\n`
   columns.forEach((col, index) => {
     sql += `  ${col.name} ${col.type}`
@@ -312,18 +424,49 @@ function handleCreateTable({ tableName, columns }) {
   })
   sql += `\n);`
   
-  console.log('Generated SQL:', sql)
-  triggerToast('创建表语句已发送')
+  // 通过WebSocket发送
+  if (sendSqlViaWebSocket(sql)) {
+    triggerToast('创建表语句已发送')
+    // 返回到表格视图
+    setTimeout(() => showSection('table'), 500)
+  }
 }
 
 function handleInsertData(insertData) {
-  console.log('Inserting data:', insertData)
-  // 生成SQL并发送
-  triggerToast('插入语句已发送')
+  // insertData是行数组: [{ colName: value, ... }]
+  const rows = insertData
+  const tableName = currentTableName.value
+  
+  if (!rows || rows.length === 0) {
+    triggerToast('没有要插入的数据')
+    return
+  }
+
+  // 生成INSERT SQL语句
+  rows.forEach(row => {
+    const columns = Object.keys(row).filter(key => row[key] !== '')
+    const values = columns.map(key => {
+      const value = row[key]
+      // 根据类型判断是否需要加引号
+      const meta = currentTableHeaders.find(h => h.name === key)
+      if (meta && (meta.type === 'INT' || meta.type === 'INTEGER' || meta.type === 'FLOAT')) {
+        return value
+      }
+      // 字符串类型加引号
+      return `'${value.replace(/'/g, "''")}'`
+    })
+    
+    const sql = `INSERT INTO ${tableName} (${columns.join(', ')}) VALUES (${values.join(', ')});`
+    sendSqlViaWebSocket(sql)
+  })
+  
+  triggerToast(`已发送 ${rows.length} 条插入语句`)
+  // 返回到表格视图
+  setTimeout(() => showSection('table'), 500)
 }
 
 function showInsertSection() {
-  if (currentTableHeaders.length === 0) {
+  if (!currentTableHeaders || currentTableHeaders.length === 0) {
     alert('请先选择一个表格查看数据，然后再执行插入操作')
     return
   }
@@ -331,9 +474,36 @@ function showInsertSection() {
 }
 
 function confirmDelete(idx) {
-  console.log('Confirm delete row:', idx)
-  // 实现删除逻辑
-  triggerToast('删除语句已发送')
+  if (!currentTableHeaders || currentTableHeaders.length === 0) {
+    triggerToast('无法确定表结构')
+    return
+  }
+
+  const row = currentTableRows[idx]
+  if (!row) {
+    triggerToast('无效的行索引')
+    return
+  }
+
+  // 生成WHERE子句（使用主键或所有列）
+  const whereConditions = []
+  currentTableHeaders.forEach((header, colIdx) => {
+    const value = row[colIdx]
+    if (value !== null && value !== undefined) {
+      if (header.type === 'INT' || header.type === 'INTEGER' || header.type === 'FLOAT') {
+        whereConditions.push(`${header.name} = ${value}`)
+      } else {
+        whereConditions.push(`${header.name} = '${String(value).replace(/'/g, "''")}'`)
+      }
+    }
+  })
+
+  const sql = `DELETE FROM ${currentTableName.value} WHERE ${whereConditions.join(' AND ')};`
+  
+  if (sendSqlViaWebSocket(sql)) {
+    triggerToast('删除语句已发送')
+    deletePendingRow.value = null
+  }
 }
 
 function startUpdate(idx) {
@@ -348,9 +518,52 @@ function cancelUpdate() {
 }
 
 function confirmUpdate(idx) {
-  console.log('Confirm update row:', idx, updateDraft.value)
-  // 实现更新逻辑
-  triggerToast('更新语句已发送')
+  if (!currentTableHeaders || currentTableHeaders.length === 0) {
+    triggerToast('无法确定表结构')
+    return
+  }
+
+  const oldRow = currentTableRows[idx]
+  const newRow = updateDraft.value
+  
+  if (!oldRow || !newRow) {
+    triggerToast('无效的数据')
+    return
+  }
+
+  // 生成SET子句
+  const setClause = []
+  currentTableHeaders.forEach((header, colIdx) => {
+    const newValue = newRow[colIdx]
+    if (newValue !== null && newValue !== undefined && newValue !== '') {
+      if (header.type === 'INT' || header.type === 'INTEGER' || header.type === 'FLOAT') {
+        setClause.push(`${header.name} = ${newValue}`)
+      } else {
+        setClause.push(`${header.name} = '${String(newValue).replace(/'/g, "''")}'`)
+      }
+    }
+  })
+
+  // 生成WHERE子句（使用原始值）
+  const whereConditions = []
+  currentTableHeaders.forEach((header, colIdx) => {
+    const value = oldRow[colIdx]
+    if (value !== null && value !== undefined) {
+      if (header.type === 'INT' || header.type === 'INTEGER' || header.type === 'FLOAT') {
+        whereConditions.push(`${header.name} = ${value}`)
+      } else {
+        whereConditions.push(`${header.name} = '${String(value).replace(/'/g, "''")}'`)
+      }
+    }
+  })
+
+  const sql = `UPDATE ${currentTableName.value} SET ${setClause.join(', ')} WHERE ${whereConditions.join(' AND ')};`
+  
+  if (sendSqlViaWebSocket(sql)) {
+    triggerToast('更新语句已发送')
+    updateEditingRow.value = null
+    updateDraft.value = []
+  }
 }
 
 function confirmDropTable() {
@@ -361,15 +574,11 @@ function confirmDropTable() {
   }
   
   const sql = `DROP TABLE ${name};`
-  console.log('Drop table SQL:', sql)
   
-  dropModalVisible.value = false
-  triggerToast('删除表语句已发送')
-  
-  // 重新加载表格列表
-  setTimeout(() => {
-    loadTablesList()
-  }, 100)
+  if (sendSqlViaWebSocket(sql)) {
+    dropModalVisible.value = false
+    triggerToast('删除表语句已发送')
+  }
 }
 
 function handleSqlResult(data) {
@@ -378,9 +587,17 @@ function handleSqlResult(data) {
 
 // 生命周期
 onMounted(() => {
+  connectWebSocket()
   loadTablesList()
   loadTableData(currentTableName.value)
   showSection('table')
+})
+
+onBeforeUnmount(() => {
+  if (wsRef) {
+    wsRef.close()
+    wsRef = null
+  }
 })
 </script>
 
