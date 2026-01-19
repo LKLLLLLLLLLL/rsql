@@ -1,6 +1,7 @@
 use core::panic;
 use std::mem::size_of;
 use std::cmp::Ordering;
+use std::hash::Hash;
 
 use crate::common::{RsqlError, RsqlResult};
 use crate::catalog::table_schema;
@@ -27,6 +28,15 @@ pub struct VarCharHead {
     pub len: u64,
     pub page_ptr: Option<u64>,
 }
+
+impl Hash for DataItem {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.to_bytes().unwrap().0.hash(state);
+    }
+}
+
+impl Eq for DataItem {}
+
 
 impl DataItem {
     /// Return the size in bytes of the data item.

@@ -251,7 +251,7 @@ pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64, read_only: bool) -> R
                 }
                 let data_item = handle_insert_expr(&table_object, cols, &null_cols, &values[0])?;
                 table_object.table_obj.insert_row(data_item, tnx_id)?;
-                Ok(Mutation)
+                Ok(Mutation("Insert successful".to_string()))
             }else {
                 Err(RsqlError::ExecutionError(format!("Insert columns is None")))
             }
@@ -264,7 +264,7 @@ pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64, read_only: bool) -> R
                     let pk_col_idx = table_obj.map.get(&table_obj.pk_col.0).unwrap();
                     table_obj.table_obj.delete_row(&row[*pk_col_idx], tnx_id)?;
                 }
-                Ok(Mutation)
+                Ok(Mutation("Delete successful".to_string()))
             }else {
                 Err(RsqlError::ExecutionError(format!("Delete input must be a TableWithFilter")))
             }
@@ -274,7 +274,7 @@ pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64, read_only: bool) -> R
             let input_result = execute_dml_plan_node(input, tnx_id, false)?;
             if let TableWithFilter {mut table_obj, rows} = input_result {
                 handle_update_expr(&mut table_obj, assignments, &rows, tnx_id)?;
-                Ok(Mutation)
+                Ok(Mutation("Update successful".to_string()))
             }else {
                 Err(RsqlError::ExecutionError(format!("Update input must be a TableWithFilter")))
             }

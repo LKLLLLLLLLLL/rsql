@@ -2,10 +2,11 @@ use std::collections::{HashSet, HashMap};
 use std::sync::{Arc, Mutex, LazyLock};
 use std::rc::Rc;
 use std::cell::RefCell;
-use std::thread;
+use std::{thread, vec};
 
-use crate::catalog::{self, SysCatalog};
+use crate::catalog::SysCatalog;
 use crate::common::{RsqlResult, RsqlError};
+use crate::execution::result::ExecutionResult;
 use crate::sql::{Plan, plan::{PlanItem}};
 use crate::storage::WAL;
 use crate::storage::storage::{Page, StorageManager};
@@ -121,51 +122,68 @@ fn rollback_transaction(connection_id: u64) -> RsqlResult<()> {
     Ok(())
 }
 
-fn execute_inner(sql: &str, connection_id: u64) -> RsqlResult<()> {
+fn execute_inner(sql: &str, connection_id: u64) -> RsqlResult<Vec<ExecutionResult>> {
     let plan = Plan::build_plan(sql)?;
+    let mut results = vec![];
     for item in plan.items.iter() {
         match item {
             PlanItem::Begin => {
                 TnxManager::global().begin_transaction(connection_id);
+                results.push(ExecutionResult::TnxBeginSuccess);
             },
             PlanItem::Commit => {
                 commit_transaction(connection_id)?;
+                results.push(ExecutionResult::CommitSuccess);
             },
             PlanItem::Rollback => {
                 rollback_transaction(connection_id)?;
+                results.push(ExecutionResult::RollbackSuccess);
             },
             PlanItem::DCL(plan_node) => {
-                execute_dcl_plan_node(plan_node, connection_id)?;
+                let Some(tnx_id) = TnxManager::global().get_transaction_id(connection_id) else {
+                    return Err(RsqlError::ExecutionError("No active transaction".to_string()));
+                };
+                let res = execute_dcl_plan_node(plan_node, tnx_id)?;
+                results.push(res);
             },
             PlanItem::DDL(plan_node) => {
-                execute_ddl_plan_node(plan_node, connection_id)?;
+                let Some(tnx_id) = TnxManager::global().get_transaction_id(connection_id) else {
+                    return Err(RsqlError::ExecutionError("No active transaction".to_string()));
+                };
+                let res = execute_ddl_plan_node(plan_node, tnx_id)?;
+                results.push(res);
             },
             PlanItem::DML(plan_node) => {
                 let Some(tnx_id) = TnxManager::global().get_transaction_id(connection_id) else {
                     return Err(RsqlError::ExecutionError("No active transaction".to_string()));
                 };
-                execute_dml_plan_node(plan_node, tnx_id, false)?;
+                let res = execute_dml_plan_node(plan_node, tnx_id, false)?;
+                results.push(res);
             },
         }
     };
-    Ok(())
+    Ok(results)
 }
 
 /// Execute a SQL statement
-pub fn execute(sql: &str, connection_id: u64) -> RsqlResult<()> {
+pub fn execute(sql: &str, connection_id: u64) -> RsqlResult<Vec<ExecutionResult>> {
     let _guard = ExecGuard::new(connection_id);
     info!("Executing SQL: {}, in thread {:?}", sql, thread::current().id());
     let mut retry_count = 0;
     while retry_count < LOCK_MAX_RETRY {
         let exec_res = execute_inner(sql, connection_id);
         match exec_res {
-            Ok(_) => info!("SQL {} in thread {:?} executed successfully", sql, thread::current().id()),
+            Ok(res) => {
+                info!("SQL {} in thread {:?} executed successfully", sql, thread::current().id());
+                return Ok(res);
+            },
             Err(RsqlError::LockError(e)) => {
                 warn!("SQL {} execution in thread {:?} failed due to lock error: {}\n\
                     retry it!", sql, thread::current().id(), e);
                 if TnxManager::global().get_transaction_id(connection_id).is_some() {
                     rollback_transaction(connection_id)?;
                 }
+                // continue to retry
             }
             Err(e) => {
                 warn!("SQL {} execution in thread {:?} failed: {}", sql, thread::current().id(), e);
@@ -200,7 +218,7 @@ pub fn checkpoint() -> RsqlResult<()> {
 /// Validate user credentials
 pub fn validate_user(username: &str, password: &str) -> RsqlResult<bool> {
     let tnx_id = TnxManager::global().begin_transaction(1);
-    let is_valid = catalog::SysCatalog::global().validate_user(tnx_id, username, password)?;
+    let is_valid = SysCatalog::global().validate_user(tnx_id, username, password)?;
     TnxManager::global().end_transaction(1);
     Ok(is_valid)
 }

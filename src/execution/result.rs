@@ -13,9 +13,9 @@ pub enum ExecutionResult {
         cols: (Vec<String>, Vec<ColType>),
         rows: Vec<Vec<DataItem>>, // query result
     },
-    Mutation, // update, delete, insert
-    Ddl, // create, drop
-    Dcl,
+    Mutation(String), // update, delete, insert
+    Ddl(String), // create, drop
+    Dcl(String), // users
     TableObj(TableObject), // table object after scan
     TableWithFilter {
         table_obj: TableObject,
@@ -31,6 +31,9 @@ pub enum ExecutionResult {
         rows: Vec<Vec<DataItem>>,
         aggr_cols: Vec<String>, // aggregate columns
     },
+    TnxBeginSuccess,
+    CommitSuccess,
+    RollbackSuccess,
 }
 pub struct TableObject {
     pub table_obj: Table,
