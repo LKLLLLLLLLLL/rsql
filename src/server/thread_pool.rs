@@ -1,6 +1,6 @@
 use rayon::ThreadPoolBuilder;
 use num_cpus;
-use tracing::{error, info};
+use tracing::{info};
 use futures::channel::oneshot;
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
