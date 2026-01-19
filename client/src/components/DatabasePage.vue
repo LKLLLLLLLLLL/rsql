@@ -16,6 +16,7 @@
     />
 
     <div class="main-content">
+      <div class="welcome-banner" v-if="username">欢迎 {{ username }}</div>
       <Topbar
         v-if="shouldShowTopBar"
         :current-table-name="currentTableName"
@@ -237,6 +238,7 @@ import Icon from './Icon.vue'
 import { mdiMagnify, mdiDownload, mdiTableEdit, mdiChartLine, mdiDatabaseExport, mdiTable, mdiTableOff, mdiPencilOutline, mdiTrashCanOutline, mdiTableRemove } from '@mdi/js'
 
 // 响应式数据
+const username = ref('')
 const viewHeaders = ref([])
 const viewRows = ref([])
 const currentTableName = ref('')
@@ -275,8 +277,14 @@ let currentDisplayHeaders = [] // 显示用的列名
 
 // WebSocket URL
 const wsUrl = computed(() => {
-  const username = 'root'
-  const password = 'password'
+  let username = 'root'
+  let password = 'password'
+  try {
+    const u = typeof window !== 'undefined' ? localStorage.getItem('username') : null
+    const p = typeof window !== 'undefined' ? localStorage.getItem('password') : null
+    if (u) username = u
+    if (p) password = p
+  } catch {}
   if (typeof window === 'undefined') {
     return `ws://127.0.0.1:4456/ws?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`
   }
@@ -474,7 +482,14 @@ function sendSqlViaWebSocket(sql) {
   }
 
   const payload = {
-    username: 'root',
+    username: (() => {
+      try {
+        const u = typeof window !== 'undefined' ? localStorage.getItem('username') : null
+        return u || 'root'
+      } catch {
+        return 'root'
+      }
+    })(),
     userid: 0,
     request_content: sql,
   }
@@ -722,6 +737,9 @@ function handleSqlResult(data) {
 
 // 生命周期
 onMounted(() => {
+  try {
+    username.value = localStorage.getItem('username') || ''
+  } catch {}
   connectWebSocket()
   loadTablesList()
   // 默认不加载任何表格数据，让用户选择
@@ -1050,5 +1068,15 @@ html, body {
   height: 100%;
   display: flex;
   flex-direction: column;
+}
+
+.welcome-banner {
+  margin: 16px 24px 0 24px;
+  background: #ffffff;
+  border: 1px solid #e3e8ef;
+  border-left: 4px solid #315efb;
+  color: #1a1f36;
+  padding: 12px 16px;
+  font-weight: 500;
 }
 </style>

@@ -42,8 +42,8 @@ pub enum JoinType {
 #[derive(Debug, Clone, Copy)]
 pub enum ApplyType {
     Scalar,  // Scalar subquery
-    In,      // IN subquery
-    NotIn,   // NOT IN subquery
+    // In,      // IN subquery
+    // NotIn,   // NOT IN subquery
 }
 
 // Removed unused: pub type AlterTableOperation = AstAlterTableOperation;
@@ -204,9 +204,9 @@ impl Plan {
                     let rest: &str = &sql_trimmed[("create user".len())..].trim_start();
                     let mut user_name = String::new();
                     let mut password: Option<String> = None;
-                    let mut if_not_exists = false;
+                    // let mut if_not_exists = false;
                     // Tokenize rest
-                    let mut tokens: Vec<&str> = rest.split_whitespace().collect();
+                    let tokens: Vec<&str> = rest.split_whitespace().collect();
                     let mut i = 0;
                     // Check for IF NOT EXISTS
                     if tokens.len() >= 3
@@ -214,7 +214,7 @@ impl Plan {
                         && tokens[1].eq_ignore_ascii_case("not")
                         && tokens[2].eq_ignore_ascii_case("exists")
                     {
-                        if_not_exists = true;
+                        // if_not_exists = true;
                         i += 3;
                     }
                     // Get user_name

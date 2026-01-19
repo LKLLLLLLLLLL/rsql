@@ -29,8 +29,8 @@ async fn setup_db() {
     // related table (for JOIN tests)
     execute_query_short("CREATE TABLE test_orders (oid INTEGER PRIMARY KEY, user_id INTEGER, amount FLOAT);".to_string()).await;
 
-    // reduce data volume: pre-fill 50 records
-    for i in 1..=50 {
+    // reduce data volume: pre-fill 20 records
+    for i in 1..=20 {
         execute_query_short(format!(
             "INSERT INTO test_main(id, val, category) VALUES ({}, 'val_{}', {}); INSERT INTO test_orders(oid, user_id, amount) VALUES ({}, {}, {}.5);", 
             i, i, i % 5, i, i, i
@@ -46,18 +46,18 @@ fn bench_db_suites(c: &mut Criterion) {
     let mut g1 = c.benchmark_group("Basic-Operations");
     g1.measurement_time(Duration::from_secs(5)); // Shorten individual test time
 
-    // g1.bench_function("point_select_indexed", |b| {
-    //     b.to_async(&rt).iter(|| async {
-    //         execute_query_short("SELECT * FROM test_main WHERE id = 25;".to_string()).await;
-    //     });
-    // });
+    g1.bench_function("point_select_indexed", |b| {
+        b.to_async(&rt).iter(|| async {
+            execute_query_short("SELECT * FROM test_main WHERE id = 25;".to_string()).await;
+        });
+    });
 
-    // g1.bench_function("range_scan_simple", |b| {
-    //     b.to_async(&rt).iter(|| async {
-    //         // test simple range scan
-    //         execute_query_short("SELECT * FROM test_main WHERE id > 20 AND id < 30;".to_string()).await;
-    //     });
-    // });
+    g1.bench_function("range_scan_simple", |b| {
+        b.to_async(&rt).iter(|| async {
+            // test simple range scan
+            execute_query_short("SELECT * FROM test_main WHERE id > 20 AND id < 30;".to_string()).await;
+        });
+    });
 
     g1.bench_function("update_single_row", |b| {
         b.to_async(&rt).iter(|| async {

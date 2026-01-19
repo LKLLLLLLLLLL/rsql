@@ -1,5 +1,4 @@
 use core::panic;
-use std::cmp::max;
 use std::collections::HashSet;
 use std::fs;
 use std::io::Seek;
@@ -7,7 +6,7 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock, atomic::{AtomicU64, Ordering}};
 
-use tracing::{warn, info, debug};
+use tracing::{warn, info};
 
 use crate::config::{DB_DIR, MAX_WAL_SIZE};
 use crate::common::{RsqlError, RsqlResult};

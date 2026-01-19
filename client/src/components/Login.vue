@@ -7,27 +7,10 @@
     </section>
 
     <section class="card">
-      <div class="tabs">
-        <button :class="['tab', { active: mode === 'login' }]" @click="setMode('login')">登录</button>
-        <button :class="['tab', { active: mode === 'register' }]" @click="setMode('register')">注册</button>
-      </div>
-
       <form class="form" @submit.prevent="handleSubmit">
-        <div v-if="mode === 'register'" class="field">
-          <label for="name">姓名</label>
-          <input id="name" v-model.trim="form.name" type="text" placeholder="你的名字" autocomplete="name" />
-        </div>
-
         <div class="field">
-          <label for="email">邮箱</label>
-          <input
-            id="email"
-            v-model.trim="form.email"
-            type="email"
-            placeholder="name@example.com"
-            autocomplete="email"
-            required
-          />
+          <label for="username">用户名</label>
+          <input id="username" v-model.trim="form.username" type="text" placeholder="请输入用户名" autocomplete="username" />
         </div>
 
         <div class="field">
@@ -42,25 +25,9 @@
           />
         </div>
 
-        <div v-if="mode === 'register'" class="field">
-          <label for="confirm">确认密码</label>
-          <input
-            id="confirm"
-            v-model.trim="form.confirm"
-            type="password"
-            placeholder="再次输入密码"
-            autocomplete="new-password"
-            required
-          />
-        </div>
-
         <div class="actions">
-          <label class="remember">
-            <input v-if="mode === 'login'" v-model="remember" type="checkbox" />
-            <span>{{ mode === 'login' ? '记住我' : '已阅读并同意使用条款' }}</span>
-          </label>
           <button class="submit" type="submit" :disabled="pending">
-            <span v-if="!pending">{{ mode === 'login' ? '登录' : '注册并登录' }}</span>
+            <span v-if="!pending">登录</span>
             <span v-else>处理中...</span>
           </button>
         </div>
@@ -78,27 +45,17 @@ import { reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 const router = useRouter()
-const mode = ref('login')
-const remember = ref(true)
 const pending = ref(false)
 const message = ref('')
 const messageType = ref('success')
 
 const form = reactive({
-  name: '',
-  email: '',
+  username: '',
   password: '',
-  confirm: '',
 })
 
 const resetMessage = () => {
   message.value = ''
-}
-
-const setMode = (next) => {
-  if (mode.value === next) return
-  mode.value = next
-  resetMessage()
 }
 
 const simulateAuth = async () => {
@@ -109,19 +66,14 @@ const simulateAuth = async () => {
 }
 
 const handleSubmit = async () => {
-  if (!form.email || !form.password) {
-    messageType.value = 'error'
-    message.value = '请填写邮箱和密码'
-    return
-  }
-  if (mode.value === 'register' && form.password !== form.confirm) {
-    messageType.value = 'error'
-    message.value = '两次密码不一致'
-    return
-  }
   await simulateAuth()
+  console.log('Login credentials:', { username: form.username, password: form.password })
+  try {
+    localStorage.setItem('username', form.username || '')
+    localStorage.setItem('password', form.password || '')
+  } catch {}
   messageType.value = 'success'
-  message.value = mode.value === 'login' ? '登录成功，即将进入控制台' : '注册成功，已为你登录'
+  message.value = '登录成功，即将进入控制台'
   router.push('/database')
 }
 </script>
@@ -178,29 +130,7 @@ const handleSubmit = async () => {
   box-shadow: 0 20px 60px rgba(15, 23, 42, 0.08);
 }
 
-.tabs {
-  display: inline-flex;
-  background: #f1f5f9;
-  border-radius: 12px;
-  padding: 4px;
-  margin-bottom: 20px;
-}
 
-.tab {
-  border: none;
-  background: transparent;
-  padding: 10px 18px;
-  border-radius: 10px;
-  font-weight: 600;
-  color: #475569;
-  cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
-}
-
-.tab.active {
-  background: #315efb;
-  color: #ffffff;
-}
 
 .form {
   display: flex;
@@ -244,17 +174,7 @@ input:focus {
   margin-top: 6px;
 }
 
-.remember {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  color: #475569;
-  font-size: 13px;
-}
 
-.remember input {
-  accent-color: #315efb;
-}
 
 .submit {
   border: none;
