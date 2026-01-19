@@ -5,13 +5,11 @@
       :tables="tables"
       :current-table="currentTableName"
       :active-button="activeSidebarButton"
-      :is-drop-mode="dropMode"
       @create="showSection('create')"
-      @rename="showSection('rename')"
+      @rename="toggleRenameMode"
       @drop="toggleDropMode"
       @terminal="showSection('terminal')"
       @select-table="selectTable"
-      @delete-table="openDropModal"
     />
 
     <div class="main-content">
@@ -109,7 +107,42 @@
         <div v-if="activeSection === 'rename'" class="rename-operation">
           <div class="operation-panel">
             <h4>重命名表</h4>
-            <p>重命名功能开发中...</p>
+            <p>请在左侧表格列表中选择要重命名的表</p>
+            <div class="rename-table-list">
+              <div 
+                v-for="table in tables" 
+                :key="table" 
+                class="rename-table-item"
+                @click="openRenameModal(table)"
+              >
+                <span>{{ table }}</span>
+                <button class="rename-table-btn">
+                  <Icon :path="mdiPencilOutline" size="16" />
+                  重命名
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="activeSection === 'drop'" class="drop-operation">
+          <div class="operation-panel">
+            <h4>删除表</h4>
+            <p>请选择要删除的表。此操作无法撤销,请谨慎操作。</p>
+            <div class="drop-table-list">
+              <div 
+                v-for="table in tables" 
+                :key="table" 
+                class="drop-table-item"
+                @click="openDropModal(table)"
+              >
+                <span>{{ table }}</span>
+                <button class="drop-table-btn">
+                  <Icon :path="mdiTrashCanOutline" size="16" />
+                  删除
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -122,19 +155,29 @@
       @confirm="confirmDropTable"
     />
 
+    <RenameTableModal
+      :visible="renameModalVisible"
+      :old-table-name="pendingRenameTable"
+      @cancel="renameModalVisible = false"
+      @confirm="confirmRenameTable"
+    />
+
     <Toast ref="toastRef" :message="toastMessage" :duration="toastDuration" />
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { mdiPencilOutline, mdiTrashCanOutline } from '@mdi/js'
 import Sidebar from './Sidebar.vue'
+import Icon from './Icon.vue'
 import Topbar from './Topbar.vue'
 import DataTable from './DataTable.vue'
 import CreateTable from './CreateTable.vue'
 import Terminal from './Terminal.vue'
 import InsertData from './InsertData.vue'
 import DropTableModal from './DropTableModal.vue'
+import RenameTableModal from './RenameTableModal.vue'
 import Toast from '../components/Toast.vue'
 
 // 响应式数据
@@ -142,9 +185,8 @@ const viewHeaders = ref([])
 const viewRows = ref([])
 const currentTableName = ref('Users')
 const tables = ref([])
-const activeSection = ref(null)
-const activeSidebarButton = ref('')
-const dropMode = ref(false)
+const activeSection = ref('terminal')
+const activeSidebarButton = ref('terminal')
 
 // 删除相关
 const deletePendingRow = ref(null)
@@ -158,6 +200,8 @@ const updateRenderKey = ref(0)
 // 弹窗相关
 const dropModalVisible = ref(false)
 const pendingDropTable = ref('')
+const renameModalVisible = ref(false)
+const pendingRenameTable = ref('')
 
 // Toast相关
 const toastRef = ref(null)
@@ -264,19 +308,48 @@ function triggerToast(msg) {
 }
 
 function showSection(section) {
+  // 如果再次点击delete或update，则返回到table视图
+  if ((section === 'delete' || section === 'update') && activeSection.value === section) {
+    activeSection.value = 'table'
+    activeSidebarButton.value = ''
+    return
+  }
+  
   activeSection.value = section
   activeSidebarButton.value = section
   
   if (section === 'create' || section === 'terminal') {
-    dropMode.value = false
     loadTablesList()
   }
 }
 
 function toggleDropMode() {
-  dropMode.value = !dropMode.value
-  activeSidebarButton.value = dropMode.value ? 'drop' : ''
+  showSection('drop')
   loadTablesList()
+}
+
+function toggleRenameMode() {
+  showSection('rename')
+}
+function openRenameModal(tableName) {
+  dropModalVisible.value = false  // 关闭删除模态框
+  pendingRenameTable.value = tableName
+  renameModalVisible.value = true
+}
+
+function confirmRenameTable(newName) {
+  const oldName = pendingRenameTable.value
+  if (!oldName || !newName) {
+    renameModalVisible.value = false
+    return
+  }
+  
+  const sql = `ALTER TABLE ${oldName} RENAME TO ${newName};`
+  
+  if (sendSqlViaWebSocket(sql)) {
+    renameModalVisible.value = false
+    triggerToast('重命名表语句已发送')
+  }
 }
 
 function selectTable(tableName) {
@@ -286,6 +359,8 @@ function selectTable(tableName) {
 }
 
 function openDropModal(tableName) {
+  // 关闭所有其他的模态框
+  renameModalVisible.value = false
   pendingDropTable.value = tableName
   dropModalVisible.value = true
 }
@@ -590,7 +665,7 @@ onMounted(() => {
   connectWebSocket()
   loadTablesList()
   loadTableData(currentTableName.value)
-  showSection('table')
+  showSection('terminal')
 })
 
 onBeforeUnmount(() => {
@@ -695,6 +770,102 @@ html, body {
   font-size: 1.5rem;
   margin-bottom: 10px;
   color: #7f8c8d;
+}
+
+.rename-table-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.rename-table-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  background: #f8f9fa;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: 2px solid transparent;
+}
+
+.rename-table-item:hover {
+  background: #e9ecef;
+  border-color: #3498db;
+}
+
+.rename-table-item span {
+  font-size: 1rem;
+  font-weight: 500;
+  color: #2c3e50;
+}
+
+.rename-table-btn {
+  background: #3498db;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: background 0.2s ease;
+}
+
+.rename-table-btn:hover {
+  background: #217dbb;
+}
+
+.drop-table-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.drop-table-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  background: #f8f9fa;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: 2px solid transparent;
+}
+
+.drop-table-item:hover {
+  background: #ffe5e5;
+  border-color: #e74c3c;
+}
+
+.drop-table-item span {
+  font-size: 1rem;
+  font-weight: 500;
+  color: #2c3e50;
+}
+
+.drop-table-btn {
+  background: #e74c3c;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: background 0.2s ease;
+}
+
+.drop-table-btn:hover {
+  background: #c0392b;
 }
 
 @media (max-width: 768px) {

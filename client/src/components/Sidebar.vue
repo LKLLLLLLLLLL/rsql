@@ -27,10 +27,6 @@
       <h3>Table List</h3>
       <div v-for="table in tables" :key="table" class="table-item" :class="{ active: currentTable === table }" @click="emit('select-table', table)">
         <span>{{ table }}</span>
-        <button v-if="isDropMode" class="table-delete-btn" @click.stop="emit('delete-table', table)">
-          <Icon :path="mdiTrashCanOutline" size="14" />
-          删除
-        </button>
       </div>
     </div>
 
@@ -49,17 +45,15 @@ import {
   mdiTableEdit,
   mdiTablePlus,
   mdiTableRemove,
-  mdiTrashCanOutline,
 } from '@mdi/js'
 
 const props = defineProps({
   tables: { type: Array, default: () => [] },
   currentTable: { type: String, default: '' },
-  activeButton: { type: String, default: '' },
-  isDropMode: { type: Boolean, default: false }
+  activeButton: { type: String, default: '' }
 })
 
-const emit = defineEmits(['create', 'rename', 'drop', 'terminal', 'select-table', 'delete-table'])
+const emit = defineEmits(['create', 'rename', 'drop', 'terminal', 'select-table'])
 </script>
 
 <style scoped>
@@ -154,23 +148,6 @@ const emit = defineEmits(['create', 'rename', 'drop', 'terminal', 'select-table'
   background-color: #34495e;
   border-left: 4px solid #3498db;
   color: #3498db;
-}
-
-.table-delete-btn {
-  background-color: #e74c3c;
-  color: #fff;
-  border: none;
-  border-radius: 12px;
-  padding: 4px 10px;
-  font-size: 12px;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.table-delete-btn:hover {
-  background-color: #c0392b;
 }
 
 .sidebar-footer {
