@@ -1,24 +1,25 @@
 <!-- DataTable.vue -->
 <template>
-  <div class="table-container" :class="{ 'delete-table-container': mode === 'delete', 'update-table-container': mode === 'update' }">
+  <div class="table-container">
     <div class="page-header">
       <div class="header-content">
         <h2><Icon :path="mdiTable" size="20" /> {{ currentTableName }} Table Data</h2>
         <div class="header-info">
           <span class="record-count">Total {{ recordsCount }} records</span>
-          <span class="last-update">Updated on <span id="update-time">1970-01-01 00:00</span></span>
+          <span class="last-update">Updated on <span id="update-time">{{ formattedUpdateTime }}</span></span>
         </div>
       </div>
     </div>
     
-    <div class="table-scroll-wrapper">
+    <div class="table-wrapper">
       <VirtualList
         :key="renderKey"
         :headers="headers"
         :rows="rows"
         :leading-headers="leadingHeaders"
-        :visible-count="12"
-        :row-height="mode === 'update' ? 52 : 48"
+        :visible-count="15"
+        :row-height="mode === 'update' ? 56 : 52"
+        class="virtual-table"
       >
         <template #leading-cell="{ rowIndex, leadingIndex }">
           <template v-if="mode === 'delete' && leadingIndex === 0">
@@ -97,13 +98,17 @@
             <span class="cell-value">{{ value }}</span>
           </template>
         </template>
+        
+        <template v-else #cell="{ value }">
+          <span class="cell-value">{{ value }}</span>
+        </template>
       </VirtualList>
     </div>
   </div>
 </template>
 
 <script setup>
-import { defineProps, defineEmits, computed } from 'vue'
+import { defineProps, defineEmits, computed, ref, onMounted } from 'vue'
 import VirtualList from './List.vue'
 import Icon from './Icon.vue'
 import { mdiTable } from '@mdi/js'
@@ -130,10 +135,22 @@ const emit = defineEmits([
   'update-draft'
 ])
 
+const updateTime = ref(new Date())
+
 const recordsCount = computed(() => props.rows.length)
+const formattedUpdateTime = computed(() => {
+  return updateTime.value.toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  })
+})
+
 const leadingHeaders = computed(() => {
-  if (props.mode === 'delete') return ['Delete', '#']
-  if (props.mode === 'update') return ['Update', '#']
+  if (props.mode === 'delete') return ['Action', '#']
+  if (props.mode === 'update') return ['Action', '#']
   return ['#']
 })
 
@@ -144,42 +161,37 @@ function getDraftValue(colIndex) {
 function getPlaceholder(headerName) {
   const meta = props.columnMetadata.find(h => h.name === headerName)
   if (!meta) return ''
-  return meta.ableToBeNULL ? '可为空' : '必填'
+  return meta.ableToBeNULL ? 'Can be null' : 'Required'
 }
+
+onMounted(() => {
+  // 更新时间
+  updateTime.value = new Date()
+})
 </script>
 
 <style scoped>
 .table-container {
   background-color: #ffffff;
-  border-radius: 12px;
   overflow: hidden;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
   height: 100%;
-  flex-direction: column;
   display: flex;
-  min-height: 360px;
+  flex-direction: column;
   border: 1px solid #e3e8ef;
-}
-
-.table-scroll-wrapper {
-  flex-grow: 1;
-  overflow-y: auto;
-  overflow-x: auto;
+  min-height: 400px;
 }
 
 .page-header {
   padding: 24px;
   border-bottom: 1px solid #e3e8ef;
   background: #f8fafc;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+  flex-shrink: 0;
 }
 
 .header-content {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
 }
 
 .page-header h2 {
@@ -190,12 +202,17 @@ function getPlaceholder(headerName) {
   display: flex;
   align-items: center;
   gap: 12px;
+  text-align: center;
+  /* justify-content: center; */
 }
 
 .header-info {
   display: flex;
-  gap: 20px;
+  justify-content: center;
+  align-items: center;
+  gap: 24px;
   font-size: 0.85rem;
+  flex-wrap: wrap;
 }
 
 .record-count {
@@ -204,28 +221,58 @@ function getPlaceholder(headerName) {
   background: #f3f4f6;
   padding: 4px 12px;
   border-radius: 12px;
+  white-space: nowrap;
+  width: fit-content;
+  min-width: fit-content;
+  max-width: fit-content;
 }
 
 .last-update {
   color: #6b7280;
+  text-align: center;
+  white-space: nowrap;
+  width: fit-content;
+  min-width: fit-content;
+  max-width: fit-content;
 }
 
-.delete-table-container th:first-child,
-.delete-table-container td:first-child {
-  width: 160px;
-  min-width: 160px;
-  max-width: 160px;
-  text-align: center;
-  vertical-align: middle;
+.table-wrapper {
+  flex: 1;
+  overflow: hidden;
 }
 
-.update-table-container th:first-child,
-.update-table-container td:first-child {
-  width: 160px;
-  min-width: 160px;
-  max-width: 160px;
+.virtual-table {
+  height: 100%;
+  width: 100%;
+}
+
+/* 单元格内容居中样式 */
+:deep(.table-cell) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   text-align: center;
-  vertical-align: middle;
+  padding: 12px 8px;
+}
+
+:deep(.table-header-cell) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-weight: 600;
+  color: #374151;
+  background-color: #f9fafb;
+  padding: 12px 8px;
+  border-bottom: 2px solid #e5e7eb;
+}
+
+:deep(.table-row) {
+  border-bottom: 1px solid #f3f4f6;
+}
+
+:deep(.table-row:hover) {
+  background-color: #f9fafb;
 }
 
 .delete-actions,
@@ -239,13 +286,13 @@ function getPlaceholder(headerName) {
 
 .delete-row-btn,
 .update-row-btn {
-  padding: 6px 12px;
+  padding: 8px 12px;
   border: none;
   border-radius: 6px;
   cursor: pointer;
   font-weight: 500;
-  font-size: 0.8rem;
-  width: 70px;
+  font-size: 0.85rem;
+  min-width: 80px;
   text-align: center;
   transition: all 0.2s ease;
   background: #f3f4f6;
@@ -264,14 +311,15 @@ function getPlaceholder(headerName) {
 
 .cancel-delete-btn,
 .cancel-update-btn {
-  padding: 6px 12px;
+  padding: 8px 12px;
   background: #f3f4f6;
   color: #6b7280;
   border: none;
   border-radius: 6px;
   cursor: pointer;
   font-weight: 500;
-  font-size: 0.8rem;
+  font-size: 0.85rem;
+  min-width: 80px;
   transition: all 0.2s ease;
 }
 
@@ -281,14 +329,15 @@ function getPlaceholder(headerName) {
 }
 
 .confirm-delete-btn {
-  padding: 6px 12px;
+  padding: 8px 12px;
   background: #fee2e2;
   color: #dc2626;
   border: none;
   border-radius: 6px;
   cursor: pointer;
   font-weight: 500;
-  font-size: 0.8rem;
+  font-size: 0.85rem;
+  min-width: 80px;
   transition: all 0.2s ease;
 }
 
@@ -297,14 +346,15 @@ function getPlaceholder(headerName) {
 }
 
 .confirm-update-btn {
-  padding: 6px 12px;
+  padding: 8px 12px;
   background: #e0f2fe;
   color: #0284c7;
   border: none;
   border-radius: 6px;
   cursor: pointer;
   font-weight: 500;
-  font-size: 0.8rem;
+  font-size: 0.85rem;
+  min-width: 80px;
   transition: all 0.2s ease;
 }
 
@@ -317,10 +367,12 @@ function getPlaceholder(headerName) {
   border: 1px solid #e5e7eb;
   border-radius: 6px;
   font-size: 0.9rem;
-  min-width: 160px;
+  width: 100%;
+  max-width: 200px;
   transition: all 0.2s ease;
   background: #ffffff;
   color: #1a1f36;
+  text-align: center;
 }
 
 .update-value:focus {
@@ -336,5 +388,42 @@ function getPlaceholder(headerName) {
 
 .cell-value {
   color: #1a1f36;
+  word-break: break-word;
+  max-width: 100%;
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+  .page-header {
+    padding: 16px;
+  }
+  
+  .header-content {
+    gap: 8px;
+  }
+  
+  .header-info {
+    flex-direction: column;
+    gap: 12px;
+    align-items: center;
+  }
+  
+  .page-header h2 {
+    font-size: 1rem;
+    justify-content: center;
+  }
+  
+  .record-count,
+  .last-update {
+    font-size: 0.8rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .page-header h2 {
+    flex-direction: column;
+    gap: 8px;
+    text-align: center;
+  }
 }
 </style>

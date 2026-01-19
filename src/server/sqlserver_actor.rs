@@ -2,6 +2,7 @@ use super::thread_pool::WorkingThreadPool;
 use super::types::{RayonQueryRequest, WebsocketResponse, RayonQueryResponse, UniformedResult};
 use crate::common::data_item::DataItem;
 use crate::execution::result::ExecutionResult;
+use crate::catalog::table_schema::ColType;
 
 use actix_web_actors::ws;
 use actix::{Actor, StreamHandler, AsyncContext};
@@ -42,8 +43,20 @@ fn convert_execution_result(result: &ExecutionResult) -> UniformedResult {
                 .map(|row| row.iter().map(data_item_to_value).collect())
                 .collect();
             
+            // 获取列类型字符串表示
+            let col_types: Vec<String> = cols.1.iter().map(|col_type| {
+                match col_type {
+                    ColType::Integer => "INTEGER".to_string(),
+                    ColType::Float => "FLOAT".to_string(),
+                    ColType::Chars(size) => format!("CHAR({})", size),
+                    ColType::VarChar(size) => format!("VARCHAR({})", size),
+                    ColType::Bool => "BOOL".to_string(),
+                }
+            }).collect();
+            
             let data = serde_json::json!({
                 "columns": cols.0,
+                "column_types": col_types,
                 "rows": json_rows,
                 "row_count": rows.len(),
                 "column_count": cols.0.len(),
@@ -175,34 +188,34 @@ impl Actor for SQLWebsocketActor {
 
         let thread_pool = self.working_thread_pool.clone();
         let connection_id = self.current_connection_id;
-        let addr = ctx.address().clone();
+        // let addr = ctx.address().clone();
         
         ctx.run_interval(std::time::Duration::from_secs(60), move |_act, _ctx| {
             let thread_pool = thread_pool.clone();
-            let addr = addr.clone();
+            // let addr = addr.clone();
             
             actix::spawn(async move {
                 match thread_pool.make_checkpoint(connection_id).await {
                     Ok(msg) => {
                         info!("Checkpoint successful: {}", msg);
-                        let checkpoint_msg = WebsocketResponse {
-                            rayon_response: RayonQueryResponse {
-                                response_content: Vec::new(),
-                                uniform_result: Vec::new(),
-                                error: String::from("Checkpoint Success"),
-                                execution_time: 0,
-                            },
-                            timestamp: SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_secs(),
-                            success: true,
-                            connection_id,
-                        };
+                        // let checkpoint_msg = WebsocketResponse {
+                        //     rayon_response: RayonQueryResponse {
+                        //         response_content: Vec::new(),
+                        //         uniform_result: Vec::new(),
+                        //         error: String::from("Checkpoint Success"),
+                        //         execution_time: 0,
+                        //     },
+                        //     timestamp: SystemTime::now()
+                        //         .duration_since(UNIX_EPOCH)
+                        //         .unwrap_or_default()
+                        //         .as_secs(),
+                        //     success: true,
+                        //     connection_id,
+                        // };
                         
-                        if let Ok(json_msg) = serde_json::to_string(&checkpoint_msg) {
-                            addr.do_send(SendTextMessage { json: json_msg });
-                        }
+                        // if let Ok(json_msg) = serde_json::to_string(&checkpoint_msg) {
+                        //     addr.do_send(SendTextMessage { json: json_msg });
+                        // }
                     }
                     Err(e) => error!("Checkpoint failed: {:?}", e),
                 }

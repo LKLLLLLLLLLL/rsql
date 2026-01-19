@@ -70,7 +70,8 @@ onMounted(() => {
       if (update.docChanged) {
         emit('update:modelValue', update.state.doc.toString())
       }
-    })
+    }),
+    EditorView.editable.of(!props.disabled)  // 设置初始可编辑状态
   ]
 
   editorView = new EditorView({
@@ -80,13 +81,6 @@ onMounted(() => {
     }),
     parent: editorRef.value
   })
-
-  // 设置只读状态
-  if (props.disabled) {
-    editorView.dispatch({
-      effects: EditorState.readOnly.reconfigure(EditorState.readOnly.of(true))
-    })
-  }
 })
 
 watch(
@@ -108,9 +102,10 @@ watch(
   () => props.disabled,
   (newDisabled) => {
     if (editorView) {
-      editorView.dispatch({
-        effects: EditorState.readOnly.reconfigure(EditorState.readOnly.of(newDisabled))
-      })
+      editorView.contentDOM.contentEditable = !newDisabled
+      // 更新编辑器状态
+      const view = editorView
+      view.dispatch({})
     }
   }
 )

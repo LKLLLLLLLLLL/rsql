@@ -16,6 +16,7 @@
     />
 
     <div class="main-content">
+      <div class="welcome-banner" v-if="username">欢迎 {{ username }}</div>
       <Topbar
         v-if="shouldShowTopBar"
         :current-table-name="currentTableName"
@@ -32,52 +33,55 @@
         <div v-if="activeSection === 'empty'" class="page-content">
           <div class="empty-state">
             <Icon :path="mdiTable" size="64" color="#cbd5e1" />
-            <h3>请从左侧选择一个表</h3>
-            <p>选择表格后可查看数据、插入或修改数据</p>
+            <h3>Please select a table from the left</h3>
+            <p>Select a table to view data, insert or modify data</p>
           </div>
         </div>
 
         <!-- 表格视图 -->
-        <DataTable
-          v-if="activeSection === 'table'"
-          :headers="viewHeaders"
-          :rows="viewRows"
-          :current-table-name="currentTableName"
-          mode="view"
-          :column-metadata="currentTableHeaders"
-        />
+        <div v-if="activeSection === 'table'" class="table-view-container">
+          <DataTable
+            :headers="viewHeaders"
+            :rows="viewRows"
+            :current-table-name="currentTableName"
+            mode="view"
+            :column-metadata="currentTableHeaders"
+          />
+        </div>
 
         <!-- 删除视图 -->
-        <DataTable
-          v-if="activeSection === 'delete'"
-          :headers="viewHeaders"
-          :rows="viewRows"
-          :current-table-name="currentTableName"
-          mode="delete"
-          :pending-row="deletePendingRow"
-          :render-key="deleteRenderKey"
-          :column-metadata="currentTableHeaders"
-          @pending-delete="deletePendingRow = $event"
-          @cancel-delete="deletePendingRow = null"
-          @confirm-delete="confirmDelete"
-        />
+        <div v-if="activeSection === 'delete'" class="table-view-container">
+          <DataTable
+            :headers="viewHeaders"
+            :rows="viewRows"
+            :current-table-name="currentTableName"
+            mode="delete"
+            :pending-row="deletePendingRow"
+            :render-key="deleteRenderKey"
+            :column-metadata="currentTableHeaders"
+            @pending-delete="deletePendingRow = $event"
+            @cancel-delete="deletePendingRow = null"
+            @confirm-delete="confirmDelete"
+          />
+        </div>
 
         <!-- 更新视图 -->
-        <DataTable
-          v-if="activeSection === 'update'"
-          :headers="viewHeaders"
-          :rows="viewRows"
-          :current-table-name="currentTableName"
-          mode="update"
-          :editing-row="updateEditingRow"
-          :draft-values="updateDraft"
-          :render-key="updateRenderKey"
-          :column-metadata="currentTableHeaders"
-          @start-update="startUpdate"
-          @cancel-update="cancelUpdate"
-          @confirm-update="confirmUpdate"
-          @update-draft="updateDraft[$event.colIndex] = $event.value"
-        />
+        <div v-if="activeSection === 'update'" class="table-view-container">
+          <DataTable
+            :headers="viewHeaders"
+            :rows="viewRows"
+            :current-table-name="currentTableName"
+            mode="update"
+            :editing-row="updateEditingRow"
+            :draft-values="updateDraft"
+            :render-key="updateRenderKey"
+            :column-metadata="currentTableHeaders"
+            @start-update="startUpdate"
+            @cancel-update="cancelUpdate"
+            @confirm-update="confirmUpdate"
+            @update-draft="updateDraft[$event.colIndex] = $event.value"
+          />
+        </div>
 
         <!-- 创建表 -->
         <CreateTable
@@ -220,7 +224,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import Sidebar from './Sidebar.vue'
 import Topbar from './Topbar.vue'
 import DataTable from './DataTable.vue'
@@ -231,12 +235,13 @@ import DropTableModal from './DropTableModal.vue'
 import RenameTableModal from './RenameTableModal.vue'
 import Toast from '../components/Toast.vue'
 import Icon from './Icon.vue'
-import { mdiMagnify, mdiDownload, mdiTableEdit, mdiChartLine, mdiDatabaseExport, mdiRenameBox, mdiTable, mdiTableOff, mdiPencilOutline, mdiTrashCanOutline, mdiTableRemove } from '@mdi/js'
+import { mdiMagnify, mdiDownload, mdiTableEdit, mdiChartLine, mdiDatabaseExport, mdiTable, mdiTableOff, mdiPencilOutline, mdiTrashCanOutline, mdiTableRemove } from '@mdi/js'
 
 // 响应式数据
+const username = ref('')
 const viewHeaders = ref([])
 const viewRows = ref([])
-const currentTableName = ref('Users')
+const currentTableName = ref('')
 const tables = ref([])
 const activeSection = ref('terminal')
 const activeSidebarButton = ref('terminal')
@@ -272,8 +277,14 @@ let currentDisplayHeaders = [] // 显示用的列名
 
 // WebSocket URL
 const wsUrl = computed(() => {
-  const username = 'root'
-  const password = 'password'
+  let username = 'root'
+  let password = 'password'
+  try {
+    const u = typeof window !== 'undefined' ? localStorage.getItem('username') : null
+    const p = typeof window !== 'undefined' ? localStorage.getItem('password') : null
+    if (u) username = u
+    if (p) password = p
+  } catch {}
   if (typeof window === 'undefined') {
     return `ws://127.0.0.1:4456/ws?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`
   }
@@ -381,9 +392,6 @@ function toggleDropMode() {
   loadTablesList()
 }
 
-function toggleRenameMode() {
-  showSection('rename')
-}
 function openRenameModal(tableName) {
   dropModalVisible.value = false  // 关闭删除模态框
   pendingRenameTable.value = tableName
@@ -401,7 +409,7 @@ function confirmRenameTable(newName) {
   
   if (sendSqlViaWebSocket(sql)) {
     renameModalVisible.value = false
-    triggerToast('重命名表语句已发送')
+    triggerToast('Table rename statement sent')
   }
 }
 
@@ -416,14 +424,6 @@ function clearTableSelection() {
   currentTableName.value = ''
   activeSidebarButton.value = ''
   showSection('empty')
-}
-
-function handleListToggle(isOpen) {
-  // 当表列表展开时，清空旋上的操作按钮选中状态
-  if (isOpen) {
-    activeSidebarButton.value = ''
-    activeSection.value = 'list-view'
-  }
 }
 
 function openDropModal(tableName) {
@@ -477,12 +477,19 @@ function connectWebSocket() {
 
 function sendSqlViaWebSocket(sql) {
   if (!wsRef || wsRef.readyState !== WebSocket.OPEN) {
-    triggerToast('WebSocket未连接，请稍后重试')
+    triggerToast('WebSocket not connected, please try again later')
     return false
   }
 
   const payload = {
-    username: 'root',
+    username: (() => {
+      try {
+        const u = typeof window !== 'undefined' ? localStorage.getItem('username') : null
+        return u || 'root'
+      } catch {
+        return 'root'
+      }
+    })(),
     userid: 0,
     request_content: sql,
   }
@@ -569,7 +576,7 @@ function handleCreateTable({ tableName, columns }) {
   
   // 通过WebSocket发送
   if (sendSqlViaWebSocket(sql)) {
-    triggerToast('创建表语句已发送')
+    triggerToast('Create table statement sent')
     // 返回到表格视图
     setTimeout(() => showSection('table'), 500)
   }
@@ -581,7 +588,7 @@ function handleInsertData(insertData) {
   const tableName = currentTableName.value
   
   if (!rows || rows.length === 0) {
-    triggerToast('没有要插入的数据')
+    triggerToast('No data to insert')
     return
   }
 
@@ -603,14 +610,14 @@ function handleInsertData(insertData) {
     sendSqlViaWebSocket(sql)
   })
   
-  triggerToast(`已发送 ${rows.length} 条插入语句`)
+  triggerToast(`${rows.length} insert statements sent`)
   // 返回到表格视图
   setTimeout(() => showSection('table'), 500)
 }
 
 function showInsertSection() {
   if (!currentTableHeaders || currentTableHeaders.length === 0) {
-    alert('请先选择一个表格查看数据，然后再执行插入操作')
+    alert('Please select a table to view data before performing insert operations')
     return
   }
   showSection('insert')
@@ -618,13 +625,13 @@ function showInsertSection() {
 
 function confirmDelete(idx) {
   if (!currentTableHeaders || currentTableHeaders.length === 0) {
-    triggerToast('无法确定表结构')
+    triggerToast('Cannot determine table structure')
     return
   }
 
   const row = currentTableRows[idx]
   if (!row) {
-    triggerToast('无效的行索引')
+    triggerToast('Invalid row index')
     return
   }
 
@@ -644,7 +651,7 @@ function confirmDelete(idx) {
   const sql = `DELETE FROM ${currentTableName.value} WHERE ${whereConditions.join(' AND ')};`
   
   if (sendSqlViaWebSocket(sql)) {
-    triggerToast('删除语句已发送')
+    triggerToast('Delete statement sent')
     deletePendingRow.value = null
   }
 }
@@ -662,7 +669,7 @@ function cancelUpdate() {
 
 function confirmUpdate(idx) {
   if (!currentTableHeaders || currentTableHeaders.length === 0) {
-    triggerToast('无法确定表结构')
+    triggerToast('Cannot determine table structure')
     return
   }
 
@@ -670,7 +677,7 @@ function confirmUpdate(idx) {
   const newRow = updateDraft.value
   
   if (!oldRow || !newRow) {
-    triggerToast('无效的数据')
+    triggerToast('Invalid data')
     return
   }
 
@@ -703,7 +710,7 @@ function confirmUpdate(idx) {
   const sql = `UPDATE ${currentTableName.value} SET ${setClause.join(', ')} WHERE ${whereConditions.join(' AND ')};`
   
   if (sendSqlViaWebSocket(sql)) {
-    triggerToast('更新语句已发送')
+    triggerToast('Update statement sent')
     updateEditingRow.value = null
     updateDraft.value = []
   }
@@ -720,7 +727,7 @@ function confirmDropTable() {
   
   if (sendSqlViaWebSocket(sql)) {
     dropModalVisible.value = false
-    triggerToast('删除表语句已发送')
+    triggerToast('Drop table statement sent')
   }
 }
 
@@ -730,9 +737,12 @@ function handleSqlResult(data) {
 
 // 生命周期
 onMounted(() => {
+  try {
+    username.value = localStorage.getItem('username') || ''
+  } catch {}
   connectWebSocket()
   loadTablesList()
-  loadTableData(currentTableName.value)
+  // 默认不加载任何表格数据，让用户选择
   showSection('terminal')
 })
 
@@ -745,8 +755,7 @@ onBeforeUnmount(() => {
 </script>
 
 <style>
-/* DatabasePage.vue - 更新全局样式部分 */
-/* 全局样式 */
+/* DatabasePage.vue - 全局样式 */
 html, body {
   margin: 0;
   padding: 0;
@@ -795,7 +804,6 @@ html, body {
   flex-direction: column;
   height: 100%;
   background: #ffffff;
-  border-radius: 12px;
   border: 1px solid #e3e8ef;
 }
 
@@ -858,6 +866,17 @@ html, body {
   margin: 0;
 }
 
+/* 表格视图容器 */
+.table-view-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: #ffffff;
+  border: 1px solid #e3e8ef;
+  overflow: hidden;
+  min-height: 400px;
+}
+
 /* 滚动条优化 */
 .content-container::-webkit-scrollbar {
   width: 6px;
@@ -884,11 +903,13 @@ html, body {
   justify-content: center;
   height: 100%;
   color: #9ca3af;
+  padding: 40px;
+  text-align: center;
 }
 
 .empty-state h3 {
   font-size: 1.3rem;
-  color: #cbd5e1;
+  color: #6b7280;
   margin: 24px 0 12px;
   font-weight: 600;
 }
@@ -897,8 +918,8 @@ html, body {
   font-size: 0.95rem;
   color: #9ca3af;
   max-width: 300px;
-  text-align: center;
   line-height: 1.6;
+  margin: 0;
 }
 
 /* 响应式设计 */
@@ -958,7 +979,6 @@ html, body {
   padding: 16px 20px;
   background: #ffffff;
   border: 1px solid #e3e8ef;
-  border-radius: 8px;
   transition: all 0.2s ease;
 }
 
@@ -1029,5 +1049,34 @@ html, body {
 
 .table-operation-list::-webkit-scrollbar-thumb:hover {
   background: #9ca3af;
+}
+
+/* 改进布局 */
+.main-content {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.content-container {
+  flex: 1;
+  min-height: 0; /* 防止内容溢出 */
+}
+
+/* 表格容器特定样式 */
+.table-view-container {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.welcome-banner {
+  margin: 16px 24px 0 24px;
+  background: #ffffff;
+  border: 1px solid #e3e8ef;
+  border-left: 4px solid #315efb;
+  color: #1a1f36;
+  padding: 12px 16px;
+  font-weight: 500;
 }
 </style>
