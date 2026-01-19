@@ -87,11 +87,13 @@ pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64, read_only: bool) -> R
             let input_result = execute_dml_plan_node(input, tnx_id, true)?;
             if let TableWithFilter {table_obj, rows: input_rows} = input_result {
                 // 0. handle * column
-                if exprs.len() == 0 {
-                    return Ok(Query {
-                        cols: (table_obj.cols.0.clone(), table_obj.cols.1.clone()),
-                        rows: input_rows,
-                    })
+                if let Expr::Identifier(ident) = &exprs[0] {
+                    if ident.value == "*" {
+                        return Ok(Query {
+                            cols: table_obj.cols,
+                            rows: input_rows,
+                        })
+                    }
                 }
                 // 1. get projection columns
                 let mut cols_name = vec![];
@@ -125,11 +127,13 @@ pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64, read_only: bool) -> R
             }else {
                 if let TempTable{cols: input_cols, rows: input_rows, table_name: _} = input_result {
                     // 0. handle * column
-                    if exprs.len() == 0 {
-                        return Ok(Query {
-                            cols: input_cols,
-                            rows: input_rows,
-                        })
+                    if let Expr::Identifier(ident) = &exprs[0] {
+                        if ident.value == "*" {
+                            return Ok(Query {
+                                cols: input_cols,
+                                rows: input_rows,
+                            })
+                        }
                     }
                     // 1. get projection columns
                     let mut cols_name = vec![];
@@ -197,8 +201,10 @@ pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64, read_only: bool) -> R
                                 input_rows.push(row);
                             }
                             // 0. handle * column
-                            if exprs.len() == 0 {
-                                return Ok(Query { cols: table_obj.cols, rows: input_rows})
+                            if let Expr::Identifier(ident) = &exprs[0] {
+                                if ident.value == "*" {
+                                    return Ok(Query { cols: table_obj.cols, rows: input_rows})
+                                }
                             }
                             // 1. get project columns
                             let mut cols_name = vec![];
@@ -228,7 +234,7 @@ pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64, read_only: bool) -> R
                             Ok(Query {
                                 cols: (cols_name, cols_type),
                                 rows,
-                            })
+                            }) // get projection query result without where clause
                         }else {
                             Err(RsqlError::ExecutionError(format!("Projection input must be a TableWithFilter, TempTable, AggrTable or TableObj")))
                         }

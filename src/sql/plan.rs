@@ -1400,27 +1400,9 @@ mod tests {
         //     _ => panic!("Not a DML plan item"),
         // };
         // Plan::pretty_print_pro(plan_node);
-        // let sql = "\
-        //     UPDATE student
-        //     SET    score = score + 5
-        //     WHERE  class = '3班';
-        // ";
-        // let plan = Plan::build_plan(sql).unwrap();
-        // let plan_node= match &plan.items[0] {
-        //     PlanItem::DML(pn) => pn,
-        //     _ => panic!("Not a DML plan item"),
-        // };
-        // Plan::pretty_print_pro(plan_node);
+
         let sql = "\
-            SELECT  dept_id,
-                    job_title,
-                    COUNT(*),
-                    SUM(salary),
-                    AVG(salary),
-                    MAX(salary),
-                    MIN(salary),
-            FROM    employee
-            GROUP BY dept_id, job_title;
+            Select * from users
         ";
         let plan = Plan::build_plan(sql).unwrap();
         let plan_node= match &plan.items[0] {
@@ -1428,6 +1410,24 @@ mod tests {
             _ => panic!("Not a DML plan item"),
         };
         Plan::pretty_print_pro(plan_node);
+
+        // let sql = "\
+        //     SELECT  dept_id,
+        //             job_title,
+        //             COUNT(*),
+        //             SUM(salary),
+        //             AVG(salary),
+        //             MAX(salary),
+        //             MIN(salary),
+        //     FROM    employee
+        //     GROUP BY dept_id, job_title;
+        // ";
+        // let plan = Plan::build_plan(sql).unwrap();
+        // let plan_node= match &plan.items[0] {
+        //     PlanItem::DML(pn) => pn,
+        //     _ => panic!("Not a DML plan item"),
+        // };
+        // Plan::pretty_print_pro(plan_node);
         // assert!(false);
     }
 }
