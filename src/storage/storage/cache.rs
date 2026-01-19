@@ -2,6 +2,7 @@ use linked_hash_map::LinkedHashMap;
 use super::Page;
 use std::sync::{RwLock, Arc};
 
+#[derive(Debug)]
 pub struct LRUCache {
     pub map: LinkedHashMap<u64, Arc<RwLock<Page>>>,
     capacity: usize,

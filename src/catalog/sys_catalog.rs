@@ -1,13 +1,13 @@
-use std::sync::{OnceLock, Mutex};
+use std::sync::{OnceLock, Mutex, Arc};
 use std::time;
 
 use bcrypt::{hash, DEFAULT_COST};
 use tracing::info;
 
-use crate::storage::table;
+use crate::storage::storage::StorageManager;
+use crate::storage::{WAL, table};
 use crate::storage::Table;
 use crate::common::DataItem;
-use crate::common::data_item::VarCharHead;
 use crate::catalog::table_schema::TableColumn;
 use crate::transaction::TnxManager;
 use crate::common::{RsqlError, RsqlResult};
@@ -77,7 +77,7 @@ fn sys_column_schema() -> TableSchema {
             data_type: super::table_schema::ColType::Chars(MAX_COL_NAME_SIZE),
             pk: true,
             nullable: false,
-            unique: true,
+            unique: false,
             index: true,
         },
         TableColumn {
@@ -242,7 +242,7 @@ impl SysCatalog {
         };
         info!("First time starting database, initializing system catalog...");
         let tnx_id = TnxManager::global()
-            .begin_transaction(PrivilegeConn::INIT); // connection id 0 for privileged operations
+            .begin_transaction(PrivilegeConn::INIT);
         let table_ids = vec![
             SYS_TABLE_ID,
             SYS_COLUMN_ID,
@@ -285,10 +285,53 @@ impl SysCatalog {
         }
         // sys_column
         let column_schema = sys_column_schema();
-        let _ = Table::create(SYS_COLUMN_ID, column_schema, tnx_id, true)?;
+        let mut column = Table::create(SYS_COLUMN_ID, column_schema, tnx_id, true)?;
+        // init sys table columns
+        for table_id in &table_ids {
+            let schema = match *table_id {
+                SYS_TABLE_ID => sys_table_schema(),
+                SYS_COLUMN_ID => sys_column_schema(),
+                SYS_INDEX_ID => sys_index_schema(),
+                SYS_SEQUENCE_ID => sys_sequence_schema(),
+                SYS_USER_ID => sys_user_schema(),
+                _ => unreachable!(),
+            };
+            for col in schema.get_columns() {
+                let data_type = match &col.data_type {
+                    super::table_schema::ColType::Integer => 0,
+                    super::table_schema::ColType::Float => 1,
+                    super::table_schema::ColType::Chars(_) => 2,
+                    super::table_schema::ColType::VarChar(_) => 3,
+                    super::table_schema::ColType::Bool => 4,
+                };
+                let extra = match &col.data_type {
+                    super::table_schema::ColType::Chars(size) => *size as i64,
+                    super::table_schema::ColType::VarChar(size) => *size as i64,
+                    _ => 0,
+                };
+                column.insert_row(
+                    vec![
+                        DataItem::Integer(*table_id as i64),
+                        DataItem::Chars { 
+                            len: MAX_COL_NAME_SIZE as u64, 
+                            value: col.name.clone(), 
+                        },
+                        DataItem::Integer(data_type),
+                        DataItem::Integer(extra),
+                        DataItem::Bool(col.pk),
+                        DataItem::Bool(col.nullable),
+                        DataItem::Bool(col.index),
+                        DataItem::Bool(col.unique),
+                    ],
+                    tnx_id,
+                )?;
+            }
+        }
         // sys_index
         let index_schema = sys_index_schema();
         let _ = Table::create(SYS_INDEX_ID, index_schema, tnx_id, true)?;
+        // no need to insert default indexes
+
         // sys_sequence
         let sequence_schema = sys_sequence_schema();
         let mut sequence = Table::create(SYS_SEQUENCE_ID, sequence_schema, tnx_id, true)?;
@@ -322,6 +365,7 @@ impl SysCatalog {
             ],
             tnx_id,
         )?;
+        WAL::global().commit_tnx(tnx_id)?;
         TnxManager::global().end_transaction(0);
         info!("System catalog initialized successfully!");
         Ok(())
@@ -352,6 +396,17 @@ impl SysCatalog {
             user: Mutex::new(user),
         }
     }
+    pub fn get_storage(&self, table_id: u64) -> Arc<Mutex<StorageManager>> {
+        match table_id {
+            SYS_TABLE_ID => self.table.lock().unwrap().get_storage().get_storage(),
+            SYS_COLUMN_ID => self.column.lock().unwrap().get_storage().get_storage(),
+            SYS_INDEX_ID => self.index.lock().unwrap().get_storage().get_storage(),
+            SYS_SEQUENCE_ID => self.sequence.lock().unwrap().get_storage().get_storage(),
+            SYS_USER_ID => self.user.lock().unwrap().get_storage().get_storage(),
+            _ => panic!("Invalid system table id: {}", table_id),
+        }
+    }
+    
     /// Query the table schema from system catalog
     /// Input a table id, return the TableSchema of the table
     pub fn get_table_schema(&self, tnx_id: u64, table_id: u64) -> RsqlResult<TableSchema> {
@@ -420,8 +475,8 @@ impl SysCatalog {
             Some(row) => row,
             None => return Ok(None),
         };
-        let DataItem::VarChar { value: name, .. } = &table_row[1] else {
-            panic!("table_name column is not VarChar");
+        let DataItem::Chars { value: name, .. } = &table_row[1] else {
+            panic!("table_name column is not Chars");
         };
         Ok(Some(name.clone()))
     }
@@ -625,12 +680,8 @@ impl SysCatalog {
             &pk,
             vec![
                 table_row[0].clone(),
-                DataItem::VarChar {
-                    head: VarCharHead {
-                        max_len: MAX_TABLE_NAME_SIZE as u64,
-                        len: new_table_name.len() as u64,
-                        page_ptr: None,
-                    },
+                DataItem::Chars {
+                    len: MAX_TABLE_NAME_SIZE as u64,
                     value: new_table_name.to_string(),
                 },
                 table_row[2].clone(),

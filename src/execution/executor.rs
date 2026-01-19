@@ -16,6 +16,7 @@ use super::{dml_interpreter::execute_dml_plan_node, ddl_interpreter::execute_ddl
 use tracing::{info, warn};
 use crate::transaction::TnxManager;
 use crate::config::LOCK_MAX_RETRY;
+use crate::common::PrivilegeConn;
 
 static ACTIVE_CONN: LazyLock<Mutex<HashSet<u64>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
 
@@ -66,6 +67,8 @@ fn rollback_transaction(connection_id: u64) -> RsqlResult<()> {
         let mut tmp_storages = tmp_storages.borrow_mut();
         if let Some(sm) = tmp_storages.get(&table_id) {
             Ok(sm.clone())
+        } else if is_sys_table(table_id) {
+            Ok(SysCatalog::global().get_storage(table_id))
         } else {
             let file_path = get_table_path(table_id, is_sys_table(table_id));
             let sm = StorageManager::new(file_path.to_str().unwrap())?;
@@ -248,9 +251,9 @@ pub fn checkpoint() -> RsqlResult<()> {
 
 /// Validate user credentials
 pub fn validate_user(username: &str, password: &str) -> RsqlResult<bool> {
-    let tnx_id = TnxManager::global().begin_transaction(1);
+    let tnx_id = TnxManager::global().begin_transaction(PrivilegeConn::USER_VALIDATE);
     let is_valid = SysCatalog::global().validate_user(tnx_id, username, password)?;
-    TnxManager::global().end_transaction(1);
+    TnxManager::global().end_transaction(PrivilegeConn::USER_VALIDATE);
     Ok(is_valid)
 }
 

@@ -116,7 +116,7 @@ pub fn execute_ddl_plan_node(node: &PlanNode, tnx_id: u64) -> RsqlResult<Executi
                 }
             }
             // create index on table
-            table.creat_index(column, tnx_id);
+            table.creat_index(column, tnx_id)?;
             // register index in sys catalog
             SysCatalog::global().register_index(
                 tnx_id,

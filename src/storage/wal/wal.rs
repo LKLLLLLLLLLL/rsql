@@ -1,4 +1,5 @@
 use core::panic;
+use std::cmp::max;
 use std::collections::HashSet;
 use std::fs;
 use std::io::Seek;
@@ -98,6 +99,23 @@ impl WAL {
             log_path,
         })
     }
+    fn align_page_num(
+        num: u64,
+        table_id: &u64,
+        append_page: &mut impl FnMut(u64) -> RsqlResult<u64>,
+        trunc_page: &mut impl FnMut(u64) -> RsqlResult<()>,
+        max_page_idx: &mut impl FnMut(u64) -> RsqlResult<u64>,
+    ) -> RsqlResult<()> {
+        // if too short, append pages until enough
+        while max_page_idx(*table_id)? < num {
+            append_page(*table_id)?;
+        };
+        // if too long, delete pages until enough
+        while max_page_idx(*table_id)? > num {
+            trunc_page(*table_id)?;
+        };
+        Ok(())
+    }
     /// Recovery the database to a consistent state using the WAL log.
     /// Helper function for testing with custom WAL instance.
     /// Args:
@@ -177,34 +195,23 @@ impl WAL {
             match entry {
                 WALEntry::UpdatePage { tnx_id, table_id, page_id, offset, len, new_data, .. } => {
                     if redo_tnx_ids.contains(tnx_id) {
+                        if *page_id > max_page_idx(*table_id)? {
+                            Self::align_page_num(*page_id, table_id, append_page, trunc_page, max_page_idx)?;
+                        }
                         update_page(*table_id, *page_id, *offset, *len, &new_data)?;
                         recover_num += 1;
                     }
                 },
                 WALEntry::NewPage { tnx_id, table_id, data, page_id } => {
                     if redo_tnx_ids.contains(tnx_id) {
-                        // if too short, append pages until enough
-                        while max_page_idx(*table_id)? < *page_id {
-                            append_page(*table_id)?;
-                        }
-                        // if too long, delete pages until enough
-                        while max_page_idx(*table_id)? > *page_id {
-                            trunc_page(*table_id)?;
-                        }
+                        Self::align_page_num(*page_id, table_id, append_page, trunc_page, max_page_idx)?;
                         write_page(*table_id, *page_id, &data)?;
                         recover_num += 1;
                     }
                 },
                 WALEntry::DeletePage { tnx_id, table_id, page_id, .. } => {
                     if redo_tnx_ids.contains(tnx_id) {
-                        // if too short, append pages until enough
-                        while max_page_idx(*table_id)? < *page_id - 1 {
-                            append_page(*table_id)?;
-                        }
-                        // if too long, delete pages until enough
-                        while max_page_idx(*table_id)? > *page_id - 1 {
-                            trunc_page(*table_id)?;
-                        }
+                        Self::align_page_num(*page_id - 1, table_id, append_page, trunc_page, max_page_idx)?;
                         recover_num += 1;
                     }
                 },
@@ -216,33 +223,22 @@ impl WAL {
             match entry {
                 WALEntry::UpdatePage { tnx_id, table_id, page_id, offset, len, old_data, .. } => {
                     if undo_tnx_ids.contains(tnx_id) {
+                        if *page_id > max_page_idx(*table_id)? {
+                            Self::align_page_num(*page_id, table_id, append_page, trunc_page, max_page_idx)?;
+                        }
                         update_page(*table_id, *page_id, *offset, *len, &old_data)?;
                         recover_num += 1;
                     }
                 },
                 WALEntry::NewPage { tnx_id, table_id, page_id, .. } => {
                     if undo_tnx_ids.contains(tnx_id) {
-                        // if too short, append pages until enough
-                        while max_page_idx(*table_id)? < *page_id - 1 {
-                            append_page(*table_id)?;
-                        }
-                        // if too long, delete pages until enough
-                        while max_page_idx(*table_id)? > *page_id - 1 {
-                            trunc_page(*table_id)?;
-                        }
+                        Self::align_page_num(*page_id - 1, table_id, append_page, trunc_page, max_page_idx)?;
                         recover_num += 1;
                     }
                 },
                 WALEntry::DeletePage { tnx_id, table_id, page_id, old_data } => {
                     if undo_tnx_ids.contains(tnx_id) {
-                        // if too short, append pages until enough
-                        while max_page_idx(*table_id)? < *page_id {
-                            append_page(*table_id)?;
-                        }
-                        // if too long, delete pages until enough
-                        while max_page_idx(*table_id)? > *page_id {
-                            trunc_page(*table_id)?;
-                        }
+                        Self::align_page_num(*page_id, table_id, append_page, trunc_page, max_page_idx)?;
                         write_page(*table_id, *page_id, &old_data)?;
                         recover_num += 1;
                     }
