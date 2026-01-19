@@ -2,12 +2,16 @@
 <template>
   <div class="sidebar">
     <div class="sidebar-header">
-      <div class="header-icon">
-        <Icon :path="mdiDatabase" size="24" />
+      <div class="header-container">
+        <div class="header-icon">
+          <Icon :path="mdiDatabase" size="24" />
+        </div>
+        <div class="header-content">
+          <h1>RSQL</h1>
+        </div>
       </div>
-      <div class="header-content">
-        <h2>Database Management</h2>
-        <p class="header-subtitle">Manage your RSQL databases</p>
+      <div>
+        <p class="header-subtitle">A Rust Database Management System</p>
       </div>
     </div>
     
@@ -155,10 +159,11 @@ function handleTableSelect(table) {
 
 .sidebar-header {
   padding: 22px 20px 20px 20px;
+  display: flex;
+  flex-direction: column;
   background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
   color: #f1f5f9;
-  display: flex;
-  align-items: center;
+  /* align-items: center; */
   gap: 14px;
   position: relative;
   overflow: hidden;
@@ -183,6 +188,8 @@ function handleTableSelect(table) {
   display: flex;
   align-items: center;
   justify-content: center;
+  width: 60px;
+  height: 60px;
   border: 1px solid rgba(99, 102, 241, 0.2);
   box-shadow: 0 4px 12px rgba(99, 102, 241, 0.1);
 }
@@ -191,16 +198,22 @@ function handleTableSelect(table) {
   flex: 1;
 }
 
-.sidebar-header h2 {
-  font-size: 1.3rem;
+.sidebar-header h1 {
+  /* font-size: 1.3rem; */
   font-weight: 700;
   margin: 0 0 4px 0;
   color: #f8fafc;
-  letter-spacing: -0.01em;
+  letter-spacing: 0.045em;
   background: linear-gradient(135deg, #f8fafc 0%, #cbd5e1 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
+}
+
+.header-container{
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .header-subtitle {
