@@ -140,11 +140,17 @@ fn execute_inner(sql: &str, connection_id: u64) -> RsqlResult<Vec<ExecutionResul
                 results.push(ExecutionResult::RollbackSuccess);
             },
             PlanItem::DCL(plan_node) => {
-                let res = execute_dcl_plan_node(plan_node, connection_id)?;
+                let Some(tnx_id) = TnxManager::global().get_transaction_id(connection_id) else {
+                    return Err(RsqlError::ExecutionError("No active transaction".to_string()));
+                };
+                let res = execute_dcl_plan_node(plan_node, tnx_id)?;
                 results.push(res);
             },
             PlanItem::DDL(plan_node) => {
-                let res = execute_ddl_plan_node(plan_node, connection_id)?;
+                let Some(tnx_id) = TnxManager::global().get_transaction_id(connection_id) else {
+                    return Err(RsqlError::ExecutionError("No active transaction".to_string()));
+                };
+                let res = execute_ddl_plan_node(plan_node, tnx_id)?;
                 results.push(res);
             },
             PlanItem::DML(plan_node) => {
