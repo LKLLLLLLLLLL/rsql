@@ -1,3 +1,4 @@
+<!-- Terminal.vue -->
 <template>
   <div class="terminal-operation">
     <div class="page-header">
@@ -13,12 +14,11 @@
     
     <div class="terminal-panel">
       <div class="code-area">
-        <textarea
-          class="codeArea-text"
+        <SqlEditor
           v-model="codeInput"
           :placeholder="connected ? '输入 SQL 后提交 (例如: SELECT * FROM users)' : '正在连接到 WebSocket...'"
           :disabled="!connected"
-        ></textarea>
+        />
       </div>
       <div class="terminal-actions">
         <button
@@ -45,18 +45,18 @@
         </div>
         <div v-else class="results-list">
           <div v-for="(item, idx) in codeResults" :key="idx" class="codeArea-result-item">
-            <div class="result-header">
-              <span class="result-time">{{ new Date(item.timestamp * 1000).toLocaleString() }}</span>
+            <div class="result-header-item">
+              <span class="result-time">{{ formatTime(item.timestamp) }}</span>
               <span class="result-status" :class="{ success: item.success }">
                 {{ item.success ? '✓ Success' : '✗ Error' }}
               </span>
             </div>
             <div class="result-content">
-              <pre v-if="item.success">{{ item.rayon_response.response_content }}</pre>
+              <pre v-if="item.success">{{ formatResultContent(item) }}</pre>
               <pre v-else class="error">{{ item.rayon_response.error || '未知错误' }}</pre>
             </div>
             <div class="result-footer">
-              <span>Conn: {{ item.connection_id }}</span>
+              <span>Connection: {{ item.connection_id }}</span>
               <span class="execution-time">耗时: {{ item.rayon_response.execution_time }} ms</span>
             </div>
           </div>
@@ -68,6 +68,7 @@
 
 <script setup>
 import { ref, onMounted, onBeforeUnmount } from 'vue'
+import SqlEditor from './SqlEditor.vue'
 import Icon from './Icon.vue'
 import { mdiLanDisconnect, mdiConsole } from '@mdi/js'
 
@@ -102,7 +103,7 @@ function connectWebSocket() {
   socket.onmessage = (ev) => {
     try {
       const data = JSON.parse(ev.data)
-      codeResults.value.unshift(data)
+      codeResults.value.push(data)
       emit('sql-executed', data)
     } catch (e) {
       console.warn('Parse WebSocket message failed', e, ev.data)
@@ -130,6 +131,65 @@ function submitSql() {
   wsRef.send(JSON.stringify(payload))
 }
 
+function ensureWsReady() {
+  if (!wsRef || wsRef.readyState !== WebSocket.OPEN) {
+    alert('WebSocket 未连接，请先启动后端或等待连接成功')
+    return false
+  }
+  return true
+}
+
+function sendSqlStatement(sql, actionLabel = 'SQL') {
+  const trimmed = (sql || '').trim()
+  if (!trimmed) {
+    alert(`${actionLabel} 为空，未发送`)
+    return
+  }
+  if (!ensureWsReady()) return
+  const payload = {
+    username: 'guest',
+    userid: 0,
+    request_content: trimmed,
+  }
+  wsRef.send(JSON.stringify(payload))
+  codeInput.value = trimmed
+}
+
+function formatTime(timestamp) {
+  const date = new Date(timestamp * 1000)
+  const hours = String(date.getHours()).padStart(2, '0')
+  const minutes = String(date.getMinutes()).padStart(2, '0')
+  const seconds = String(date.getSeconds()).padStart(2, '0')
+  return `${hours}:${minutes}:${seconds}`
+}
+
+function formatResultContent(item) {
+  // 特殊处理：WebSocket连接成功
+  if (item.rayon_response.error === 'Websocket Connection Established' && 
+      Array.isArray(item.rayon_response.response_content) && 
+      item.rayon_response.response_content.length === 0) {
+    return 'WebSocket连接成功'
+  }
+  if (item.rayon_response.error === 'Checkpoint Success' && 
+      Array.isArray(item.rayon_response.response_content) && 
+      item.rayon_response.response_content.length === 0) {
+    return 'WebSocket连接正常'
+  }
+  
+  // 正常错误处理
+  if (!item.success) {
+    return item.rayon_response.error || '未知错误'
+  }
+  
+  // 处理响应内容
+  const content = item.rayon_response.response_content
+  if (Array.isArray(content) && content.length === 0) {
+    return '(empty result)'
+  }
+  
+  return content || '(no output)'
+}
+
 onMounted(() => {
   connectWebSocket()
 })
@@ -138,6 +198,11 @@ onBeforeUnmount(() => {
   if (wsRef) {
     wsRef.close()
   }
+})
+
+defineExpose({
+  sendSqlStatement,
+  ensureWsReady
 })
 </script>
 
@@ -221,33 +286,7 @@ onBeforeUnmount(() => {
 .code-area {
   padding: 24px;
   border-bottom: 1px solid #e3e8ef;
-}
-
-.codeArea-text {
-  width: 100%;
-  height: 140px;
-  resize: none;
-  font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', Monaco, Consolas, monospace;
-  font-size: 14px;
-  line-height: 1.6;
-  border-radius: 8px;
-  border: 1px solid #e5e7eb;
-  padding: 16px;
-  background: #ffffff;
-  color: #1a1f36;
-  transition: all 0.2s ease;
-}
-
-.codeArea-text:focus {
-  outline: none;
-  border-color: #3b82f6;
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
-}
-
-.codeArea-text:disabled {
-  background: #f9fafb;
-  color: #9ca3af;
-  cursor: not-allowed;
+  min-height: 200px;
 }
 
 .terminal-actions {
@@ -306,7 +345,7 @@ onBeforeUnmount(() => {
 }
 
 .result-header h4 {
-  margin: 0;
+  margin: 0 0 16px 0;
   color: #1a1f36;
   font-size: 0.95rem;
   font-weight: 600;
@@ -347,17 +386,17 @@ onBeforeUnmount(() => {
   border-color: #d1d5db;
 }
 
-.codeArea-result-item .result-header {
+.result-header-item {
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin: 0 0 12px 0;
-  padding: 0;
 }
 
 .result-time {
   font-size: 0.85rem;
   color: #6b7280;
+  font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', Monaco, Consolas, monospace;
 }
 
 .result-status {
@@ -365,8 +404,8 @@ onBeforeUnmount(() => {
   font-weight: 500;
   padding: 4px 8px;
   border-radius: 12px;
-  background: #f3f4f6;
-  color: #6b7280;
+  background: #fee2e2;
+  color: #991b1b;
 }
 
 .result-status.success {
@@ -380,7 +419,7 @@ onBeforeUnmount(() => {
 
 .result-content pre {
   margin: 0;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', Monaco, Consolas, monospace;
   font-size: 13px;
   line-height: 1.5;
   color: #1a1f36;
