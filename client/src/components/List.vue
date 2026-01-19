@@ -7,6 +7,7 @@
             v-for="(header, idx) in leadingHeaders" 
             :key="`lead-h-${idx}`"
             class="header-cell leading-header"
+            :style="{ height: `${headerHeight}px` }"
           >
             {{ header }}
           </th>
@@ -14,7 +15,11 @@
             v-for="(header, idx) in headers" 
             :key="`h-${idx}`"
             class="header-cell data-header"
-            :style="{ minWidth: `${minWidth}px`, maxWidth: `${maxWidth}px` }"
+            :style="{ 
+              minWidth: `${minWidth}px`, 
+              maxWidth: `${maxWidth}px`,
+              height: `${headerHeight}px`
+            }"
           >
             <div class="header-content">
               <span>{{ header }}</span>
@@ -157,6 +162,12 @@ const paddingBottom = computed(() =>
   Math.max(props.rows.length - endIndex.value, 0) * props.rowHeight
 )
 
+// 固定表头高度，确保中英文切换时高度一致
+const headerHeight = computed(() => {
+  // 固定的表头高度，不随内容变化
+  return 56;
+})
+
 // Cell formatting
 const formatValue = (value) => {
   if (value === null || value === undefined) {
@@ -235,17 +246,15 @@ onBeforeUnmount(() => {
   overflow-y: auto;
   overflow-x: auto;
   border: 1px solid #e2e8f0;
-  border-radius: 8px;
   background: white;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
 .modern-virtual-table {
   width: max-content;
   min-width: 100%;
-  border-collapse: separate;
-  border-spacing: 0;
+  border-collapse: collapse;
   font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  table-layout: fixed;
 }
 
 .table-header {
@@ -256,29 +265,29 @@ onBeforeUnmount(() => {
 
 .header-cell {
   position: relative;
-  padding: 12px 16px;
+  padding: 0;
   background: #f1f5f9;
   color: #334155;
   font-weight: 600;
-  text-align: left;
+  text-align: center;
   border-bottom: 2px solid #cbd5e1;
   border-right: 1px solid #e2e8f0;
   font-size: 0.9rem;
-}
-
-.header-cell:first-child {
-  border-top-left-radius: 8px;
+  height: 56px;
+  min-height: 56px;
+  max-height: 56px;
+  vertical-align: middle;
+  box-sizing: border-box;
 }
 
 .header-cell:last-child {
-  border-top-right-radius: 8px;
   border-right: none;
 }
 
 .leading-header {
   background: #e2e8f0;
-  min-width: 50px;
-  width: 50px;
+  min-width: 60px;
+  width: 60px;
 }
 
 .data-header {
@@ -289,14 +298,30 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: center;
+  height: 100%;
+  width: 100%;
+  padding: 0 16px;
+  box-sizing: border-box;
+}
+
+.header-content span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: block;
 }
 
 .data-cell {
-  padding: 10px 16px;
+  padding: 0;
   border-bottom: 1px solid #e2e8f0;
   border-right: 1px solid #e2e8f0;
   vertical-align: middle;
   transition: background-color 0.2s ease;
+  text-align: center;
+  height: v-bind(rowHeight + 'px');
+  min-height: v-bind(rowHeight + 'px');
+  max-height: v-bind(rowHeight + 'px');
+  box-sizing: border-box;
 }
 
 .data-cell:last-child {
@@ -315,6 +340,9 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   height: 100%;
+  width: 100%;
+  padding: 0 16px;
+  box-sizing: border-box;
 }
 
 .data-column {
@@ -351,6 +379,13 @@ onBeforeUnmount(() => {
 }
 
 .cell-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  width: 100%;
+  padding: 0 16px;
+  box-sizing: border-box;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -363,6 +398,7 @@ onBeforeUnmount(() => {
 .empty-cell {
   text-align: center;
   padding: 40px 20px;
+  height: 200px;
 }
 
 .empty-state {
@@ -372,23 +408,42 @@ onBeforeUnmount(() => {
   justify-content: center;
   gap: 16px;
   color: #94a3b8;
+  height: 100%;
 }
 
 .empty-icon {
   color: #cbd5e1;
 }
 
+/* 确保所有表格单元格内容垂直水平居中 */
+.modern-virtual-table td,
+.modern-virtual-table th {
+  display: table-cell;
+  vertical-align: middle;
+}
+
+/* 修复表格布局 */
+.modern-virtual-table tr {
+  display: table-row;
+}
+
 /* Responsive styles */
 @media (max-width: 768px) {
   .header-cell, .data-cell {
-    padding: 8px 10px;
+    padding: 0 8px;
     font-size: 0.8rem;
   }
   
-  .header-content {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 4px;
+  .header-content,
+  .cell-content,
+  .leading-content {
+    padding: 0 8px;
+  }
+  
+  .header-cell {
+    height: 48px;
+    min-height: 48px;
+    max-height: 48px;
   }
 }
 </style>
