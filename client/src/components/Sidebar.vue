@@ -16,6 +16,12 @@
         <h3>FUNCTIONS</h3>
       </div>
       <div class="tables-buttons">
+        <div class="tables-btn terminal" :class="{ active: activeButton === 'terminal' }" @click="handleButtonClick('terminal')">
+          <div class="btn-icon">
+            <Icon :path="mdiConsoleLine" size="18" />
+          </div>
+          <span>Terminal</span>
+        </div>
         <div class="tables-btn create" :class="{ active: activeButton === 'create' }" @click="handleButtonClick('create')">
           <div class="btn-icon">
             <Icon :path="mdiTablePlus" size="18" />
@@ -34,12 +40,6 @@
           </div>
           <span>Drop Table</span>
         </div>
-        <div class="tables-btn terminal" :class="{ active: activeButton === 'terminal' }" @click="handleButtonClick('terminal')">
-          <div class="btn-icon">
-            <Icon :path="mdiConsoleLine" size="18" />
-          </div>
-          <span>Open Terminal</span>
-        </div>
         <div class="tables-btn list" :class="{ active: showTableList }" @click="toggleTableList">
           <div class="btn-icon">
             <Icon :path="mdiFormatListBulleted" size="18" />
@@ -51,10 +51,10 @@
 
     <div class="tables-list" :class="{ collapsed: !showTableList }">
       <div class="list-header">
-        <h3>Table List</h3>
+        <h3>TABLE LIST</h3>
         <span class="table-count">{{ tables.length }} tables</span>
       </div>
-      <div v-for="table in tables" :key="table" class="table-item" :class="{ active: !showTableList && currentTable === table }" @click="handleTableSelect(table)">
+      <div v-for="table in tables" :key="table" class="table-item" :class="{ active: currentTable === table }" @click="handleTableSelect(table)">
         <div class="table-content">
           <div class="table-icon">
             <Icon :path="mdiTable" size="16" />
@@ -140,38 +140,51 @@ function handleTableSelect(table) {
 /* 使用系统字体栈，保证字体一致性 */
 .sidebar {
   width: 280px;
-  background: #1e293b;
+  background: linear-gradient(180deg, #1e293b 0%, #0f172a 100%);
   color: #cbd5e1;
   display: flex;
   flex-direction: column;
-  border-right: 1px solid #334155;
   height: 100vh;
   position: sticky;
   top: 0;
   z-index: 10;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
   box-sizing: border-box;
+  box-shadow: 0 0 20px rgba(0, 0, 0, 0.2);
 }
 
 .sidebar-header {
-  padding: 24px 20px;
-  background: #0f172a;
+  padding: 22px 20px 20px 20px;
+  background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
   color: #f1f5f9;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
   position: relative;
   overflow: hidden;
-  border-bottom: 1px solid #334155;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.sidebar-header::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 20px;
+  right: 20px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(99, 102, 241, 0.3), transparent);
 }
 
 .header-icon {
-  padding: 10px;
-  background: rgba(99, 102, 241, 0.1);
-  border-radius: 6px;
+  padding: 12px;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.15) 0%, rgba(99, 102, 241, 0.3) 100%);
+  border-radius: 8px;
   display: flex;
   align-items: center;
   justify-content: center;
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.1);
 }
 
 .header-content {
@@ -179,39 +192,43 @@ function handleTableSelect(table) {
 }
 
 .sidebar-header h2 {
-  font-size: 1.25rem;
-  font-weight: 600;
+  font-size: 1.3rem;
+  font-weight: 700;
   margin: 0 0 4px 0;
-  color: #e2e8f0;
-  letter-spacing: -0.025em;
+  color: #f8fafc;
+  letter-spacing: -0.01em;
+  background: linear-gradient(135deg, #f8fafc 0%, #cbd5e1 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
 .header-subtitle {
   font-size: 0.85rem;
-  color: #94a3b8;
+  color: #a0aec0;
   margin: 0;
   font-weight: 400;
+  letter-spacing: 0.02em;
 }
 
 .functions-section {
   padding: 20px 0;
   background: #0f172a;
-  border-bottom: 1px solid #334155;
-  border-top: 1px solid #334155;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 .section-header {
-  padding: 0 20px 12px;
-  margin-bottom: 4px;
+  padding: 0 20px 10px 30px;
+  margin-bottom: 6px;
 }
 
 .section-header h3 {
   font-size: 0.75rem;
-  font-weight: 600;
-  color: #64748b;
+  font-weight: 700;
+  color: #a0aec0;
   margin: 0;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.08em;
 }
 
 .tables-buttons {
@@ -219,41 +236,44 @@ function handleTableSelect(table) {
   user-select: none;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .tables-btn {
-  padding: 14px 16px;
+  padding: 12px 16px;
   cursor: pointer;
-  border-radius: 6px;
+  border-radius: 8px;
   font-weight: 500;
-  transition: all 0.2s ease;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   display: flex;
   align-items: center;
   gap: 12px;
-  color: #94a3b8;
+  color: #cbd5e1;
   background: transparent;
   border: 1px solid transparent;
   position: relative;
   overflow: hidden;
+  font-size: 0.95rem;
 }
 
 .tables-btn:hover {
-  background: #334155;
-  color: #e2e8f0;
-  border-color: #475569;
+  background: rgba(51, 65, 85, 0.6);
+  color: #f1f5f9;
+  border-color: rgba(71, 85, 105, 0.5);
+  transform: translateY(-1px);
 }
 
 .tables-btn.active {
-  background: #334155;
-  color: #f8fafc;
-  border-color: #64748b;
-  box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.3);
+  background: linear-gradient(135deg, rgba(51, 65, 85, 0.8) 0%, rgba(30, 41, 59, 0.9) 100%);
+  color: #ffffff;
+  border: 1px solid rgba(99, 102, 241, 0.5);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2), inset 0 1px 1px rgba(255, 255, 255, 0.1);
 }
 
 .tables-btn.active:hover {
-  background: #475569;
-  border-color: #94a3b8;
+  background: linear-gradient(135deg, rgba(71, 85, 105, 0.9) 0%, rgba(51, 65, 85, 0.9) 100%);
+  border-color: rgba(99, 102, 241, 0.7);
+  transform: translateY(-1px);
 }
 
 .btn-icon {
@@ -262,16 +282,16 @@ function handleTableSelect(table) {
   justify-content: center;
   width: 24px;
   height: 24px;
-  border-radius: 4px;
+  border-radius: 6px;
   background: rgba(148, 163, 184, 0.1);
-  color: #94a3b8;
+  color: #cbd5e1;
   transition: all 0.2s ease;
 }
 
 .tables-btn:hover .btn-icon,
 .tables-btn.active .btn-icon {
-  background: #64748b;
-  color: #f8fafc;
+  background: rgba(99, 102, 241, 0.2);
+  color: #ffffff;
 }
 
 .tables-list {
@@ -293,61 +313,64 @@ function handleTableSelect(table) {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 16px;
-  padding: 0 4px;
+  padding: 0 10px;
 }
 
 .list-header h3 {
-  font-size: 0.875rem;
-  font-weight: 600;
-  color: #64748b;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #a0aec0;
   margin: 0;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.08em;
 }
 
 .table-count {
   font-size: 0.75rem;
-  font-weight: 500;
-  color: #64748b;
-  background: #1e293b;
+  font-weight: 600;
+  color: #a0aec0;
+  background: rgba(30, 41, 59, 0.8);
   padding: 4px 10px;
   border-radius: 20px;
+  border: 1px solid rgba(100, 116, 139, 0.3);
 }
 
 .table-item {
-  height: 48px;
-  min-height: 48px;
+  height: 46px;
+  min-height: 46px;
   padding: 0 12px;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   display: flex;
   align-items: center;
   user-select: none;
   position: relative;
   background: transparent;
   color: #cbd5e1;
-  border-radius: 6px;
+  border-radius: 8px;
   margin-bottom: 6px;
   border: 1px solid transparent;
 }
 
 .table-item:hover {
-  background: #334155;
-  color: #e2e8f0;
-  border-color: #475569;
+  background: rgba(51, 65, 85, 0.6);
+  color: #f1f5f9;
+  border-color: rgba(71, 85, 105, 0.5);
+  transform: translateY(-1px);
 }
 
 .table-item.active {
-  background: #334155;
-  color: #f8fafc;
+  background: linear-gradient(135deg, rgba(51, 65, 85, 0.8) 0%, rgba(30, 41, 59, 0.9) 100%);
+  color: #ffffff;
   font-weight: 600;
-  border: 1px solid #64748b;
-  box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(99, 102, 241, 0.5);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2), inset 0 1px 1px rgba(255, 255, 255, 0.1);
 }
 
 .table-item.active:hover {
-  background: #475569;
-  border-color: #94a3b8;
+  background: linear-gradient(135deg, rgba(71, 85, 105, 0.9) 0%, rgba(51, 65, 85, 0.9) 100%);
+  border-color: rgba(99, 102, 241, 0.7);
+  transform: translateY(-1px);
 }
 
 .table-content {
@@ -364,16 +387,16 @@ function handleTableSelect(table) {
   justify-content: center;
   width: 24px;
   height: 24px;
-  border-radius: 4px;
+  border-radius: 6px;
   background: rgba(148, 163, 184, 0.1);
-  color: #94a3b8;
+  color: #cbd5e1;
   transition: all 0.2s ease;
 }
 
 .table-item:hover .table-icon,
 .table-item.active .table-icon {
-  background: #64748b;
-  color: #f8fafc;
+  background: rgba(99, 102, 241, 0.2);
+  color: #ffffff;
 }
 
 .table-name {
@@ -385,10 +408,10 @@ function handleTableSelect(table) {
 }
 
 .table-delete-btn {
-  background: #3f3f46;
+  background: rgba(63, 63, 70, 0.8);
   color: #f43f5e;
-  border: 1px solid #52525b;
-  border-radius: 4px;
+  border: 1px solid rgba(82, 82, 91, 0.6);
+  border-radius: 6px;
   width: 30px;
   height: 30px;
   min-width: 30px;
@@ -403,15 +426,17 @@ function handleTableSelect(table) {
 }
 
 .table-delete-btn:hover {
-  background: #52525b;
+  background: rgba(82, 82, 91, 0.9);
   color: #fb7185;
-  border-color: #71717a;
+  border-color: rgba(113, 113, 122, 0.8);
+  transform: scale(1.05);
 }
 
 .sidebar-footer {
   padding: 16px 20px;
-  border-top: 1px solid #334155;
-  background: #0f172a;
+  border-top: 1px solid rgba(51, 65, 85, 0.5);
+  background: rgba(15, 23, 42, 0.8);
+  backdrop-filter: blur(10px);
 }
 
 .footer-content {
@@ -419,7 +444,7 @@ function handleTableSelect(table) {
   align-items: center;
   gap: 8px;
   font-size: 0.8rem;
-  color: #64748b;
+  color: #a0aec0;
 }
 
 /* 滚动条样式 */
@@ -428,16 +453,16 @@ function handleTableSelect(table) {
 }
 
 .tables-list::-webkit-scrollbar-track {
-  background: #0f172a;
+  background: rgba(15, 23, 42, 0.5);
   border-radius: 3px;
 }
 
 .tables-list::-webkit-scrollbar-thumb {
-  background: #334155;
+  background: rgba(51, 65, 85, 0.8);
   border-radius: 3px;
 }
 
 .tables-list::-webkit-scrollbar-thumb:hover {
-  background: #475569;
+  background: rgba(71, 85, 105, 0.9);
 }
 </style>

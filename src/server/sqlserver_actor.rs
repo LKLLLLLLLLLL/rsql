@@ -2,6 +2,7 @@ use super::thread_pool::WorkingThreadPool;
 use super::types::{RayonQueryRequest, WebsocketResponse, RayonQueryResponse, UniformedResult};
 use crate::common::data_item::DataItem;
 use crate::execution::result::ExecutionResult;
+use crate::catalog::table_schema::ColType;
 
 use actix_web_actors::ws;
 use actix::{Actor, StreamHandler, AsyncContext};
@@ -42,8 +43,20 @@ fn convert_execution_result(result: &ExecutionResult) -> UniformedResult {
                 .map(|row| row.iter().map(data_item_to_value).collect())
                 .collect();
             
+            // 获取列类型字符串表示
+            let col_types: Vec<String> = cols.1.iter().map(|col_type| {
+                match col_type {
+                    ColType::Integer => "INTEGER".to_string(),
+                    ColType::Float => "FLOAT".to_string(),
+                    ColType::Chars(size) => format!("CHAR({})", size),
+                    ColType::VarChar(size) => format!("VARCHAR({})", size),
+                    ColType::Bool => "BOOL".to_string(),
+                }
+            }).collect();
+            
             let data = serde_json::json!({
                 "columns": cols.0,
+                "column_types": col_types,
                 "rows": json_rows,
                 "row_count": rows.len(),
                 "column_count": cols.0.len(),

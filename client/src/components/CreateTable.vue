@@ -41,48 +41,51 @@
             <span>Action</span>
           </div>
           
-          <div v-for="(column, index) in columns" :key="index" class="column-row">
-            <input 
-              type="text" 
-              class="column-input" 
-              v-model="column.name"
-              placeholder="Column name"
-            />
-            <select class="column-select" v-model="column.type">
-              <option value="INTEGER">INTEGER</option>
-              <option value="FLOAT">FLOAT</option>
-              <option value="CHAR">CHAR</option>
-              <option value="VARCHAR">VARCHAR</option>
-              <option value="BOOLEAN">BOOLEAN</option>
-              <option value="NULL">NULL</option>
-            </select>
-            <div class="column-checkbox">
+          <!-- 添加滚动容器 -->
+          <div class="column-rows-container">
+            <div v-for="(column, index) in columns" :key="index" class="column-row">
               <input 
-                type="checkbox" 
-                v-model="column.allowNull"
-                :disabled="column.primaryKey"
-                class="checkbox-input"
+                type="text" 
+                class="column-input" 
+                v-model="column.name"
+                placeholder="Column name"
+              />
+              <select class="column-select" v-model="column.type">
+                <option value="INTEGER">INTEGER</option>
+                <option value="FLOAT">FLOAT</option>
+                <option value="CHAR">CHAR</option>
+                <option value="VARCHAR">VARCHAR</option>
+                <option value="BOOLEAN">BOOLEAN</option>
+                <option value="NULL">NULL</option>
+              </select>
+              <div class="column-checkbox">
+                <input 
+                  type="checkbox" 
+                  v-model="column.allowNull"
+                  :disabled="column.primaryKey"
+                  class="checkbox-input"
+                >
+              </div>
+              <div class="column-checkbox">
+                <input type="checkbox" v-model="column.unique" class="checkbox-input">
+              </div>
+              <div class="column-checkbox">
+                <input 
+                  type="checkbox" 
+                  v-model="column.primaryKey"
+                  @change="handlePrimaryKeyChange(index)"
+                  class="checkbox-input"
+                >
+              </div>
+              <button 
+                type="button" 
+                class="remove-column-btn" 
+                @click="removeColumn(index)" 
+                :disabled="columns.length <= 1"
               >
+                <Icon :path="mdiTrashCanOutline" size="16" />
+              </button>
             </div>
-            <div class="column-checkbox">
-              <input type="checkbox" v-model="column.unique" class="checkbox-input">
-            </div>
-            <div class="column-checkbox">
-              <input 
-                type="checkbox" 
-                v-model="column.primaryKey"
-                @change="handlePrimaryKeyChange(index)"
-                class="checkbox-input"
-              >
-            </div>
-            <button 
-              type="button" 
-              class="remove-column-btn" 
-              @click="removeColumn(index)" 
-              :disabled="columns.length <= 1"
-            >
-              <Icon :path="mdiTrashCanOutline" size="16" />
-            </button>
           </div>
         </div>
       </div>
@@ -176,6 +179,7 @@ function submitCreate() {
   background: #ffffff;
   border-radius: 12px;
   border: 1px solid #e3e8ef;
+  overflow: hidden;
 }
 
 .page-header {
@@ -213,12 +217,13 @@ function submitCreate() {
   display: flex;
   flex-direction: column;
   align-items: center;
+  min-height: 0;
 }
 
 .form-section {
   margin-bottom: 40px;
   width: 100%;
-  max-width: 800px;
+  /* max-width: 800px; */
 }
 
 .form-group {
@@ -255,9 +260,14 @@ function submitCreate() {
 }
 
 .columns-section {
-  margin-bottom: 40px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 24px;
   width: 100%;
-  max-width: 800px;
+  /* max-width: 800px; */
+  min-height: 0;
+  overflow: hidden;
 }
 
 .section-header {
@@ -265,6 +275,7 @@ function submitCreate() {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 20px;
+  flex-shrink: 0;
 }
 
 .section-header h3 {
@@ -294,13 +305,18 @@ function submitCreate() {
 }
 
 .columns-list {
+  flex: 1;
   background: #f9fafb;
   border-radius: 8px;
   border: 1px solid #e5e7eb;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .column-header {
+  flex-shrink: 0;
   display: grid;
   grid-template-columns: 1.5fr 1fr 0.8fr 0.8fr 0.8fr 0.5fr;
   gap: 16px;
@@ -319,6 +335,12 @@ function submitCreate() {
   justify-content: center;
 }
 
+.column-rows-container {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
 .column-row {
   display: grid;
   grid-template-columns: 1.5fr 1fr 0.8fr 0.8fr 0.8fr 0.5fr;
@@ -329,6 +351,7 @@ function submitCreate() {
   align-items: center;
   transition: all 0.2s ease;
   text-align: center;
+  flex-shrink: 0;
 }
 
 .column-row:last-child {
@@ -408,9 +431,10 @@ function submitCreate() {
   padding-top: 24px;
   border-top: 1px solid #e3e8ef;
   width: 100%;
-  max-width: 800px;
+  /* max-width: 800px; */
   display: flex;
   justify-content: center;
+  flex-shrink: 0;
 }
 
 .submit-create-btn {
@@ -450,6 +474,24 @@ function submitCreate() {
 }
 
 .create-panel::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
+}
+
+.column-rows-container::-webkit-scrollbar {
+  width: 6px;
+}
+
+.column-rows-container::-webkit-scrollbar-track {
+  background: #f3f4f6;
+  border-radius: 3px;
+}
+
+.column-rows-container::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+  border-radius: 3px;
+}
+
+.column-rows-container::-webkit-scrollbar-thumb:hover {
   background: #9ca3af;
 }
 </style>
