@@ -2,6 +2,7 @@ use core::panic;
 use std::iter;
 
 /// entries recorded in WAL 
+#[derive(Debug, Clone)]
 pub enum WALEntry {
     UpdatePage {
         tnx_id: u64,
