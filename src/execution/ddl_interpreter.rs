@@ -29,11 +29,15 @@ pub fn execute_ddl_plan_node(node: &PlanNode, tnx_id: u64) -> RsqlResult<Executi
             let _ = Table::create(table_id, schema.clone(), tnx_id, false)?;
             Ok(Ddl(format!("Table {} created successfully.", table_name)))
         },
-        DdlOperation::RenameTable {old_name, new_name} => {
+        DdlOperation::RenameTable {old_name, new_name, if_exists} => {
             // check if old table exists
             let table_id = SysCatalog::global().get_table_id(tnx_id, old_name)?;
             if table_id.is_none() {
-                return Err(RsqlError::ExecutionError(format!("Table {} does not exist.", old_name)));
+                if *if_exists {
+                    return Ok(Ddl(format!("Table {} does not exist, skipping rename table.", old_name)));
+                } else {
+                    return Err(RsqlError::ExecutionError(format!("Table {} does not exist.", old_name)));
+                }
             }
             let table_id = table_id.unwrap();
             // check if table is system table
