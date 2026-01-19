@@ -3,6 +3,9 @@ use std::sync::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
+use serde::Deserialize;
+use serde::Serialize;
+
 use super::storage::Page;
 use crate::config;
 use crate::common::{RsqlError, RsqlResult};
@@ -31,6 +34,7 @@ fn get_table_guard() -> &'static Mutex<HashSet<u64>> {
 /// - indexes count: 8 bytes
 /// - each index [column_name: 64bytes][root_page: 8bytes]
 /// - allocator metadata: rest of the page
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Table {
     id: u64,
     schema: TableSchema,

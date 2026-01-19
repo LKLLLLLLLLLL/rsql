@@ -31,9 +31,8 @@ impl Actor for SQLWebsocketActor{
         // send confimation message to the front-end
         let welcome_msg = WebsocketResponse {
             rayon_response: RayonQueryResponse {
-                response_content: format!("Connection established. Connection ID: {}", 
-                                         self.current_connection_id),
-                error: String::new(),
+                response_content: Vec::new(),
+                error: String::from("Websocket Connection Established"),
                 execution_time: 0,
             },
             timestamp: SystemTime::now()
@@ -62,12 +61,8 @@ impl Actor for SQLWebsocketActor{
                         info!("Checkpoint successful: {}", msg);
                         let checkpoint_msg = WebsocketResponse {
                             rayon_response: RayonQueryResponse {
-                                response_content: format!("Checkpoint completed at {}", 
-                                    SystemTime::now()
-                                        .duration_since(UNIX_EPOCH)
-                                        .unwrap_or_default()
-                                        .as_secs()),
-                                error: String::new(),
+                                response_content: Vec::new(),
+                                error: String::from("Checkpoint Success"),
                                 execution_time: 0,
                             },
                             timestamp: SystemTime::now()
@@ -139,7 +134,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for SQLWebsocketActor
                                 Ok(content) => WebsocketResponse {
                                     rayon_response: RayonQueryResponse {
                                         response_content: content,
-                                        error: String::new(),
+                                        error: String::from("Query Success"),
                                         execution_time: exec_ms,
                                     },
                                     timestamp: SystemTime::now()
@@ -151,7 +146,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for SQLWebsocketActor
                                 },
                                 Err(e) => WebsocketResponse {
                                     rayon_response: RayonQueryResponse {
-                                        response_content: String::new(),
+                                        response_content: Vec::new(),
                                         error: e.to_string(),
                                         execution_time: exec_ms,
                                     },
@@ -176,7 +171,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for SQLWebsocketActor
                         
                         let error_response = WebsocketResponse {
                             rayon_response: RayonQueryResponse {
-                                response_content: String::new(),
+                                response_content: Vec::new(),
                                 error: format!("Invalid request format: {}", e),
                                 execution_time: 0,
                             },

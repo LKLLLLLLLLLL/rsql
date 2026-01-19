@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
 
 use crate::execution::executor;
+use crate::execution::result::ExecutionResult;
 use crate::{config::THREAD_MAXNUM};
 use crate::common::{ RsqlResult};
 use super::types::{ RayonQueryRequest };
@@ -75,8 +76,8 @@ impl WorkingThreadPool{
         }
     }
 
-    pub async fn parse_and_execute_query(&self, query: RayonQueryRequest, connection_id: u64) -> RsqlResult<String> {
-        let (sender, receiver) = oneshot::channel::<RsqlResult<String>>();
+    pub async fn parse_and_execute_query(&self, query: RayonQueryRequest, connection_id: u64) -> RsqlResult<Vec<ExecutionResult>> {
+        let (sender, receiver) = oneshot::channel::<RsqlResult<Vec<ExecutionResult>>>();
 
         let serialize_lock = self.serialize_lock.clone();
 
@@ -91,13 +92,17 @@ impl WorkingThreadPool{
 
             let _conn_guard = conn_mutex.lock().unwrap();
 
-            if let Err(err) = execute(&query.request_content,connection_id){
-                error!("execute query failed: {:?}", err);
-            };
-            let result = Ok(query.request_content);
-            sender.send(result).unwrap();
-        });
+            let result = execute(&query.request_content,connection_id);
 
+            match result {
+                Ok(results) => {
+                    sender.send(Ok(results));
+                }
+                Err(e) => {
+                    sender.send(Err(e));
+                }
+            }
+        });
         let result = receiver.await.unwrap();
         match result {
             Ok(result) => Ok(result),
