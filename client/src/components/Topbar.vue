@@ -1,27 +1,30 @@
 <!-- TopBar.vue -->
 <template>
   <div class="top-bar">
-    <h1>Current Table: <span>{{ currentTableName }}</span></h1>
+    <div class="table-info">
+      <h2>{{ currentTableName }}</h2>
+      <span class="table-count">{{ tableCount }} records</span>
+    </div>
     
     <div class="action-buttons">
       <button class="action-btn insert" @click="emit('insert')">
-        <Icon :path="mdiPlus" size="18" />
+        <Icon :path="mdiPlus" size="16" />
         <span>Insert</span>
       </button>
       <button class="action-btn delete" @click="emit('delete')">
-        <Icon :path="mdiDelete" size="18" />
+        <Icon :path="mdiDelete" size="16" />
         <span>Delete</span>
       </button>
       <button class="action-btn update" @click="emit('update')">
-        <Icon :path="mdiPencil" size="18" />
+        <Icon :path="mdiPencil" size="16" />
         <span>Update</span>
       </button>
       <button class="action-btn query" @click="emit('query')">
-        <Icon :path="mdiMagnify" size="18" />
+        <Icon :path="mdiMagnify" size="16" />
         <span>Query</span>
       </button>
       <button class="action-btn export" @click="emit('export')">
-        <Icon :path="mdiDownload" size="18" />
+        <Icon :path="mdiDownload" size="16" />
         <span>Export</span>
       </button>
     </div>
@@ -40,7 +43,8 @@ import {
 } from '@mdi/js'
 
 const props = defineProps({
-  currentTableName: { type: String, default: '' }
+  currentTableName: { type: String, default: '' },
+  tableCount: { type: Number, default: 0 }
 })
 
 const emit = defineEmits(['insert', 'delete', 'update', 'query', 'export'])
@@ -48,71 +52,96 @@ const emit = defineEmits(['insert', 'delete', 'update', 'query', 'export'])
 
 <style scoped>
 .top-bar {
-  background-color: white;
-  padding: 20px 30px;
-  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.08);
+  background-color: #ffffff;
+  padding: 16px 24px;
+  border-bottom: 1px solid #e3e8ef;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  z-index: 5;
+  flex-shrink: 0;
 }
 
-.top-bar h1 {
-  font-size: 1.8rem;
-  color: #2c3e50;
+.table-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.table-info h2 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #1a1f36;
+  margin: 0;
+}
+
+.table-count {
+  font-size: 0.85rem;
+  color: #6b7280;
+  background: #f3f4f6;
+  padding: 4px 8px;
+  border-radius: 12px;
+  display: inline-block;
+  font-weight: 500;
 }
 
 .action-buttons {
   display: flex;
-  gap: 12px;
+  gap: 8px;
   user-select: none;
 }
 
 .action-btn {
-  padding: 10px 20px;
-  border: none;
-  border-radius: 6px;
-  font-weight: 600;
+  padding: 8px 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  font-weight: 500;
   cursor: pointer;
-  transition: all 0.3s ease;
+  transition: all 0.2s ease;
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 0.95rem;
-}
-
-.action-btn.insert {
-  background-color: #2ecc71;
-  color: white;
-}
-
-.action-btn.delete {
-  background-color: #e74c3c;
-  color: white;
-}
-
-.action-btn.update {
-  background-color: #3498db;
-  color: white;
-}
-
-.action-btn.query {
-  background-color: #9b59b6;
-  color: white;
-}
-
-.action-btn.export {
-  background-color: #f39c12;
-  color: white;
+  font-size: 0.85rem;
+  background: #ffffff;
+  color: #4b5563;
 }
 
 .action-btn:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+  background: #f3f4f6;
+  border-color: #d1d5db;
 }
 
 .action-btn:active {
   transform: translateY(0);
+}
+
+.action-btn.insert:hover {
+  background: #e0f2fe;
+  color: #0284c7;
+  border-color: #bae6fd;
+}
+
+.action-btn.delete:hover {
+  background: #fee2e2;
+  color: #dc2626;
+  border-color: #fecaca;
+}
+
+.action-btn.update:hover {
+  background: #e0f2fe;
+  color: #0284c7;
+  border-color: #bae6fd;
+}
+
+.action-btn.query:hover {
+  background: #f0f9ff;
+  color: #0284c7;
+  border-color: #e0f2fe;
+}
+
+.action-btn.export:hover {
+  background: #f0f9ff;
+  color: #0284c7;
+  border-color: #e0f2fe;
 }
 
 @media (max-width: 1200px) {
@@ -121,19 +150,25 @@ const emit = defineEmits(['insert', 'delete', 'update', 'query', 'export'])
   }
 
   .action-btn {
-    padding: 12px 15px;
+    padding: 8px;
+  }
+  
+  .action-btn::before {
+    content: attr(data-title);
+    display: none;
   }
 }
 
 @media (max-width: 768px) {
   .top-bar {
     flex-direction: column;
-    gap: 20px;
+    gap: 16px;
+    align-items: stretch;
   }
 
   .action-buttons {
-    flex-wrap: wrap;
     justify-content: center;
+    flex-wrap: wrap;
   }
 }
 </style>
