@@ -1,17 +1,18 @@
 use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer};
 use actix_web::middleware::NormalizePath;
 use actix_web_actors::ws;
-use tracing::info;
+use tokio::time::interval;
+use tracing::{info, error};
 use rust_embed::RustEmbed;
 
-use crate::config::{PORT};
+use crate::config::{PORT, BACKUP_INTERVAL_SECS, CHECKPOINT_INTERVAL_SECS};
 use crate::server::conncetion_user_map::ConnectionUserMap;
 use super::sqlserver_actor::SQLWebsocketActor;
 use super::thread_pool::WorkingThreadPool;
 
 use std::sync::atomic::{AtomicU64};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH, Duration};
 
 #[derive(RustEmbed)]
 #[folder = "client/dist"] 
@@ -210,6 +211,44 @@ async fn handle_ws_query(
 //     }
 // }
 
+fn start_scheduled_tasks(thread_pool: Arc<WorkingThreadPool>) {
+    let backup_pool = thread_pool.clone();
+    actix::spawn(async move {
+        let mut interval = interval(Duration::from_secs(BACKUP_INTERVAL_SECS));
+        
+        info!("Scheduled backup task started, interval: {} seconds", 
+              BACKUP_INTERVAL_SECS);
+        
+        loop {
+            interval.tick().await;
+            info!("Starting scheduled backup...");
+            
+            match backup_pool.make_backup().await {
+                Ok(msg) => info!("Scheduled backup successful: {}", msg),
+                Err(e) => error!("Scheduled backup failed: {:?}", e),
+            }
+        }
+    });
+    
+    let checkpoint_pool = thread_pool.clone();
+    actix::spawn(async move {
+        let mut interval = interval(Duration::from_secs(CHECKPOINT_INTERVAL_SECS));
+        
+        info!("Scheduled checkpoint task started, interval: {} seconds", 
+              CHECKPOINT_INTERVAL_SECS);
+        
+        loop {
+            interval.tick().await;
+            info!("Starting scheduled checkpoint...");
+            
+            match checkpoint_pool.make_checkpoint().await {
+                Ok(msg) => info!("Scheduled checkpoint successful: {}", msg),
+                Err(e) => error!("Scheduled checkpoint failed: {:?}", e),
+            }
+        }
+    });
+}
+
 pub async fn start_server() -> std::io::Result<()> {
     info!("Starting server on port {}", PORT);
     let working_thread_pool = Arc::new(WorkingThreadPool::new());
@@ -217,6 +256,8 @@ pub async fn start_server() -> std::io::Result<()> {
         working_thread_pool,
         working_query: Arc::new(AtomicU64::new(0)),
     });
+    let working_thread_pool_schedule = state.working_thread_pool.clone();
+    start_scheduled_tasks(working_thread_pool_schedule);
     state.working_thread_pool.show_info();
     HttpServer::new( move || {
         App::new()
