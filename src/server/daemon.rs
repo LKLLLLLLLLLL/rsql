@@ -92,7 +92,7 @@ fn setup_signal_handler() {
 
 /// Main daemon function
 pub fn run_daemon(port: u16) -> Result<(), DaemonError> {
-    return run_sql_server().map_err(|e| DaemonError::ProcessError(e.to_string()));
+    // return run_sql_server().map_err(|e| DaemonError::ProcessError(e.to_string())); // for debug
     init_tracing();
     info!("RSQL Daemon starting, monitoring port: {}", port);
     

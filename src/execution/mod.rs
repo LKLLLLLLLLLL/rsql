@@ -9,3 +9,4 @@ pub use executor::execute;
 pub use executor::checkpoint;
 pub use executor::validate_user;
 pub use executor::disconnect_callback;
+pub use executor::backup_database;

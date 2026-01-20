@@ -1,11 +1,13 @@
 <!-- DatabasePage.vue -->
 <template>
   <div class="app">
+    <!-- DatabasePage.vue 中的 Sidebar 组件部分 -->
     <Sidebar
       :tables="tables"
       :current-table="currentTableName"
       :active-button="activeSidebarButton"
       :is-drop-mode="dropMode"
+      :ws-url="wsUrl"
       @create="showSection('create')"
       @rename="showSection('rename')"
       @drop="toggleDropMode"
@@ -16,7 +18,7 @@
     />
 
     <div class="main-content">
-      <div class="welcome-banner" v-if="username">欢迎 {{ username }}</div>
+      <!-- <div class="welcome-banner" v-if="username">欢迎 {{ username }}</div> -->
       <Topbar
         v-if="shouldShowTopBar"
         :current-table-name="currentTableName"
@@ -144,7 +146,7 @@
           <div class="page-header">
             <div class="header-content">
               <h2><Icon :path="mdiTableEdit" size="20" /> Rename Table</h2>
-              <p class="header-subtitle">Select a table to rename</p>
+              <!-- <p class="header-subtitle">Select a table to rename</p> -->
             </div>
           </div>
           <div class="table-list-content">
@@ -176,7 +178,7 @@
           <div class="page-header">
             <div class="header-content">
               <h2><Icon :path="mdiTableRemove" size="20" /> Drop Table</h2>
-              <p class="header-subtitle">Select a table to delete (this action cannot be undone)</p>
+              <!-- <p class="header-subtitle">Select a table to delete (this action cannot be undone)</p> -->
             </div>
           </div>
           <div class="table-list-content">
