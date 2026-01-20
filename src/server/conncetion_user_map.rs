@@ -42,19 +42,3 @@ impl ConnectionUserMap {
         map.remove(&connection_id);
     }
 }
-
-// pub fn get_username(connection_id: u64) -> Option<String> {
-//     ConnectionUserMap::global().get_username(connection_id)
-// }
-
-// pub fn get_all_connections() -> Vec<u64> {
-//     ConnectionUserMap::global().get_all_connections()
-// }
-
-// pub fn insert_connection(connection_id: u64, username: String) {
-//     ConnectionUserMap::global().insert_connection(connection_id, username);
-// }
-
-// pub fn remove_connection(connection_id: u64) {
-//     ConnectionUserMap::global().remove_connection(connection_id);
-// }

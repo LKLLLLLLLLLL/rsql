@@ -14,6 +14,7 @@ use super::expr_interpreter::{handle_on_expr,
     handle_update_expr,
     handle_aggr_expr
 };
+use crate::server::conncetion_user_map::ConnectionUserMap;
 use tracing::info;
 use std::collections::HashMap;
 use sqlparser::ast::{Expr};
@@ -57,7 +58,8 @@ fn get_table_object (table_name: &str, read_only: bool, tnx_id: u64) -> RsqlResu
     Ok(table_object)
 }
 
-pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64, read_only: bool) -> RsqlResult<MiddleResult> {
+pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64, read_only: bool, conn_id: u64) -> RsqlResult<MiddleResult> {
+    let username = ConnectionUserMap::global().get_username(conn_id).ok_or(RsqlError::ExecutionError(format!("cannot find user with connection id {conn_id}")))?;
     match node {
         PlanNode::TableScan { table } => {
             info!("Implement TableScan execution");
@@ -66,7 +68,7 @@ pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64, read_only: bool) -> R
         },
         PlanNode::Filter { predicate, input } => {
             info!("Implement Filter execution");
-            let input_result = execute_dml_plan_node(input, tnx_id, read_only)?;
+            let input_result = execute_dml_plan_node(input, tnx_id, read_only, conn_id)?;
             if let TableObj(table_obj) = input_result {
                 let filter_result = handle_table_obj_filter_expr(&table_obj, predicate)?;
                 Ok(TableWithFilter { table_obj, rows: filter_result }) // get temp query result after filter
@@ -83,9 +85,34 @@ pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64, read_only: bool) -> R
                 }
             }
         },
+        PlanNode::Sort { columns, asc, input } => {
+            if columns.len() > 1 {
+                return Err(RsqlError::ExecutionError(format!("Sort by multiple columns is not supported")));
+            }
+            let input_result = execute_dml_plan_node(input, tnx_id, read_only, conn_id)?;
+            if let Query { cols, rows } = input_result {
+                let sort_col_idx = cols.0.iter().position(|x| x == &columns[0]).unwrap();
+                let asc = asc[0];
+                let mut rows = rows;
+                rows.sort_by(|a, b| {
+                    let cmp = a[sort_col_idx].partial_cmp(&b[sort_col_idx]).unwrap_or(std::cmp::Ordering::Equal);
+                    if asc {
+                        cmp
+                    }else {
+                        cmp.reverse()
+                    }
+                });
+                Ok(Query {
+                    cols,
+                    rows,
+                })
+            }else {
+                Err(RsqlError::ExecutionError(format!("Sort input must be a Query")))
+            }
+        },
         PlanNode::Projection { exprs, input } => {
             info!("Implement Projection execution");
-            let input_result = execute_dml_plan_node(input, tnx_id, true)?;
+            let input_result = execute_dml_plan_node(input, tnx_id, true, conn_id)?;
             if let TableWithFilter {table_obj, rows: input_rows} = input_result {
                 // 0. handle * column
                 if let Expr::Identifier(ident) = &exprs[0] {
@@ -245,7 +272,7 @@ pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64, read_only: bool) -> R
         },
         PlanNode::Join { left, right, join_type, on } => {
             info!("Implement Join execution");
-            if let (TableObj(left_table_obj), TableObj(right_table_obj)) = (execute_dml_plan_node(left, tnx_id, read_only)?, execute_dml_plan_node(right, tnx_id, read_only)?) {
+            if let (TableObj(left_table_obj), TableObj(right_table_obj)) = (execute_dml_plan_node(left, tnx_id, read_only, conn_id)?, execute_dml_plan_node(right, tnx_id, read_only, conn_id)?) {
                 let (joined_cols, joined_rows) = handle_join(&left_table_obj, &right_table_obj, join_type, on)?;
                 Ok(TempTable { cols: joined_cols, rows: joined_rows, table_name: None })
             }else {
@@ -254,7 +281,7 @@ pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64, read_only: bool) -> R
         },
         PlanNode::Aggregate { group_by, aggr_exprs, input } => {
             info!("Implement Aggregate execution");
-            let input_result = execute_dml_plan_node(input, tnx_id, read_only)?;
+            let input_result = execute_dml_plan_node(input, tnx_id, read_only, conn_id)?;
             if let TableObj(table_obj) = input_result {
                 let (cols, rows, aggr_cols) = handle_aggr_expr(table_obj, group_by, aggr_exprs)?;
                 Ok(AggrTable {cols, rows, aggr_cols})
@@ -264,7 +291,7 @@ pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64, read_only: bool) -> R
         },
         PlanNode::Subquery { subquery, alias } => {
             info!("Implement Subquery execution");
-            let subquery_result = execute_dml_plan_node(subquery, tnx_id, read_only)?;
+            let subquery_result = execute_dml_plan_node(subquery, tnx_id, read_only, conn_id)?;
             if let Query{cols, rows} = subquery_result {
                 Ok(TempTable { cols, rows, table_name: alias.clone() })
             }else {
@@ -281,6 +308,10 @@ pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64, read_only: bool) -> R
             // check if table is system table
             if sys_catalog::is_sys_table(table_object.table_obj.get_table_id()) {
                 return Err(RsqlError::ExecutionError(format!("System table {} cannot be inserted.", table_name)));
+            }
+            let has_permission = SysCatalog::global().check_user_write_permission(tnx_id, &username)?;
+            if !has_permission {
+                return Err(RsqlError::ExecutionError(format!("User {} has no permission to insert table {}.", username, table_name)));
             }
             if let Some(cols) = columns {
                 let mut null_cols = vec![];
@@ -312,11 +343,15 @@ pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64, read_only: bool) -> R
         },
         PlanNode::Delete { input } => {
             info!("Implement Delete execution");
-            let input_result = execute_dml_plan_node(input, tnx_id, false)?;
+            let input_result = execute_dml_plan_node(input, tnx_id, false, conn_id)?;
             if let TableWithFilter{mut table_obj, rows} = input_result {
                 // check if table is system table
                 if sys_catalog::is_sys_table(table_obj.table_obj.get_table_id()) {
                     return Err(RsqlError::ExecutionError(format!("System table {:?} cannot be deleted.", SysCatalog::global().get_table_name(table_obj.table_obj.get_table_id(), tnx_id))));
+                }
+                let has_permission = SysCatalog::global().check_user_write_permission(tnx_id, &username)?;
+                if !has_permission {
+                    return Err(RsqlError::ExecutionError(format!("User {} has no permission to delete table.", username)));
                 }
                 for row in rows.iter() {
                     let pk_col_idx = table_obj.map.get(&table_obj.pk_col.0).unwrap();
@@ -329,11 +364,15 @@ pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64, read_only: bool) -> R
         },
         PlanNode::Update { input, assignments } => {
             info!("Implement Update execution");
-            let input_result = execute_dml_plan_node(input, tnx_id, false)?;
+            let input_result = execute_dml_plan_node(input, tnx_id, false, conn_id)?;
             if let TableWithFilter {mut table_obj, rows} = input_result {
                 // check if table is system table
                 if sys_catalog::is_sys_table(table_obj.table_obj.get_table_id()) {
                     return Err(RsqlError::ExecutionError(format!("System table {:?} cannot be deleted.", SysCatalog::global().get_table_name(table_obj.table_obj.get_table_id(), tnx_id))));
+                }
+                let has_permission = SysCatalog::global().check_user_write_permission(tnx_id, &username)?;
+                if !has_permission {
+                    return Err(RsqlError::ExecutionError(format!("User {} has no permission to update table.", username)));
                 }
                 handle_update_expr(&mut table_obj, assignments, &rows, tnx_id)?;
                 Ok(Mutation("Update successful".to_string()))
