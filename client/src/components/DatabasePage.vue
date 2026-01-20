@@ -358,7 +358,10 @@ function showSection(section) {
   activeSection.value = section
   activeSidebarButton.value = section
 
-  if (section === 'create' || section === 'terminal') {
+  // Only load table list automatically when entering create view.
+  // Entering the terminal should not trigger a table-list query,
+  // otherwise the terminal will receive that system response immediately.
+  if (section === 'create') {
     loadTablesList()
   }
 }
@@ -974,7 +977,7 @@ html, body {
 
 .content-container {
   flex: 1;
-  padding: 24px;
+  padding: 0; /* remove outer padding so inner pages control spacing */
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -984,8 +987,10 @@ html, body {
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: #ffffff;
-  border: 1px solid #e3e8ef;
+  /* Remove outer framed container: transparent, borderless, no padding. */
+  background: transparent;
+  border: none;
+  padding: 0;
 }
 
 .content-placeholder {

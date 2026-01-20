@@ -10,9 +10,9 @@
         <h3>Dashboard</h3>
       </div>
     </div>
-    <div>
+    <!-- <div>
       <p class="header-subtitle">A simple relational database system written in Rust.</p>
-    </div>
+    </div> -->
   </div>
 
   <div class="functions-section">
@@ -201,7 +201,7 @@ watch(() => props.wsUrl, (nv) => {
   flex-direction: column;
   background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
   color: #f1f5f9;
-  gap: 14px;
+  gap: 10px;
   position: relative;
   overflow: hidden;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
@@ -225,20 +225,22 @@ watch(() => props.wsUrl, (nv) => {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 70px;
-  height: 70px;
+  width: 60px;
+  height: 60px;
   border: 1px solid rgba(99, 102, 241, 0.2);
   box-shadow: 0 6px 16px rgba(99, 102, 241, 0.15);
 }
 
 .header-content {
   flex: 1;
+  border: 0;
 }
 
 .sidebar-header h1 {
   font-size: 1.8rem;
   font-weight: 650;
-  margin: 0 0 2px 0;
+  margin: 4px 0 0 0;
+  line-height: 1.05;
   color: #f8fafc;
   letter-spacing: 0.04em;
   background: linear-gradient(135deg, #f8fafc 0%, #cbd5e1 100%);
@@ -250,7 +252,9 @@ watch(() => props.wsUrl, (nv) => {
 .sidebar-header h3 {
   font-size: 1.2rem;
   font-weight: 500;
+  padding: 0 0 4px 0;
   margin: 0;
+  line-height: 1.1;
   color: #d4dce7;
   letter-spacing: 0.03em;
 }
@@ -258,7 +262,7 @@ watch(() => props.wsUrl, (nv) => {
 .header-container {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 10px;
 }
 
 .header-subtitle {
@@ -267,7 +271,7 @@ watch(() => props.wsUrl, (nv) => {
   margin: 0;
   font-weight: 400;
   letter-spacing: 0.02em;
-  line-height: 1.4;
+  line-height: 1.3;
 }
 
 .functions-section {

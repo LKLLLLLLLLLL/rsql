@@ -5,11 +5,11 @@
       <div class="form-section">
         <div class="form-group">
           <label for="create-table-name" class="form-label">Table Name</label>
-          <input 
-            type="text" 
-            id="create-table-name" 
+          <input
+            type="text"
+            id="create-table-name"
             v-model="tableName"
-            placeholder="e.g.: users" 
+            placeholder="e.g.: users"
             class="form-input"
           />
         </div>
@@ -23,7 +23,7 @@
             Add Column
           </button>
         </div>
-        
+
         <div class="columns-list">
           <div class="column-header">
             <span>Column Name</span>
@@ -33,13 +33,13 @@
             <span>Primary Key</span>
             <span>Action</span>
           </div>
-          
+
           <!-- 添加滚动容器 -->
           <div class="column-rows-container">
             <div v-for="(column, index) in columns" :key="index" class="column-row">
-              <input 
-                type="text" 
-                class="column-input" 
+              <input
+                type="text"
+                class="column-input"
                 v-model="column.name"
                 placeholder="Column name"
               />
@@ -52,8 +52,8 @@
                 <option value="NULL">NULL</option>
               </select>
               <div class="column-checkbox">
-                <input 
-                  type="checkbox" 
+                <input
+                  type="checkbox"
                   v-model="column.allowNull"
                   :disabled="column.primaryKey"
                   class="checkbox-input"
@@ -63,17 +63,17 @@
                 <input type="checkbox" v-model="column.unique" class="checkbox-input">
               </div>
               <div class="column-checkbox">
-                <input 
-                  type="checkbox" 
+                <input
+                  type="checkbox"
                   v-model="column.primaryKey"
                   @change="handlePrimaryKeyChange(index)"
                   class="checkbox-input"
                 >
               </div>
-              <button 
-                type="button" 
-                class="remove-column-btn" 
-                @click="removeColumn(index)" 
+              <button
+                type="button"
+                class="remove-column-btn"
+                @click="removeColumn(index)"
                 :disabled="columns.length <= 1"
               >
                 <Icon :path="mdiTrashCanOutline" size="16" />
@@ -169,10 +169,12 @@ function submitCreate() {
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: #ffffff;
-  border-radius: 12px;
-  border: 1px solid #e3e8ef;
-  overflow: hidden;
+  /* remove outer framed container; inner .create-panel has its own padding */
+  background: transparent;
+  border-radius: 0;
+  border: none;
+  overflow: visible;
+  padding: 0;
 }
 
 .page-header {

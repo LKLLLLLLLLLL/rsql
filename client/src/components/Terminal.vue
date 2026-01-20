@@ -414,6 +414,29 @@ function formatCellValue(cell) {
   return str.length > 50 ? str.substring(0, 47) + '...' : str
 }
 
+function onServiceMessage(payload) {
+  try {
+    const parsedTable = parseTableFromResponse(payload)
+    const textContent = formatResultContent(payload)
+    if (!parsedTable && !textContent) return
+
+    // ensure timestamp and success fields for the UI
+    const entry = {
+      ...payload,
+      parsedTable,
+      textContent,
+      timestamp: payload?.rayon_response?.timestamp || Math.floor(Date.now() / 1000),
+      success: payload?.success !== undefined ? payload.success : true,
+    }
+
+    codeResults.value.push(entry)
+    emit('sql-executed', payload)
+    scrollToBottom()
+  } catch (e) {
+    console.warn('onServiceMessage parse failed', e, payload)
+  }
+}
+
 onMounted(() => {
   addMessageListener(onServiceMessage)
 })
@@ -433,9 +456,10 @@ defineExpose({
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: #ffffff;
-  border-radius: 12px;
-  border: 1px solid #e3e8ef;
+  /* remove outer framed container: let parent/inner panels control visuals */
+  background: transparent;
+  border: none;
+  border-radius: 0;
 }
 
 .page-header {
