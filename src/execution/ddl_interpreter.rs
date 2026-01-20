@@ -2,17 +2,26 @@ use crate::catalog::{SysCatalog, sys_catalog};
 use crate::common::{RsqlResult, RsqlError};
 use crate::sql::plan::{PlanNode};
 use crate::sql::plan::DdlOperation;
+use crate::server::conncetion_user_map::ConnectionUserMap;
 use crate::storage::Table;
 use super::result::{ExecutionResult::{self, Ddl}};
 use tracing::info;
 
 /// table and index relevant sql statements
-pub fn execute_ddl_plan_node(node: &PlanNode, tnx_id: u64) -> RsqlResult<ExecutionResult> {
+pub fn execute_ddl_plan_node(node: &PlanNode, tnx_id: u64, connection_id: u64) -> RsqlResult<ExecutionResult> {
     let PlanNode::DDL { op } = node else {
         return Err(RsqlError::InvalidInput("Not a DDL plan node".to_string()));
     };
+    let username = ConnectionUserMap::global()
+        .get_username(connection_id)
+        .ok_or(RsqlError::ExecutionError("Failed to get username from connection ID".to_string()))?;
     match op {
         DdlOperation::CreateTable { table_name, schema, if_not_exists} => {
+            // verify permision
+            let has_permission = SysCatalog::global().check_user_write_permission(tnx_id, &username)?;
+            if !has_permission {
+                return Err(RsqlError::ExecutionError(format!("User {} does not have permission to create table.", username)));
+            }
             // check if table exists
             let table_id = SysCatalog::global().get_table_id(tnx_id, table_name)?;
             if table_id.is_some() {
@@ -30,6 +39,11 @@ pub fn execute_ddl_plan_node(node: &PlanNode, tnx_id: u64) -> RsqlResult<Executi
             Ok(Ddl(format!("Table {} created successfully.", table_name)))
         },
         DdlOperation::RenameTable {old_name, new_name, if_exists} => {
+            // verify permision
+            let has_permission = SysCatalog::global().check_user_write_permission(tnx_id, &username)?;
+            if !has_permission {
+                return Err(RsqlError::ExecutionError(format!("User {} does not have permission to create table.", username)));
+            }
             // check if old table exists
             let table_id = SysCatalog::global().get_table_id(tnx_id, old_name)?;
             if table_id.is_none() {
@@ -54,6 +68,11 @@ pub fn execute_ddl_plan_node(node: &PlanNode, tnx_id: u64) -> RsqlResult<Executi
             Ok(Ddl(format!("Table {} renamed to {} successfully.", old_name, new_name)))
         },
         DdlOperation::RenameColumn { table_name, old_name, new_name } => {
+            // verify permision
+            let has_permission = SysCatalog::global().check_user_write_permission(tnx_id, &username)?;
+            if !has_permission {
+                return Err(RsqlError::ExecutionError(format!("User {} does not have permission to create table.", username)));
+            }
             // check if table exists
             let table_id = SysCatalog::global().get_table_id(tnx_id, table_name)?;
             if table_id.is_none() {
@@ -69,6 +88,11 @@ pub fn execute_ddl_plan_node(node: &PlanNode, tnx_id: u64) -> RsqlResult<Executi
             Ok(Ddl(format!("Column {} renamed to {} in table {} successfully.", old_name, new_name, table_name)))
         },
         DdlOperation::DropTable { table_name, if_exists} => {
+            // verify permision
+            let has_permission = SysCatalog::global().check_user_write_permission(tnx_id, &username)?;
+            if !has_permission {
+                return Err(RsqlError::ExecutionError(format!("User {} does not have permission to create table.", username)));
+            }
             // check if table exists
             let table_id = SysCatalog::global().get_table_id(tnx_id, table_name)?;
             if table_id.is_none() {
@@ -98,6 +122,11 @@ pub fn execute_ddl_plan_node(node: &PlanNode, tnx_id: u64) -> RsqlResult<Executi
             unique,
             if_not_exists,
         } => {
+            // verify permision
+            let has_permission = SysCatalog::global().check_user_write_permission(tnx_id, &username)?;
+            if !has_permission {
+                return Err(RsqlError::ExecutionError(format!("User {} does not have permission to create table.", username)));
+            }
             // check if index exists
             let index_id = SysCatalog::global().get_index_id(tnx_id, index_name)?;
             if index_id.is_some() {

@@ -148,7 +148,7 @@ fn execute_inner(sql: &str, connection_id: u64) -> RsqlResult<Vec<ExecutionResul
                         TnxManager::global().begin_transaction(connection_id)
                     },
                 };
-                let res = execute_dcl_plan_node(plan_node, tnx_id)?;
+                let res = execute_dcl_plan_node(plan_node, tnx_id, connection_id)?;
                 if auto_tnx {
                     commit_transaction(connection_id)?;
                 };
@@ -165,7 +165,7 @@ fn execute_inner(sql: &str, connection_id: u64) -> RsqlResult<Vec<ExecutionResul
                         TnxManager::global().begin_transaction(connection_id)
                     },
                 };
-                let res = execute_ddl_plan_node(plan_node, tnx_id)?;
+                let res = execute_ddl_plan_node(plan_node, tnx_id, connection_id)?;
                 if auto_tnx {
                     commit_transaction(connection_id)?;
                 };
