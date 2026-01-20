@@ -53,6 +53,21 @@ pub fn execute_ddl_plan_node(node: &PlanNode, tnx_id: u64) -> RsqlResult<Executi
             SysCatalog::global().rename_table(tnx_id, table_id, new_name)?;
             Ok(Ddl(format!("Table {} renamed to {} successfully.", old_name, new_name)))
         },
+        DdlOperation::RenameColumn { table_name, old_name, new_name } => {
+            // check if table exists
+            let table_id = SysCatalog::global().get_table_id(tnx_id, table_name)?;
+            if table_id.is_none() {
+                return Err(RsqlError::ExecutionError(format!("Table {} does not exist.", table_name)));
+            }
+            let table_id = table_id.unwrap();
+            // check if table is system table
+            if sys_catalog::is_sys_table(table_id) {
+                return Err(RsqlError::ExecutionError(format!("System table {} cannot be modified.", table_name)));
+            }
+            // rename column in sys catalog
+            SysCatalog::global().rename_column(tnx_id, table_id, old_name, new_name)?;
+            Ok(Ddl(format!("Column {} renamed to {} in table {} successfully.", old_name, new_name, table_name)))
+        },
         DdlOperation::DropTable { table_name, if_exists} => {
             // check if table exists
             let table_id = SysCatalog::global().get_table_id(tnx_id, table_name)?;

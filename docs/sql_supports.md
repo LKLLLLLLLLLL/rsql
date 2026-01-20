@@ -52,6 +52,7 @@ CREATE UNIQUE INDEX idx_email ON users(email) IF NOT EXISTS;
 Supported:
 - `ALTER TABLE RENAME TO`
 - `IF EXISTS` clause
+- `ALTER TABLE RENAME COLUMN TO`: Only support renaming unindexed columns
 
 e.g.
 ```sql
@@ -149,6 +150,8 @@ Supported:
 - `IF NOT EXISTS` clause
 - `PASSWORD` specification
 
+Created user will have default, read-only permissions on all existing tables.
+
 e.g.
 ```sql
 CREATE USER alice PASSWORD 'securepassword' IF NOT EXISTS;
@@ -162,4 +165,22 @@ Supported:
 e.g.
 ```sql
 DROP USER IF EXISTS alice;
+```
+
+### 4.3 GRANT
+Supported:
+- `GRANT WRITE TO user`
+
+e.g.
+```sql
+GRANT WRITE TO alice;
+```
+
+### 4.4 REVOKE
+Supported:
+- `REVOKE WRITE FROM user`
+
+e.g.
+```sql
+REVOKE WRITE FROM alice;
 ```
