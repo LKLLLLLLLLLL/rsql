@@ -1,6 +1,6 @@
 <!-- DataTable.vue -->
 <template>
-  <div class="table-container">
+  <div class="table-container" :style="containerStyle">
     <div class="table-wrapper">
       <VirtualList
         :key="renderKey"
@@ -9,6 +9,7 @@
         :leading-headers="leadingHeaders"
         :visible-count="15"
         :row-height="mode === 'update' ? 56 : 52"
+        :max-height="maxHeight"
         class="virtual-table"
       >
         <template #leading-cell="{ rowIndex, leadingIndex }">
@@ -112,7 +113,9 @@ const props = defineProps({
   editingRow: { type: Number, default: null },
   draftValues: { type: Array, default: () => [] },
   renderKey: { type: Number, default: 0 },
-  columnMetadata: { type: Array, default: () => [] }
+  columnMetadata: { type: Array, default: () => [] },
+  maxHeight: { type: [Number, String, null], default: null },
+  compact: { type: Boolean, default: false }
 })
 
 const emit = defineEmits([
@@ -142,6 +145,13 @@ const leadingHeaders = computed(() => {
   if (props.mode === 'delete') return ['Action', '#']
   if (props.mode === 'update') return ['Action', '#']
   return ['#']
+})
+
+const containerStyle = computed(() => {
+  if (props.compact) {
+    return { minHeight: 'auto', height: 'auto' }
+  }
+  return {}
 })
 
 function getDraftValue(colIndex) {

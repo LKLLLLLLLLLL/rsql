@@ -40,10 +40,21 @@
               </span>
             </div>
             <div class="result-content">
-              <pre v-if="item.success">{{ formatResultContent(item) }}</pre>
-              <pre v-else class="error">执行的SQL语句：{{ item.rayon_response.request_content || codeInput || '(unknown)' }}
+              <pre v-if="!item.success" class="error">执行的SQL语句：{{ item.rayon_response.request_content || codeInput || '(unknown)' }}
 
 错误信息：{{ item.rayon_response.error || '未知错误' }}</pre>
+              <div v-else-if="item.parsedTable" class="result-table-wrapper">
+                <div class="result-sql">执行的SQL语句：{{ item.rayon_response.request_content || codeInput || '(unknown)' }}</div>
+                <DataTable
+                  :headers="item.parsedTable.headers"
+                  :rows="item.parsedTable.rows"
+                  mode="view"
+                  :max-height="Math.min(((item.parsedTable.rows?.length || 1) * 52) + 56, 600)"
+                  compact
+                  class="result-table"
+                />
+              </div>
+              <pre v-else>{{ formatResultContent(item) }}</pre>
             </div>
             <div class="result-footer">
               <span>Connection: {{ item.connection_id }}</span>
@@ -60,6 +71,7 @@
 import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import SqlEditor from './SqlEditor.vue'
 import Icon from './Icon.vue'
+import DataTable from './DataTable.vue'
 import { mdiLanDisconnect, mdiConsole } from '@mdi/js'
 
 const props = defineProps({
@@ -94,7 +106,8 @@ function connectWebSocket() {
   socket.onmessage = (ev) => {
     try {
       const data = JSON.parse(ev.data)
-      codeResults.value.push(data)
+      const parsedTable = parseTableFromResponse(data)
+      codeResults.value.push({ ...data, parsedTable })
       emit('sql-executed', data)
       // 自动滚动到底部
       scrollToBottom()
@@ -102,6 +115,40 @@ function connectWebSocket() {
       console.warn('Parse WebSocket message failed', e, ev.data)
     }
   }
+}
+
+function parseTableFromResponse(payload) {
+  const uniform = payload?.rayon_response?.uniform_result
+  if (Array.isArray(uniform) && uniform[0]?.data?.rows && uniform[0]?.data?.columns) {
+    return {
+      headers: uniform[0].data.columns.map(col => String(col || '')),
+      rows: uniform[0].data.rows
+    }
+  }
+
+  const query = payload?.Query
+  if (query?.rows && (query?.columns || query?.cols?.[0])) {
+    const cols = query.columns || query.cols?.[0] || []
+    return {
+      headers: cols.map(col => String(col || '')),
+      rows: query.rows
+    }
+  }
+
+  const responseContent = payload?.rayon_response?.response_content
+  if (Array.isArray(responseContent)) {
+    for (const item of responseContent) {
+      if (item?.Query?.rows && (item.Query.columns || item.Query.cols?.[0])) {
+        const cols = item.Query.columns || item.Query.cols?.[0] || []
+        return {
+          headers: cols.map(col => String(col || '')),
+          rows: item.Query.rows
+        }
+      }
+    }
+  }
+
+  return null
 }
 
 function scrollToBottom() {
@@ -516,6 +563,18 @@ defineExpose({
   border-color: #d1d5db;
 }
 
+.result-table {
+  margin: 12px 0;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.result-table.table-container {
+  min-height: auto;
+  height: auto;
+}
+
 .result-header-item {
   display: flex;
   justify-content: space-between;
@@ -545,6 +604,22 @@ defineExpose({
 
 .result-content {
   margin: 12px 0;
+}
+
+.result-table-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.result-sql {
+  font-size: 0.9rem;
+  color: #374151;
+  background: #f8fafc;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 8px 12px;
+  word-break: break-all;
 }
 
 .result-content pre {
