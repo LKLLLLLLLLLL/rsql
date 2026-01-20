@@ -112,6 +112,10 @@ fn recovery_wal() -> RsqlResult<u64> {
 
 pub fn init_database() -> RsqlResult<()> {
     info!("Initializing database...");
+    // If single file mode is enabled, unpack the archive first
+    if config::SINGLE_FILE_MODE {
+        storage::archiver::init_single_file()?;
+    }
     let max_tnx_id = recovery_wal()?;
     TnxManager::init(max_tnx_id + 1);
     catalog::SysCatalog::init()?;
@@ -123,4 +127,10 @@ pub fn run() {
     init_log();
     init_database().expect("Failed to initialize database");
     server::daemon::daemon();
+
+    // After daemon returns (server shut down)
+    if config::SINGLE_FILE_MODE {
+        info!("Single file mode enabled, archiving database...");
+        storage::archiver::archive_single_file().expect("Failed to archive single file on shutdown");
+    }
 }

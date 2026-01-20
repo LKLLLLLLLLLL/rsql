@@ -11,6 +11,8 @@ pub const LOG_PATH: &str = "./logs/rsql.log";
 pub const THREAD_MAXNUM: usize = 0;
 
 pub const DB_DIR: &str = "./data";
+pub const SINGLE_FILE_MODE: bool = true; // unstable feature
+
 pub const MAX_WAL_SIZE: u64 = 10 * 1024 * 1024; // 10 MB
 pub const MAX_VARCHAR_SIZE: usize = 65535; // 64 KB
 pub const MAX_COL_NAME_SIZE: usize = 64; // 64 bytes
