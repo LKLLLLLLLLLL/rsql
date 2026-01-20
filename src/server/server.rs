@@ -216,12 +216,10 @@ fn start_scheduled_tasks(thread_pool: Arc<WorkingThreadPool>) {
     actix::spawn(async move {
         let mut interval = interval(Duration::from_secs(BACKUP_INTERVAL_SECS));
         
-        info!("Scheduled backup task started, interval: {} seconds", 
-              BACKUP_INTERVAL_SECS);
+        info!("Scheduled backup task started, interval: {} seconds", BACKUP_INTERVAL_SECS);
         
         loop {
             interval.tick().await;
-            info!("Starting scheduled backup...");
             
             match backup_pool.make_backup().await {
                 Ok(msg) => info!("Scheduled backup successful: {}", msg),
@@ -234,12 +232,10 @@ fn start_scheduled_tasks(thread_pool: Arc<WorkingThreadPool>) {
     actix::spawn(async move {
         let mut interval = interval(Duration::from_secs(CHECKPOINT_INTERVAL_SECS));
         
-        info!("Scheduled checkpoint task started, interval: {} seconds", 
-              CHECKPOINT_INTERVAL_SECS);
+        info!("Scheduled checkpoint task started, interval: {} seconds", CHECKPOINT_INTERVAL_SECS);
         
         loop {
             interval.tick().await;
-            info!("Starting scheduled checkpoint...");
             
             match checkpoint_pool.make_checkpoint().await {
                 Ok(msg) => info!("Scheduled checkpoint successful: {}", msg),
