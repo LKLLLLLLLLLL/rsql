@@ -52,13 +52,13 @@
       <h3>TABLE LIST</h3>
       <span class="table-count">{{ tables.length }} tables</span>
     </div>
-    <div v-for="table in tables" :key="table" class="table-item" :class="{ active: currentTable === table }" @click="handleTableSelect(table)">
+    <div v-for="table in tables" :key="table.tableName || table.tableId" class="table-item" :class="{ active: currentTable === table.tableName }" @click="handleTableSelect(table)">
       <div class="table-content">
         <div class="table-icon">
           <Icon :path="mdiTable" size="16" />
         </div>
-        <span class="table-name">{{ table }}</span>
-        <button v-if="isDropMode" class="table-delete-btn" @click.stop="emit('delete-table', table)">
+        <span class="table-name">{{ table.tableName }}</span>
+        <button v-if="isDropMode" class="table-delete-btn" @click.stop="emit('delete-table', table.tableName)">
           <Icon :path="mdiTrashCanOutline" size="14" />
         </button>
       </div>
