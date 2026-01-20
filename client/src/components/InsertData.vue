@@ -109,6 +109,43 @@ function validateRows() {
     }
   })
   
+  // 验证数据类型
+  const typeErrors = []
+  rows.value.forEach((row, rowIndex) => {
+    const rowTypeErrors = []
+    props.columns.forEach(col => {
+      const value = row[col.name]?.trim()
+      if (!value) return // 空值跳过（允许NULL时）
+      
+      const colType = col.type?.toUpperCase() || 'VARCHAR'
+      
+      // 整数类型验证
+      if (colType === 'INTEGER' || colType === 'INT') {
+        if (!/^-?\d+$/.test(value)) {
+          rowTypeErrors.push(`"${col.name}" 应为整数，但收到 "${value}"`)
+        }
+      }
+      
+      // 浮点数类型验证
+      if (colType === 'FLOAT' || colType === 'DOUBLE') {
+        if (!/^-?\d+(\.\d+)?$/.test(value)) {
+          rowTypeErrors.push(`"${col.name}" 应为浮点数，但收到 "${value}"`)
+        }
+      }
+      
+      // 布尔值类型验证
+      if (colType === 'BOOLEAN' || colType === 'BOOL') {
+        if (!['true', '1', 'yes', 't', 'y', 'false', '0', 'no', 'f', 'n'].includes(value.toLowerCase())) {
+          rowTypeErrors.push(`"${col.name}" 应为布尔值 (true/false/0/1)，但收到 "${value}"`)
+        }
+      }
+    })
+    
+    if (rowTypeErrors.length > 0) {
+      typeErrors.push({ row: rowIndex + 1, errors: rowTypeErrors })
+    }
+  })
+  
   // 验证唯一约束
   const uniqueErrors = []
   const uniqueColumns = props.columns.filter(col => col.unique)
@@ -137,11 +174,11 @@ function validateRows() {
     }
   })
   
-  return { errors, pkErrors, uniqueErrors }
+  return { errors, pkErrors, typeErrors, uniqueErrors }
 }
 
 function submitInsert() {
-  const { errors, pkErrors, uniqueErrors } = validateRows()
+  const { errors, pkErrors, typeErrors, uniqueErrors } = validateRows()
   
   if (errors.length > 0) {
     const msg = errors.map(e => `行 ${e.row} 未填写必填列：${e.columns.join(', ')}`).join('\n')
@@ -152,6 +189,15 @@ function submitInsert() {
   if (pkErrors.length > 0) {
     const msg = pkErrors.map(e => `行 ${e.row} 主键未填写：${e.columns.join(', ')}`).join('\n')
     alert(msg)
+    return
+  }
+  
+  if (typeErrors.length > 0) {
+    const msg = typeErrors.map(e => {
+      const errorDetails = e.errors.join('\n  ')
+      return `行 ${e.row} 数据类型错误：\n  ${errorDetails}`
+    }).join('\n\n')
+    alert('类型验证失败：\n\n' + msg)
     return
   }
   
@@ -385,7 +431,7 @@ watch(() => props.columns, () => {
 }
 
 .submit-insert-btn {
-  align-self: flex-start;
+  align-self: flex-end;
   padding: 10px 24px;
   background-color: #10b981;
   color: white;

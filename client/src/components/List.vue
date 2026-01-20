@@ -22,7 +22,7 @@
             }"
           >
             <div class="header-content">
-              <span>{{ header }}</span>
+              <span>{{ formatHeaderWithType(header) }}</span>
             </div>
           </th>
         </tr>
@@ -106,7 +106,8 @@ const props = defineProps({
   buffer: { type: Number, default: 4 },
   minWidth: { type: Number, default: 140 },
   maxWidth: { type: Number, default: 240 },
-  enableHighlighting: { type: Boolean, default: false }
+  enableHighlighting: { type: Boolean, default: false },
+  columnMetadata: { type: Array, default: () => [] }
 })
 
 const emit = defineEmits(['row-click', 'cell-click', 'row-double-click'])
@@ -144,6 +145,28 @@ const headerHeight = computed(() => {
   // 固定的表头高度，不随内容变化
   return 56;
 })
+
+// 调试：监控 columnMetadata
+const debugColumnMetadata = computed(() => {
+
+  return props.columnMetadata
+})
+
+// Get column type by name from metadata
+const getColumnType = (headerName) => {
+  if (!Array.isArray(props.columnMetadata) || props.columnMetadata.length === 0) {
+    return 'UNKNOWN'
+  }
+  const meta = props.columnMetadata.find(m => m.name === headerName)
+
+  return meta?.type || 'UNKNOWN'
+}
+
+// Format header with type
+const formatHeaderWithType = (header) => {
+  const type = getColumnType(header)
+  return `${header} (${type})`
+}
 
 // Cell formatting
 const formatValue = (value) => {

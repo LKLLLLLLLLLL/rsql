@@ -192,7 +192,10 @@ function connectWebSocket() {
   }
 }
 
-function handleButtonClick(button) {  
+function handleButtonClick(button) {
+  // 点击功能按钮时，清除表的选中状态
+  emit('clear-selection')
+  
   if (button === 'create') {
     emit('create')
   } else if (button === 'rename') {

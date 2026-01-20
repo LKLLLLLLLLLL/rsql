@@ -9,7 +9,7 @@
             type="text" 
             id="create-table-name" 
             v-model="tableName"
-            placeholder="e.g., users" 
+            placeholder="e.g.: users" 
             class="form-input"
           />
         </div>

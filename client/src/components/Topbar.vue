@@ -14,25 +14,25 @@
     
     <div class="action-buttons">
       <button 
+        v-if="currentMode === 'table'"
         class="action-btn insert" 
-        :class="{ active: currentMode === 'insert', disabled: isButtonDisabled }"
-        :disabled="isButtonDisabled"
+        :class="{ active: currentMode === 'insert' }"
         @click="emit('insert')">
         <Icon :path="mdiPlus" size="16" />
         <span>Insert</span>
       </button>
       <button 
+        v-if="currentMode === 'table'"
         class="action-btn delete" 
-        :class="{ active: currentMode === 'delete', disabled: isButtonDisabled }"
-        :disabled="isButtonDisabled"
+        :class="{ active: currentMode === 'delete' }"
         @click="emit('delete')">
         <Icon :path="mdiDelete" size="16" />
         <span>Delete</span>
       </button>
       <button 
+        v-if="currentMode === 'table'"
         class="action-btn update" 
-        :class="{ active: currentMode === 'update', disabled: isButtonDisabled }"
-        :disabled="isButtonDisabled"
+        :class="{ active: currentMode === 'update' }"
         @click="emit('update')">
         <Icon :path="mdiPencil" size="16" />
         <span>Update</span>

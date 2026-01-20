@@ -1,6 +1,11 @@
 <!-- DataTable.vue -->
 <template>
   <div class="table-container" :style="containerStyle">
+    <!-- delete 和 update 模式的返回按钮 -->
+    <div v-if="mode === 'delete' || mode === 'update'" class="mode-header">
+      <button class="back-btn" @click="emit('back')">← 返回表格视图</button>
+    </div>
+    
     <div class="table-wrapper">
       <VirtualList
         :key="renderKey"
@@ -10,6 +15,7 @@
         :visible-count="15"
         :row-height="mode === 'update' ? 56 : 52"
         :max-height="maxHeight"
+        :column-metadata="columnMetadata"
         class="virtual-table"
       >
         <template #leading-cell="{ rowIndex, leadingIndex }">
@@ -125,7 +131,8 @@ const emit = defineEmits([
   'start-update',
   'cancel-update',
   'confirm-update',
-  'update-draft'
+  'update-draft',
+  'back'
 ])
 
 const updateTime = ref(new Date())
@@ -179,6 +186,37 @@ onMounted(() => {
   flex-direction: column;
   border: 1px solid #e3e8ef;
   min-height: 400px;
+}
+
+.mode-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid #e3e8ef;
+  background-color: #f9fafb;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.back-btn {
+  padding: 8px 16px;
+  background: transparent;
+  color: #6b7280;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 500;
+  font-size: 0.9rem;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.back-btn:hover {
+  background-color: #ffffff;
+  color: #1a1f36;
+  border-color: #9ca3af;
 }
 
 .page-header {
@@ -282,6 +320,7 @@ onMounted(() => {
   justify-content: center;
   gap: 8px;
   width: 100%;
+  padding: 0 8px;
 }
 
 .delete-row-btn,
