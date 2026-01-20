@@ -11,7 +11,7 @@ pub const LOG_PATH: &str = "./logs/rsql.log";
 pub const THREAD_MAXNUM: usize = 0;
 
 pub const DB_DIR: &str = "./data";
-pub const SINGLE_FILE_MODE: bool = true; // unstable feature
+pub const SINGLE_FILE_MODE: bool = false; // unstable feature
 
 pub const MAX_WAL_SIZE: u64 = 10 * 1024 * 1024; // 10 MB
 pub const MAX_VARCHAR_SIZE: usize = 65535; // 64 KB
@@ -20,7 +20,7 @@ pub const MAX_USERNAME_SIZE: usize = 64; // 64 bytes
 pub const MAX_TABLE_NAME_SIZE: usize = 64; // 64 bytes
 
 pub const MAX_PAGE_CACHE_BYTES: usize = 100 * 1024 * 1024; // 100 MB
-pub const PAGE_SIZE_BYTES: usize = 4 * 1024; // 4 KB
+pub const PAGE_SIZE_BYTES: usize = 16 * 1024; // 16 KB
 
 pub const DEFAULT_USERNAME: &str = "root";
 pub const DEFAULT_PASSWORD: &str = "password";
