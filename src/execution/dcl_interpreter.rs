@@ -16,7 +16,7 @@ pub fn execute_dcl_plan_node(node: &PlanNode, tnx_id: u64, connection_id: u64) -
             // verify permision
             let has_permission = SysCatalog::global().check_user_write_permission(tnx_id, &username)?;
             if !has_permission {
-                return Err(RsqlError::ExecutionError(format!("User {} does not have permission to create table.", username)));
+                return Err(RsqlError::ExecutionError(format!("User {} does not have permission to create user.", username)));
             }
             // check if user exists
             let all_users = SysCatalog::global().get_all_users(tnx_id)?;
@@ -38,7 +38,7 @@ pub fn execute_dcl_plan_node(node: &PlanNode, tnx_id: u64, connection_id: u64) -
             // verify permision
             let has_permission = SysCatalog::global().check_user_write_permission(tnx_id, &username)?;
             if !has_permission {
-                return Err(RsqlError::ExecutionError(format!("User {} does not have permission to create table.", username)));
+                return Err(RsqlError::ExecutionError(format!("User {} does not have permission to drop user.", username)));
             }
             // check if user exists
             let all_users = SysCatalog::global().get_all_users(tnx_id)?;
@@ -58,7 +58,7 @@ pub fn execute_dcl_plan_node(node: &PlanNode, tnx_id: u64, connection_id: u64) -
             // verify permision
             let has_permission = SysCatalog::global().check_user_write_permission(tnx_id, &username)?;
             if !has_permission {
-                return Err(RsqlError::ExecutionError(format!("User {} does not have permission to create table.", username)));
+                return Err(RsqlError::ExecutionError(format!("User {} does not have permission to grant write permission.", username)));
             }
             if privilege.to_uppercase() != "WRITE" {
                 return Err(RsqlError::ExecutionError(format!("Unsupported privilege: {}", privilege)));
@@ -82,7 +82,7 @@ pub fn execute_dcl_plan_node(node: &PlanNode, tnx_id: u64, connection_id: u64) -
             // verify permision
             let has_permission = SysCatalog::global().check_user_write_permission(tnx_id, &username)?;
             if !has_permission {
-                return Err(RsqlError::ExecutionError(format!("User {} does not have permission to create table.", username)));
+                return Err(RsqlError::ExecutionError(format!("User {} does not have permission to revoke write permission.", username)));
             }
             if privilege.to_uppercase() != "WRITE" {
                 return Err(RsqlError::ExecutionError(format!("Unsupported privilege: {}", privilege)));

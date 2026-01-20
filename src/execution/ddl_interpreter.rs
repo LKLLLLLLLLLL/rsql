@@ -42,7 +42,7 @@ pub fn execute_ddl_plan_node(node: &PlanNode, tnx_id: u64, connection_id: u64) -
             // verify permision
             let has_permission = SysCatalog::global().check_user_write_permission(tnx_id, &username)?;
             if !has_permission {
-                return Err(RsqlError::ExecutionError(format!("User {} does not have permission to create table.", username)));
+                return Err(RsqlError::ExecutionError(format!("User {} does not have permission to rename table.", username)));
             }
             // check if old table exists
             let table_id = SysCatalog::global().get_table_id(tnx_id, old_name)?;
@@ -71,7 +71,7 @@ pub fn execute_ddl_plan_node(node: &PlanNode, tnx_id: u64, connection_id: u64) -
             // verify permision
             let has_permission = SysCatalog::global().check_user_write_permission(tnx_id, &username)?;
             if !has_permission {
-                return Err(RsqlError::ExecutionError(format!("User {} does not have permission to create table.", username)));
+                return Err(RsqlError::ExecutionError(format!("User {} does not have permission to rename column.", username)));
             }
             // check if table exists
             let table_id = SysCatalog::global().get_table_id(tnx_id, table_name)?;
@@ -91,7 +91,7 @@ pub fn execute_ddl_plan_node(node: &PlanNode, tnx_id: u64, connection_id: u64) -
             // verify permision
             let has_permission = SysCatalog::global().check_user_write_permission(tnx_id, &username)?;
             if !has_permission {
-                return Err(RsqlError::ExecutionError(format!("User {} does not have permission to create table.", username)));
+                return Err(RsqlError::ExecutionError(format!("User {} does not have permission to drop table.", username)));
             }
             // check if table exists
             let table_id = SysCatalog::global().get_table_id(tnx_id, table_name)?;
@@ -125,7 +125,7 @@ pub fn execute_ddl_plan_node(node: &PlanNode, tnx_id: u64, connection_id: u64) -
             // verify permision
             let has_permission = SysCatalog::global().check_user_write_permission(tnx_id, &username)?;
             if !has_permission {
-                return Err(RsqlError::ExecutionError(format!("User {} does not have permission to create table.", username)));
+                return Err(RsqlError::ExecutionError(format!("User {} does not have permission to create index.", username)));
             }
             // check if index exists
             let index_id = SysCatalog::global().get_index_id(tnx_id, index_name)?;

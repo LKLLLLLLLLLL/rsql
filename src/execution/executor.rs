@@ -182,7 +182,7 @@ fn execute_inner(sql: &str, connection_id: u64) -> RsqlResult<Vec<ExecutionResul
                         TnxManager::global().begin_transaction(connection_id)
                     },
                 };
-                let res = execute_dml_plan_node(plan_node, tnx_id, false)?;
+                let res = execute_dml_plan_node(plan_node, tnx_id, false, connection_id)?;
                 let res = res.to_exec_result()?;
                 if auto_tnx {
                     commit_transaction(connection_id)?;
