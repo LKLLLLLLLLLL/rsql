@@ -8,11 +8,15 @@ use tracing::info;
 /// user relevent sql statements
 pub fn execute_dcl_plan_node(node: &PlanNode, tnx_id: u64) -> RsqlResult<ExecutionResult> {
     match node {
-        PlanNode::CreateUser {user_name, password} => {
+        PlanNode::CreateUser {user_name, password, if_not_exists} => {
             // check if user exists
             let all_users = SysCatalog::global().get_all_users(tnx_id)?;
             if all_users.contains(user_name) {
-                return Err(RsqlError::ExecutionError(format!("User {} already exists.", user_name)));
+                if *if_not_exists {
+                    return Ok(Dcl(format!("User {} already exists, skipping create user.", user_name)));
+                } else {
+                    return Err(RsqlError::ExecutionError(format!("User {} already exists.", user_name)));
+                }
             }
             let password = match password {
                 Some(pw) => pw.clone(),
@@ -21,12 +25,11 @@ pub fn execute_dcl_plan_node(node: &PlanNode, tnx_id: u64) -> RsqlResult<Executi
             SysCatalog::global().register_user(tnx_id, user_name, &password)?;
             Ok(Dcl(format!("User {} created successfully.", user_name)))
         },
-        PlanNode::DropUser {user_name} => {
-            let if_exists = false;
+        PlanNode::DropUser {user_name, if_exists} => {
             // check if user exists
             let all_users = SysCatalog::global().get_all_users(tnx_id)?;
             if !all_users.contains(user_name) {
-                if if_exists {
+                if *if_exists {
                     info!("User {} does not exist, skipping drop user.", user_name);
                     return Ok(Dcl(format!("User {} does not exist, skipping drop user.", user_name)));
                 } else {

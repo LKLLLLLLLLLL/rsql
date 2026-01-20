@@ -102,9 +102,10 @@ watch(
   () => props.disabled,
   (newDisabled) => {
     if (editorView) {
-      editorView.dispatch({
-        effects: EditorView.editable.of(!newDisabled)
-      })
+      editorView.contentDOM.contentEditable = !newDisabled
+      // 更新编辑器状态
+      const view = editorView
+      view.dispatch({})
     }
   }
 )
@@ -126,12 +127,12 @@ onBeforeUnmount(() => {
 
 .sql-editor :deep(.cm-editor) {
   height: 100%;
-  font-size: 14px;
+  font-size: 24px;
   font-family: 'Consolas', 'Courier New', monospace;
 }
 
 .sql-editor :deep(.cm-content) {
-  font-size: 14px;
+  font-size: 24px;
 }
 
 .sql-editor :deep(.cm-line) {

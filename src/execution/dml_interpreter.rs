@@ -1,3 +1,4 @@
+use crate::catalog::sys_catalog::is_sys_table;
 use crate::catalog::{SysCatalog, sys_catalog};
 use crate::common::{RsqlResult, RsqlError};
 use crate::sql::plan::{PlanNode, JoinType};
@@ -29,7 +30,7 @@ fn get_table_object (table_name: &str, read_only: bool, tnx_id: u64) -> RsqlResu
     };
     // 1. get Table
     let table_schema = SysCatalog::global().get_table_schema(tnx_id, table_id)?;
-    let table_obj = Table::from(table_id, table_schema.clone(), false)?;
+    let table_obj = Table::from(table_id, table_schema.clone(), is_sys_table(table_id))?;
     // 2. construct TableObject
     let mut map = HashMap::new();
     let mut cols_name = vec![];

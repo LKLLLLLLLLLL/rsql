@@ -95,6 +95,9 @@ impl Allocator {
             first_free_heap_page: 0, // 0 means no free heap chunk
         }
     }
+    pub fn reset_begin_with(&mut self, begin_with: u64) {
+        self.begin_with = begin_with;
+    }
     /// Serialize allocator metadata to bytes
     /// [entry_size: 8bytes][entries_per_page: 8bytes][first_free_entry_page: 8bytes][first_free_heap_page: 8bytes]
     pub fn to_bytes(&self) -> Vec<u8> {

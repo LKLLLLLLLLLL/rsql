@@ -123,6 +123,9 @@ impl TableSchema {
         }
         // 2. check nullable
         for (i, col) in self.columns.iter().enumerate() {
+            if col.nullable {
+                continue;
+            }
             let data_item = &data[i];
             match data_item {
                 DataItem::NullInt | DataItem::NullFloat | 
@@ -138,12 +141,12 @@ impl TableSchema {
         for (i, col) in self.columns.iter().enumerate() {
             match col.data_type {
                 ColType::Integer => match data[i] {
-                    DataItem::Integer(_) => {},
+                    DataItem::Integer(_) | DataItem::NullInt => {},
                     _ => return Err(RsqlError::InvalidInput(
                         format!("Expected Integer for column {}, found different type", col.name))),
                 },
                 ColType::Float => match data[i] {
-                    DataItem::Float(_) => {},
+                    DataItem::Float(_) | DataItem::NullFloat => {},
                     _ => return Err(RsqlError::InvalidInput(
                         format!("Expected Float for column {}, found different type", col.name))),
                 },
@@ -158,6 +161,7 @@ impl TableSchema {
                                 format!("Value length {} exceeds size {} for column {}", value.len(), size, col.name)));
                         }
                     },
+                    DataItem::NullChars { .. } => {},
                     _ => return Err(RsqlError::InvalidInput(
                         format!("Expected Chars({}) for column {}, found different type", size, col.name))),
                 },
@@ -168,11 +172,12 @@ impl TableSchema {
                                 format!("Value length {} exceeds max varchar size {} for column {}", value.len(), size, col.name)));
                         }
                     },
+                    DataItem::NullVarChar { .. } => {},
                     _ => return Err(RsqlError::InvalidInput(
                         format!("Expected VarChar for column {}, found different type", col.name))),
                 },
                 ColType::Bool => match data[i] {
-                    DataItem::Bool(_) => {},
+                    DataItem::Bool(_) | DataItem::NullBool => {},
                     _ => return Err(RsqlError::InvalidInput(
                         format!("Expected Bool for column {}, found different type", col.name))),
                 },
@@ -209,7 +214,7 @@ impl TableSchema {
                 return Err(RsqlError::InvalidInput(format!("Unique column {} must be indexed", col.name)));
             }
         }
-        // check if primary key columns are indexed and not null
+        // check if primary key columns are indexed and not null and unique
         for col in &columns {
             if col.pk {
                 if !col.index {
@@ -217,6 +222,9 @@ impl TableSchema {
                 }
                 if col.nullable {
                     return Err(RsqlError::InvalidInput(format!("Primary key column {} cannot be nullable", col.name)));
+                }
+                if !col.unique {
+                    return Err(RsqlError::InvalidInput(format!("Primary key column {} must be unique", col.name)));
                 }
             }
         }

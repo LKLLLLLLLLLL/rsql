@@ -84,7 +84,7 @@ const codeResults = ref([])
 let wsRef = null
 
 function connectWebSocket() {
-  const socket = new new WebSocket(props.wsUrl)
+  const socket = new WebSocket(props.wsUrl)
   wsRef = socket
 
   socket.onopen = () => {
@@ -124,7 +124,14 @@ function submitSql() {
   }
 
   const payload = {
-    username: 'guest',
+    username: (() => {
+      try {
+        const u = typeof window !== 'undefined' ? localStorage.getItem('username') : null
+        return u || 'guest'
+      } catch {
+        return 'guest'
+      }
+    })(),
     userid: 0,
     request_content: sql,
   }
@@ -147,7 +154,14 @@ function sendSqlStatement(sql, actionLabel = 'SQL') {
   }
   if (!ensureWsReady()) return
   const payload = {
-    username: 'guest',
+    username: (() => {
+      try {
+        const u = typeof window !== 'undefined' ? localStorage.getItem('username') : null
+        return u || 'guest'
+      } catch {
+        return 'guest'
+      }
+    })(),
     userid: 0,
     request_content: trimmed,
   }
