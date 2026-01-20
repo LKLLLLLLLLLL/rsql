@@ -155,7 +155,7 @@ pub fn handle_table_obj_filter_expr(table_obj: &TableObject, predicate: &Expr) -
                                             head: VarCharHead {max_len: s.len() as u64, len: s.len() as u64, page_ptr: None},
                                             value: s.clone(),
                                         },
-                                        _ => return Err(RsqlError::ExecutionError(format!("Unsupported char type on table {col}")))
+                                        _ => return Err(RsqlError::ExecutionError(format!("Unsupported char type on column {col}")))
                                     };
                                     let some_string_value = Some(string_value.clone());
                                     if col == table_obj.pk_col.0 {

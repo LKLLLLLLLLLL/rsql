@@ -105,7 +105,7 @@ const handleSubmit = async () => {
 .auth {
   min-height: 100vh;
   display: grid;
-  grid-template-columns: 420px 1fr;
+  grid-template-columns: 1fr max(70vw, 600px);
   background: #f8f9fd;
 }
 
@@ -122,16 +122,21 @@ const handleSubmit = async () => {
 
 .logo-container {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 12px;
+  flex-direction: row; /* 横向排列：图标在左，文字在右 */
+  align-items: center;
+  gap: 20px;
+  /* constrain content width so hero looks good on wide layouts */
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 8px 0;
+  transform: translateY(-50px);
 }
 
 .icon-container{
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 100%;
+  width: auto;
 }
 
 .logo-icon {
@@ -149,13 +154,15 @@ const handleSubmit = async () => {
 
 .logo-text {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: flex-start;
   justify-content: center;
 }
 
 .text-container{
+  max-width: 640px;
   width: 100%;
-  text-align: center;
+  text-align: left;
 }
 
 .logo {
@@ -215,6 +222,8 @@ input[type='text'] {
   padding: 12px 14px;
   font-size: 14px;
   transition: border 0.16s ease, box-shadow 0.16s ease;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 input:focus {
@@ -222,12 +231,8 @@ input:focus {
   border-color: #315efb;
   box-shadow: 0 0 0 3px rgba(49, 94, 251, 0.16);
 }
-
 .actions {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
+  display: block;
   margin-top: 6px;
 }
 
@@ -239,13 +244,13 @@ input:focus {
   border-radius: 10px;
   font-weight: 700;
   cursor: pointer;
-  min-width: 140px;
+  width: 100%;
+  box-sizing: border-box;
   transition: transform 0.12s ease, box-shadow 0.16s ease;
   box-shadow: 0 12px 30px rgba(49, 94, 251, 0.24);
 }
 
 .submit:hover:not(:disabled) {
-  transform: translateY(-1px);
   box-shadow: 0 16px 36px rgba(49, 94, 251, 0.28);
 }
 
@@ -284,6 +289,7 @@ input:focus {
     align-items: center;
     text-align: center;
     gap: 20px;
+    flex-direction: column;
   }
 
   .card {

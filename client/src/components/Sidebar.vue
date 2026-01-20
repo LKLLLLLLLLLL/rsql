@@ -14,7 +14,7 @@
       <p class="header-subtitle">A simple relational database system written in Rust.</p>
     </div>
   </div>
-  
+
   <div class="functions-section">
     <div class="section-header">
       <h3>FUNCTIONS</h3>
@@ -90,7 +90,7 @@
 </template>
 
 <script setup>
-import { defineProps, defineEmits, computed, ref, onMounted, onBeforeUnmount, watch } from 'vue'
+import { defineProps, defineEmits, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import Icon from './Icon.vue'
 import {
@@ -105,9 +105,9 @@ import {
   mdiPower
 } from '@mdi/js'
 
+import { connected, connect, close } from '../services/wsService'
+
 const router = useRouter()
-const connected = ref(false)
-let wsRef = null
 
 const props = defineProps({
   tables: { type: Array, default: () => [] },
@@ -119,80 +119,11 @@ const props = defineProps({
 
 const emit = defineEmits(['create', 'rename', 'drop', 'terminal', 'select-table', 'delete-table', 'clear-selection', 'logout'])
 
-// 计算连接状态
-const connectionStatus = computed(() => {
-  return connected.value ? 'connected' : 'disconnected'
-})
+// 计算连接状态（使用单例 wsService 的连接状态）
+const connectionStatus = computed(() => (connected.value ? 'connected' : 'disconnected'))
+const connectionStatusText = computed(() => (connected.value ? 'Connected' : 'Disconnected'))
 
-const connectionStatusText = computed(() => {
-  return connected.value ? 'Connected' : 'Disconnected'
-})
-
-// 构建 WebSocket URL
-const buildWebSocketUrl = () => {
-  if (props.wsUrl) return props.wsUrl
-  
-  let username = 'root'
-  let password = 'password'
-  try {
-    const u = typeof window !== 'undefined' ? localStorage.getItem('username') : null
-    const p = typeof window !== 'undefined' ? localStorage.getItem('password') : null
-    if (u) username = u
-    if (p) password = p
-  } catch {}
-  
-  if (typeof window === 'undefined') {
-    return `ws://127.0.0.1:4456/ws?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`
-  }
-  const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
-  return `${protocol}://${window.location.host}/ws?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`
-}
-
-function connectWebSocket() {
-  const wsUrl = buildWebSocketUrl()
-  const socket = new WebSocket(wsUrl)
-  wsRef = socket
-
-  socket.onopen = () => {
-    connected.value = true
-    console.log('Sidebar WebSocket connected')
-  }
-
-  socket.onclose = () => {
-    connected.value = false
-    console.log('Sidebar WebSocket closed')
-    // 尝试重新连接
-    setTimeout(() => {
-      if (wsRef && wsRef.readyState === WebSocket.CLOSED) {
-        console.log('Attempting to reconnect...')
-        connectWebSocket()
-      }
-    }, 3000)
-  }
-
-  socket.onerror = (err) => {
-    console.warn('Sidebar WebSocket error', err)
-    connected.value = false
-  }
-
-  socket.onmessage = (ev) => {
-    try {
-      // 仅处理连接状态相关的消息
-      const data = JSON.parse(ev.data)
-      // 如果收到特定的连接成功消息，更新状态
-      if (data.success && 
-          data.rayon_response && 
-          (data.rayon_response.error === 'Websocket Connection Established' || 
-           data.rayon_response.error === 'Checkpoint Success')) {
-        connected.value = true
-      }
-    } catch (e) {
-      // 忽略解析错误
-    }
-  }
-}
-
-function handleButtonClick(button) {  
+function handleButtonClick(button) {
   if (button === 'create') {
     emit('create')
   } else if (button === 'rename') {
@@ -207,42 +138,40 @@ function handleButtonClick(button) {
 function handleTableSelect(table) {
   emit('select-table', table)
 }
-
 // 处理退出登录
 function handleLogout() {
   // 清除登录信息
   localStorage.removeItem('username')
   localStorage.removeItem('password')
-  // 关闭 WebSocket 连接
-  if (wsRef) {
-    wsRef.close()
-    wsRef = null
-  }
+  // 关闭 全局 WebSocket 连接
+  try { close() } catch (e) {}
   // 触发 logout 事件
   emit('logout')
   // 跳转到登录页
   router.push('/')
 }
 
-// 组件挂载时连接 WebSocket
+// 组件挂载时尝试连接（使用单例 wsService），若 props 提供 wsUrl 则使用之
 onMounted(() => {
-  connectWebSocket()
+  try {
+    if (props.wsUrl) connect(props.wsUrl)
+    else connect()
+  } catch (e) {
+    // ignore
+  }
 })
 
-// 组件卸载前关闭 WebSocket
+// 组件卸载时不再关闭全局连接（让单例管理生命周期）
 onBeforeUnmount(() => {
-  if (wsRef) {
-    wsRef.close()
-    wsRef = null
-  }
+  // no-op
 })
 
-// 监听 wsUrl 变化
-watch(() => props.wsUrl, () => {
-  if (wsRef) {
-    wsRef.close()
-  }
-  connectWebSocket()
+// 监听 wsUrl 变化，重新连接
+watch(() => props.wsUrl, (nv) => {
+  try {
+    close()
+  } catch (e) {}
+  try { connect(nv) } catch (e) {}
 })
 </script>
 

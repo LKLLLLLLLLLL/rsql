@@ -114,9 +114,9 @@
               <p>No tables available</p>
             </div>
             <div v-else class="table-operation-list">
-              <div 
-                v-for="table in tables" 
-                :key="`${table.tableId}`" 
+              <div
+                v-for="table in tables"
+                :key="`${table.tableId}`"
                 class="table-operation-item"
               >
                 <div class="table-info-section">
@@ -140,9 +140,9 @@
               <p>No tables available</p>
             </div>
             <div v-else class="table-operation-list">
-              <div 
-                v-for="table in tables" 
-                :key="`${table.tableId}`" 
+              <div
+                v-for="table in tables"
+                :key="`${table.tableId}`"
                 class="table-operation-item"
               >
                 <div class="table-info-section">
@@ -180,6 +180,7 @@
 
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { connect as wsConnect, send as wsSend, connected as wsConnected, addMessageListener, removeMessageListener, close as wsClose } from '../services/wsService'
 import Sidebar from './Sidebar.vue'
 import Topbar from './Topbar.vue'
 import DataTable from './DataTable.vue'
@@ -222,9 +223,8 @@ const toastRef = ref(null)
 const toastMessage = ref('')
 const toastDuration = 2500
 
-// WebSocket连接
-const wsConnected = ref(false)
-let wsRef = null
+// WebSocket连接（使用单例 wsService）
+// `wsConnected` 是从 wsService 导入的响应式 ref
 
 // 数据缓存
 let currentTableHeaders = [] // 列元数据 (name, type, ableToBeNULL, primaryKey, unique)
@@ -241,24 +241,23 @@ let pendingTableNameForRows = ''
 
 // WebSocket URL
 const wsUrl = computed(() => {
-  let username = 'root'
-  let password = 'password'
   try {
     const u = typeof window !== 'undefined' ? localStorage.getItem('username') : null
     const p = typeof window !== 'undefined' ? localStorage.getItem('password') : null
-    if (u) username = u
-    if (p) password = p
-  } catch {}
-  if (typeof window === 'undefined') {
-    return `ws://127.0.0.1:4456/ws?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`
+    if (!u || !p) return null
+    if (typeof window === 'undefined') {
+      return `ws://127.0.0.1:4456/ws?username=${encodeURIComponent(u)}&password=${encodeURIComponent(p)}`
+    }
+    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
+    return `${protocol}://${window.location.host}/ws?username=${encodeURIComponent(u)}&password=${encodeURIComponent(p)}`
+  } catch {
+    return null
   }
-  const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
-  return `${protocol}://${window.location.host}/ws?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`
 })
 
 // 计算属性
 const recordsCount = computed(() => viewRows.value.length)
-const shouldShowTopBar = computed(() => 
+const shouldShowTopBar = computed(() =>
   ['table', 'insert', 'delete', 'update', 'create', 'rename', 'drop', 'terminal'].includes(activeSection.value)
 )
 
@@ -344,10 +343,10 @@ function showSection(section) {
     activeSidebarButton.value = ''
     return
   }
-  
+
   activeSection.value = section
   activeSidebarButton.value = section
-  
+
   if (section === 'create' || section === 'terminal') {
     loadTablesList()
   }
@@ -370,9 +369,9 @@ function confirmRenameTable(newName) {
     renameModalVisible.value = false
     return
   }
-  
+
   const sql = `ALTER TABLE ${oldName} RENAME TO ${newName};`
-  
+
   if (sendSqlViaWebSocket(sql)) {
     renameModalVisible.value = false
     triggerToast('Table rename statement sent')
@@ -408,226 +407,183 @@ function openDropModal(tableName) {
 }
 
 // WebSocket操作函数
-function connectWebSocket() {
-  const socket = new WebSocket(wsUrl.value)
-  wsRef = socket
+// WebSocket 消息处理：由单例 wsService 触发（传入已解析的 JSON 对象）
+function handleWsMessage(data) {
+  try {
+    console.log('WebSocket response:', data, 'isLoadingTableList:', isLoadingTableList)
 
-  socket.onopen = () => {
-    wsConnected.value = true
-    console.log('WebSocket connected')
-    // 连接建立后立即加载表列表
-    loadTablesList()
-  }
+    // 检查是否是表列表查询的结果
+    if (isLoadingTableList) {
+      const rows = data?.Query?.rows || data?.rayon_response?.uniform_result?.[0]?.data?.rows || []
 
-  socket.onclose = () => {
-    wsConnected.value = false
-    console.log('WebSocket closed')
-  }
+      if (Array.isArray(rows) && rows.length > 0) {
+        console.log('Processing table list query response')
+        isLoadingTableList = false
 
-  socket.onerror = (err) => {
-    console.warn('WebSocket error', err)
-    wsConnected.value = false
-  }
-
-  socket.onmessage = (ev) => {
-    try {
-      const data = JSON.parse(ev.data)
-      console.log('WebSocket response:', data, 'isLoadingTableList:', isLoadingTableList)
-      
-      // 检查是否是表列表查询的结果
-      if (isLoadingTableList) {
-        // 可能的两种格式：
-        // 1) data.Query.rows (结构化返回)
-        // 2) data.rayon_response.uniform_result[0].data.rows (扁平数组返回)
-        const rows = data?.Query?.rows
-          || data?.rayon_response?.uniform_result?.[0]?.data?.rows
-          || []
-
-        if (Array.isArray(rows) && rows.length > 0) {
-          console.log('Processing table list query response')
-          isLoadingTableList = false
-
-          try {
-            // rows 可能是对象数组或原始值数组，统一处理
-            const tableList = rows
-              .map(row => {
-                // 支持 [{Integer:0},{Chars:{value:'sys'}}] 和 [0,'sys'] 两种格式
-                const tableId = typeof row[0] === 'object' ? row[0].Integer : row[0]
-                const tableName = typeof row[1] === 'object' ? row[1].Chars?.value : row[1]
-                return { tableId, tableName }
-              })
-              .filter(item => !!item.tableName)
-
-            tables.value = tableList
-            console.log('Tables loaded successfully:', tables.value)
-          } catch (parseError) {
-            console.error('Error parsing table list:', parseError)
-            tables.value = []
-          }
-        } else {
-          console.warn('Expected table list rows but got empty or invalid format:', rows)
-          isLoadingTableList = false
-        }
-        // 清理超时计时器
-        if (tableListTimeoutId) {
-          clearTimeout(tableListTimeoutId)
-          tableListTimeoutId = null
-        }
-      } else if (isLoadingTableSchema) {
-        // 处理 sys_column 返回的列元数据
-        const rows = data?.Query?.rows
-          || data?.rayon_response?.uniform_result?.[0]?.data?.rows
-          || []
-        const cols = data?.Query?.cols?.[0]
-          || data?.rayon_response?.uniform_result?.[0]?.data?.columns
-          || []
-
-        if (Array.isArray(rows)) {
-          try {
-            const findIdx = (name, fallback) => {
-              const idx = cols.findIndex(c => String(c || '').toLowerCase() === name)
-              return idx >= 0 ? idx : fallback
-            }
-
-            const idxTableId = findIdx('table_id', 0)
-            const idxColName = findIdx('column_name', 1)
-            const idxColType = findIdx('column_type', 2)
-            const idxAllowNull = findIdx('allow_null', 3)
-            const idxPrimary = findIdx('is_primary_key', 4)
-            const idxUnique = findIdx('is_unique', 5)
-
-            // 过滤指定 table_id 的列
-            const filtered = rows.filter(row => {
-              const raw = row[idxTableId]
-              const tid = typeof raw === 'object' ? raw.Integer : raw
-              return pendingTableIdForSchema === null || tid === pendingTableIdForSchema
+        try {
+          const tableList = rows
+            .map(row => {
+              const tableId = typeof row[0] === 'object' ? row[0].Integer : row[0]
+              const tableName = typeof row[1] === 'object' ? row[1].Chars?.value : row[1]
+              return { tableId, tableName }
             })
+            .filter(item => !!item.tableName)
 
-            currentTableHeaders = filtered.map(row => {
-              const nameRaw = row[idxColName]
-              const typeRaw = row[idxColType]
-              const allowNullRaw = row[idxAllowNull]
-              const primaryRaw = row[idxPrimary]
-              const uniqueRaw = row[idxUnique]
+          tables.value = tableList
+          console.log('Tables loaded successfully:', tables.value)
+        } catch (parseError) {
+          console.error('Error parsing table list:', parseError)
+          tables.value = []
+        }
+      } else {
+        console.warn('Expected table list rows but got empty or invalid format:', rows)
+        isLoadingTableList = false
+      }
 
-              const name = typeof nameRaw === 'object' ? nameRaw.Chars?.value : nameRaw
-              const type = typeof typeRaw === 'object' ? typeRaw.Chars?.value : typeRaw
-              const allowNull = allowNullRaw === true || allowNullRaw === 'true' || allowNullRaw === 1
-              const primaryKey = primaryRaw === true || primaryRaw === 'true' || primaryRaw === 1
-              const unique = uniqueRaw === true || uniqueRaw === 'true' || uniqueRaw === 1
-              return {
-                name,
-                type: type || 'VARCHAR',
-                ableToBeNULL: allowNull,
-                primaryKey,
-                unique,
+      if (tableListTimeoutId) {
+        clearTimeout(tableListTimeoutId)
+        tableListTimeoutId = null
+      }
+    } else if (isLoadingTableSchema) {
+      const rows = data?.Query?.rows || data?.rayon_response?.uniform_result?.[0]?.data?.rows || []
+      const cols = data?.Query?.cols?.[0] || data?.rayon_response?.uniform_result?.[0]?.data?.columns || []
+
+      if (Array.isArray(rows)) {
+        try {
+          const findIdx = (name, fallback) => {
+            const idx = cols.findIndex(c => String(c || '').toLowerCase() === name)
+            return idx >= 0 ? idx : fallback
+          }
+
+          const idxTableId = findIdx('table_id', 0)
+          const idxColName = findIdx('column_name', 1)
+          const idxColType = findIdx('column_type', 2)
+          const idxAllowNull = findIdx('allow_null', 3)
+          const idxPrimary = findIdx('is_primary_key', 4)
+          const idxUnique = findIdx('is_unique', 5)
+
+          const filtered = rows.filter(row => {
+            const raw = row[idxTableId]
+            const tid = typeof raw === 'object' ? raw.Integer : raw
+            return pendingTableIdForSchema === null || tid === pendingTableIdForSchema
+          })
+
+          currentTableHeaders = filtered.map(row => {
+            const nameRaw = row[idxColName]
+            const typeRaw = row[idxColType]
+            const allowNullRaw = row[idxAllowNull]
+            const primaryRaw = row[idxPrimary]
+            const uniqueRaw = row[idxUnique]
+
+            const name = typeof nameRaw === 'object' ? nameRaw.Chars?.value : nameRaw
+            const type = typeof typeRaw === 'object' ? typeRaw.Chars?.value : typeRaw
+            const allowNull = allowNullRaw === true || allowNullRaw === 'true' || allowNullRaw === 1
+            const primaryKey = primaryRaw === true || primaryRaw === 'true' || primaryRaw === 1
+            const unique = uniqueRaw === true || uniqueRaw === 'true' || uniqueRaw === 1
+            return {
+              name,
+              type: type || 'VARCHAR',
+              ableToBeNULL: allowNull,
+              primaryKey,
+              unique,
+            }
+          })
+
+          currentDisplayHeaders = currentTableHeaders.map(h => h.name)
+          isLoadingTableSchema = false
+          isLoadingTableRows = true
+
+          const payloadRows = {
+            username: (() => {
+              try {
+                const u = typeof window !== 'undefined' ? localStorage.getItem('username') : null
+                return u || ''
+              } catch {
+                return ''
               }
-            })
-
-            currentDisplayHeaders = currentTableHeaders.map(h => h.name)
-            // 准备下一步查询表数据
-            isLoadingTableSchema = false
-            isLoadingTableRows = true
-
-            const payloadRows = {
-              username: (() => {
-                try {
-                  const u = typeof window !== 'undefined' ? localStorage.getItem('username') : null
-                  return u || 'root'
-                } catch {
-                  return 'root'
-                }
-              })(),
-              userid: 0,
-              request_content: `select * from ${pendingTableNameForRows}`,
-            }
-            console.log('Sending table rows query for', pendingTableNameForRows)
-            wsRef.send(JSON.stringify(payloadRows))
-          } catch (e) {
-            console.error('Error parsing column metadata:', e)
-            currentTableHeaders = []
-            currentDisplayHeaders = []
-            isLoadingTableSchema = false
-            isLoadingTableRows = false
-            renderTable([], [])
+            })(),
+            userid: 0,
+            request_content: `select * from ${pendingTableNameForRows}`,
           }
-        } else {
-          console.warn('Invalid column metadata rows:', rows)
+          console.log('Sending table rows query for', pendingTableNameForRows)
+          try { wsSend(JSON.stringify(payloadRows)) } catch (e) { console.warn('ws send failed', e) }
+        } catch (e) {
+          console.error('Error parsing column metadata:', e)
+          currentTableHeaders = []
+          currentDisplayHeaders = []
           isLoadingTableSchema = false
           isLoadingTableRows = false
           renderTable([], [])
         }
-      } else if (isLoadingTableRows) {
-        // 处理实际表数据返回
-        const rows = data?.Query?.rows
-          || data?.rayon_response?.uniform_result?.[0]?.data?.rows
-          || []
-
-        if (Array.isArray(rows)) {
-          currentTableRows = rows
-          renderTable(currentDisplayHeaders, currentTableRows)
-          console.log('Table rows loaded:', pendingTableNameForRows, 'rows:', rows.length)
-        } else {
-          console.warn('Invalid table rows format:', rows)
-          currentTableRows = []
-          renderTable(currentDisplayHeaders, [])
-        }
-        isLoadingTableRows = false
-      } else if (!isLoadingTableList && !isLoadingTableSchema && !isLoadingTableRows) {
-        // 只有在不是等待表列表查询时，才处理其他类型的 SQL 结果
-        console.log('Processing SQL result')
-        handleSqlResult(data)
-        
-        // 如果操作成功，重新加载数据
-        if (data.success) {
-          // 延迟加载，给后端一点时间完成操作
-          setTimeout(() => {
-            loadTablesList()
-            if (currentTableName.value && currentTableId.value !== null) {
-              loadTableData({ tableName: currentTableName.value, tableId: currentTableId.value })
-            }
-          }, 100)
-        }
       } else {
-        // 这是表列表查询但格式不对，重置标志
-        console.warn('Expected table list query response but got different format:', data)
-        isLoadingTableList = false
+        console.warn('Invalid column metadata rows:', rows)
+        isLoadingTableSchema = false
+        isLoadingTableRows = false
+        renderTable([], [])
       }
-    } catch (e) {
-      console.warn('Parse WebSocket message failed', e, ev.data)
+    } else if (isLoadingTableRows) {
+      const rows = data?.Query?.rows || data?.rayon_response?.uniform_result?.[0]?.data?.rows || []
+
+      if (Array.isArray(rows)) {
+        currentTableRows = rows
+        renderTable(currentDisplayHeaders, currentTableRows)
+        console.log('Table rows loaded:', pendingTableNameForRows, 'rows:', rows.length)
+      } else {
+        console.warn('Invalid table rows format:', rows)
+        currentTableRows = []
+        renderTable(currentDisplayHeaders, [])
+      }
+      isLoadingTableRows = false
+    } else if (!isLoadingTableList && !isLoadingTableSchema && !isLoadingTableRows) {
+      console.log('Processing SQL result')
+      handleSqlResult(data)
+
+      if (data.success) {
+        setTimeout(() => {
+          loadTablesList()
+          if (currentTableName.value && currentTableId.value !== null) {
+            loadTableData({ tableName: currentTableName.value, tableId: currentTableId.value })
+          }
+        }, 100)
+      }
+    } else {
+      console.warn('Expected table list query response but got different format:', data)
       isLoadingTableList = false
     }
+  } catch (e) {
+    console.warn('Parse WebSocket message failed', e, data)
+    isLoadingTableList = false
   }
 }
 
 function sendSqlViaWebSocket(sql) {
-  if (!wsRef || wsRef.readyState !== WebSocket.OPEN) {
+  if (!wsConnected || !wsConnected.value) {
     triggerToast('WebSocket not connected, please try again later')
     return false
   }
 
   const payload = {
-    username: (() => {
-      try {
-        const u = typeof window !== 'undefined' ? localStorage.getItem('username') : null
-        return u || 'root'
-      } catch {
-        return 'root'
-      }
-    })(),
+            username: (() => {
+              try {
+                const u = typeof window !== 'undefined' ? localStorage.getItem('username') : null
+                return u || ''
+              } catch {
+                return ''
+              }
+            })(),
     userid: 0,
     request_content: sql,
   }
-  
+
   console.log('Sending SQL:', sql)
-  wsRef.send(JSON.stringify(payload))
+  try { wsSend(JSON.stringify(payload)) } catch (e) { console.warn('ws send failed', e) }
   return true
 }
 
 // 数据库操作函数
 function loadTableData(tableInfo) {
   // 通过 WebSocket 查询 sys_column 获取列元数据，并随后查询实际表数据
-  if (!wsRef || wsRef.readyState !== WebSocket.OPEN) {
+  if (!wsConnected || !wsConnected.value) {
     console.warn('WebSocket not connected, cannot load table data')
     renderTable([], [])
     return
@@ -651,9 +607,9 @@ function loadTableData(tableInfo) {
     username: (() => {
       try {
         const u = typeof window !== 'undefined' ? localStorage.getItem('username') : null
-        return u || 'root'
+        return u || ''
       } catch {
-        return 'root'
+        return ''
       }
     })(),
     userid: 0,
@@ -661,12 +617,12 @@ function loadTableData(tableInfo) {
   }
 
   console.log('Sending column metadata query for table:', tableName, 'id:', tableId)
-  wsRef.send(JSON.stringify(payload))
+  try { wsSend(JSON.stringify(payload)) } catch (e) { console.warn('ws send failed', e) }
 }
 
 function loadTablesList() {
   // 通过 WebSocket 发送 SQL 查询获取系统表中的表列表
-  if (!wsRef || wsRef.readyState !== WebSocket.OPEN) {
+  if (!wsConnected || !wsConnected.value) {
     console.warn('WebSocket not connected, cannot load tables')
     tables.value = []
     return
@@ -680,7 +636,7 @@ function loadTablesList() {
 
   // 设置标志位，让 onmessage 处理器知道这是一个表列表查询
   isLoadingTableList = true
-  
+
   // 清理旧的超时计时器
   if (tableListTimeoutId) {
     clearTimeout(tableListTimeoutId)
@@ -695,23 +651,23 @@ function loadTablesList() {
     }
     tableListTimeoutId = null
   }, 5000)
-  
+
   // 发送查询命令
   const payload = {
     username: (() => {
       try {
         const u = typeof window !== 'undefined' ? localStorage.getItem('username') : null
-        return u || 'root'
+        return u || ''
       } catch {
-        return 'root'
+        return ''
       }
     })(),
     userid: 0,
     request_content: 'select * from sys_table',
   }
-  
+
   console.log('Sending table list query')
-  wsRef.send(JSON.stringify(payload))
+  try { wsSend(JSON.stringify(payload)) } catch (e) { console.warn('ws send failed', e) }
 }
 
 function handleCreateTable({ tableName, columns }) {
@@ -725,7 +681,7 @@ function handleCreateTable({ tableName, columns }) {
     if (index < columns.length - 1) sql += ',\n'
   })
   sql += `\n);`
-  
+
   // 通过WebSocket发送
   if (sendSqlViaWebSocket(sql)) {
     triggerToast('Create table statement sent')
@@ -738,7 +694,7 @@ function handleInsertData(insertData) {
   // insertData是行数组: [{ colName: value, ... }]
   const rows = insertData
   const tableName = currentTableName.value
-  
+
   if (!rows || rows.length === 0) {
     triggerToast('No data to insert')
     return
@@ -757,11 +713,11 @@ function handleInsertData(insertData) {
       // 字符串类型加引号
       return `'${value.replace(/'/g, "''")}'`
     })
-    
+
     const sql = `INSERT INTO ${tableName} (${columns.join(', ')}) VALUES (${values.join(', ')});`
     sendSqlViaWebSocket(sql)
   })
-  
+
   triggerToast(`${rows.length} insert statements sent`)
   // 返回到表格视图
   setTimeout(() => showSection('table'), 500)
@@ -801,7 +757,7 @@ function confirmDelete(idx) {
   })
 
   const sql = `DELETE FROM ${currentTableName.value} WHERE ${whereConditions.join(' AND ')};`
-  
+
   if (sendSqlViaWebSocket(sql)) {
     triggerToast('Delete statement sent')
     deletePendingRow.value = null
@@ -827,7 +783,7 @@ function confirmUpdate(idx) {
 
   const oldRow = currentTableRows[idx]
   const newRow = updateDraft.value
-  
+
   if (!oldRow || !newRow) {
     triggerToast('Invalid data')
     return
@@ -860,7 +816,7 @@ function confirmUpdate(idx) {
   })
 
   const sql = `UPDATE ${currentTableName.value} SET ${setClause.join(', ')} WHERE ${whereConditions.join(' AND ')};`
-  
+
   if (sendSqlViaWebSocket(sql)) {
     triggerToast('Update statement sent')
     updateEditingRow.value = null
@@ -874,9 +830,9 @@ function confirmDropTable() {
     dropModalVisible.value = false
     return
   }
-  
+
   const sql = `DROP TABLE ${name};`
-  
+
   if (sendSqlViaWebSocket(sql)) {
     dropModalVisible.value = false
     triggerToast('Drop table statement sent')
@@ -898,16 +854,18 @@ onMounted(() => {
   try {
     username.value = localStorage.getItem('username') || ''
   } catch {}
-  connectWebSocket()
+  try {
+    wsConnect()
+    addMessageListener(handleWsMessage)
+  } catch (e) {
+    console.warn('Failed to start WebSocket via wsService', e)
+  }
   // 默认不加载任何表格数据，让用户选择
   showSection('terminal')
 })
 
 onBeforeUnmount(() => {
-  if (wsRef) {
-    wsRef.close()
-    wsRef = null
-  }
+  try { removeMessageListener(handleWsMessage) } catch (e) {}
 })
 </script>
 

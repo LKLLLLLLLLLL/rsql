@@ -73,49 +73,29 @@ import DataTable from './DataTable.vue'
 import { mdiLanDisconnect, mdiConsole } from '@mdi/js'
 
 const props = defineProps({
-  wsUrl: { type: String, required: true }
+  wsUrl: { type: String, required: false }
 })
 
 const emit = defineEmits(['sql-executed'])
 
-const connected = ref(false)
+import { connected as wsConnected, send as wsSend, addMessageListener, removeMessageListener } from '../services/wsService'
+
+const connected = wsConnected
 const codeInput = ref('')
 const codeResults = ref([])
 const resultContainer = ref(null)
-let wsRef = null
-
-function connectWebSocket() {
-  const socket = new WebSocket(props.wsUrl)
-  wsRef = socket
-
-  socket.onopen = () => {
-    connected.value = true
-  }
-
-  socket.onclose = () => {
-    connected.value = false
-  }
-
-  socket.onerror = (err) => {
-    console.warn('WebSocket error', err)
-    connected.value = false
-  }
-
-  socket.onmessage = (ev) => {
-    try {
-      const data = JSON.parse(ev.data)
-      const parsedTable = parseTableFromResponse(data)
-      const textContent = formatResultContent(data)
-      if (!parsedTable && !textContent) {
-        return
-      }
-      codeResults.value.push({ ...data, parsedTable, textContent })
-      emit('sql-executed', data)
-      // 自动滚动到底部
-      scrollToBottom()
-    } catch (e) {
-      console.warn('Parse WebSocket message failed', e, ev.data)
+function onServiceMessage(data) {
+  try {
+    const parsedTable = parseTableFromResponse(data)
+    const textContent = formatResultContent(data)
+    if (!parsedTable && !textContent) {
+      return
     }
+    codeResults.value.push({ ...data, parsedTable, textContent })
+    emit('sql-executed', data)
+    scrollToBottom()
+  } catch (e) {
+    console.warn('Parse WebSocket message failed', e, data)
   }
 }
 
@@ -162,7 +142,7 @@ function scrollToBottom() {
 }
 
 function submitSql() {
-  if (!wsRef || wsRef.readyState !== WebSocket.OPEN) {
+  if (!connected || !connected.value) {
     alert('WebSocket 未连接，请稍后重试')
     return
   }
@@ -177,19 +157,19 @@ function submitSql() {
     username: (() => {
       try {
         const u = typeof window !== 'undefined' ? localStorage.getItem('username') : null
-        return u || 'guest'
+        return u || ''
       } catch {
-        return 'guest'
+        return ''
       }
     })(),
     userid: 0,
     request_content: sql,
   }
-  wsRef.send(JSON.stringify(payload))
+  try { wsSend(JSON.stringify(payload)) } catch (e) { console.warn('ws send failed', e) }
 }
 
 function ensureWsReady() {
-  if (!wsRef || wsRef.readyState !== WebSocket.OPEN) {
+  if (!connected || !connected.value) {
     alert('WebSocket 未连接，请先启动后端或等待连接成功')
     return false
   }
@@ -207,15 +187,15 @@ function sendSqlStatement(sql, actionLabel = 'SQL') {
     username: (() => {
       try {
         const u = typeof window !== 'undefined' ? localStorage.getItem('username') : null
-        return u || 'guest'
+        return u || ''
       } catch {
-        return 'guest'
+        return ''
       }
     })(),
     userid: 0,
     request_content: trimmed,
   }
-  wsRef.send(JSON.stringify(payload))
+  try { wsSend(JSON.stringify(payload)) } catch (e) { console.warn('ws send failed', e) }
   codeInput.value = trimmed
 }
 
@@ -229,70 +209,70 @@ function formatTime(timestamp) {
 
 function formatResultContent(item) {
   // 特殊处理：WebSocket连接成功
-  if (item.rayon_response.error === 'Websocket Connection Established' && 
-      Array.isArray(item.rayon_response.response_content) && 
+  if (item.rayon_response.error === 'Websocket Connection Established' &&
+      Array.isArray(item.rayon_response.response_content) &&
       item.rayon_response.response_content.length === 0) {
     return ''
   }
-  if (item.rayon_response.error === 'Checkpoint Success' && 
-      Array.isArray(item.rayon_response.response_content) && 
+  if (item.rayon_response.error === 'Checkpoint Success' &&
+      Array.isArray(item.rayon_response.response_content) &&
       item.rayon_response.response_content.length === 0) {
     return ''
   }
-  
+
   // 正常错误处理
   if (!item.success) {
     return item.rayon_response.error || '未知错误'
   }
-  
+
   // 提取执行的SQL语句
   const sql = item.rayon_response.request_content || codeInput.value || '(unknown SQL)'
   let output = `执行的SQL语句：${sql}\n\n`
-  
+
   // 处理响应内容 - 尝试解析查询结果
   const responseContent = item.rayon_response.response_content
-  
+
   // 检查是否是查询结果（包含uniform_result）
-  if (item.rayon_response.uniform_result && 
-      Array.isArray(item.rayon_response.uniform_result) && 
+  if (item.rayon_response.uniform_result &&
+      Array.isArray(item.rayon_response.uniform_result) &&
       item.rayon_response.uniform_result.length > 0) {
-    
+
     const result = item.rayon_response.uniform_result[0]
     if (result.data && result.data.rows && result.data.columns) {
       const rows = result.data.rows
       const columns = result.data.columns
-      
+
       if (rows.length === 0) {
         output += '(没有查询结果)\n'
         return output
       }
-      
+
       // 格式化表格
       output += formatTable(columns, rows)
       output += `\n总记录数: ${rows.length}`
       return output
     }
   }
-  
+
   // 检查是否是旧格式的Query结果
   if (responseContent && Array.isArray(responseContent)) {
     for (const item of responseContent) {
       if (item.Query && item.Query.rows && item.Query.columns) {
         const rows = item.Query.rows
         const columns = item.Query.columns
-        
+
         if (rows.length === 0) {
           output += '(没有查询结果)\n'
           return output
         }
-        
+
         output += formatTable(columns, rows)
         output += `\n总记录数: ${rows.length}`
         return output
       }
     }
   }
-  
+
   // 非查询语句（如INSERT、UPDATE、DELETE、CREATE等）
   if (responseContent && Array.isArray(responseContent)) {
     if (responseContent.length === 0) {
@@ -303,7 +283,7 @@ function formatResultContent(item) {
     output += JSON.stringify(responseContent, null, 2)
     return output
   }
-  
+
   output += '执行成功'
   return output
 }
@@ -313,29 +293,29 @@ function formatTable(columns, rows) {
   const columnWidths = columns.map((col, idx) => {
     const colName = String(col || `col${idx}`)
     let maxWidth = colName.length
-    
+
     rows.forEach(row => {
       const value = formatCellValue(row[idx])
       maxWidth = Math.max(maxWidth, value.length)
     })
-    
+
     return Math.min(maxWidth, 50) // 限制最大宽度为50
   })
-  
+
   let output = ''
-  
+
   // 输出列名
   const headerLine = columns.map((col, idx) => {
     const colName = String(col || `col${idx}`)
     return colName.padEnd(columnWidths[idx], ' ')
   }).join(' | ')
-  
+
   output += headerLine + '\n'
-  
+
   // 输出分隔线
   const separatorLine = columnWidths.map(width => '-'.repeat(width)).join('-+-')
   output += separatorLine + '\n'
-  
+
   // 输出数据行
   rows.forEach(row => {
     const rowLine = row.map((cell, idx) => {
@@ -344,7 +324,7 @@ function formatTable(columns, rows) {
     }).join(' | ')
     output += rowLine + '\n'
   })
-  
+
   return output
 }
 
@@ -352,7 +332,7 @@ function formatCellValue(cell) {
   if (cell === null || cell === undefined) {
     return 'NULL'
   }
-  
+
   // 处理对象类型（如 {Integer: 1}, {Chars: {value: "text"}}）
   if (typeof cell === 'object') {
     if (cell.Integer !== undefined) return String(cell.Integer)
@@ -361,20 +341,18 @@ function formatCellValue(cell) {
     if (cell.Boolean !== undefined) return String(cell.Boolean)
     return JSON.stringify(cell)
   }
-  
+
   const str = String(cell)
   // 截断过长的字符串
   return str.length > 50 ? str.substring(0, 47) + '...' : str
 }
 
 onMounted(() => {
-  connectWebSocket()
+  addMessageListener(onServiceMessage)
 })
 
 onBeforeUnmount(() => {
-  if (wsRef) {
-    wsRef.close()
-  }
+  try { removeMessageListener(onServiceMessage) } catch (e) {}
 })
 
 defineExpose({
