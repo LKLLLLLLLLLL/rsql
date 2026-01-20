@@ -209,8 +209,8 @@ fn sys_user_schema() -> TableSchema {
             unique: false,
             index: false,
         },
-        TableColumn { // TODO: implement is_admin
-            name: "is_admin".to_string(),
+        TableColumn {
+            name: "write_permission".to_string(),
             data_type: super::table_schema::ColType::Bool,
             pk: false,
             nullable: false,
@@ -685,6 +685,51 @@ impl SysCatalog {
         )?;
         Ok(())
     }
+    pub fn rename_column(&self, tnx_id: u64, table_id: u64, old_col_name: &str, new_col_name: &str) -> RsqlResult<()> {
+        // 1. lock and open sys_column table
+        TnxManager::global().acquire_write_locks(tnx_id, &[SYS_COLUMN_ID])?;
+        let mut sys_column = Table::from(SYS_COLUMN_ID, sys_column_schema(), true)?;
+        
+        // 2. find the corresponding column record
+        let tid_data = DataItem::Integer(table_id as i64);
+        let key = Some(tid_data.clone());
+        let iter = sys_column.get_rows_by_range_indexed_col("table_id", &key, &key)?.collect::<RsqlResult<Vec<_>>>()?;
+        
+        for row_res in iter.into_iter() {
+            let row = row_res;
+            if let DataItem::Chars { value: name, .. } = &row[2] {
+                if name == old_col_name {
+                    // found the target column
+                    let mut new_row = row.clone();
+
+                    // 3. check if the column has beed indexed
+                    let is_indexed = match &row[7] {
+                        DataItem::Bool(b) => *b,
+                        _ => panic!("is_indexed column is not Bool"),
+                    };
+                    if is_indexed {
+                        return Err(RsqlError::InvalidInput(format!("Cannot rename indexed column: {}", old_col_name)));
+                    }
+                    
+                    // 4. update column name
+                    if new_col_name.len() > MAX_COL_NAME_SIZE {
+                        return Err(RsqlError::InvalidInput(format!("New column name too long: {}", new_col_name)));
+                    }
+                    new_row[2] = DataItem::Chars { 
+                        len: MAX_COL_NAME_SIZE as u64, 
+                        value: new_col_name.to_string() 
+                    };
+                    
+                    // 5. execute update (sys_column primary key is column_id, at index 0)
+                    let pk = &row[0];
+                    sys_column.update_row(pk, new_row, tnx_id)?;
+                    return Ok(());
+                }
+            }
+        }
+        
+        Err(RsqlError::InvalidInput(format!("Column not found: {}", old_col_name)))
+    }
     pub fn get_all_table_ids(&self, tnx_id: u64) -> RsqlResult<Vec<u64>> {
         let read_table = vec![SYS_TABLE_ID];
         TnxManager::global().acquire_read_locks(tnx_id, &read_table)?;
@@ -866,7 +911,7 @@ impl SysCatalog {
                     len: 128, 
                     value: password_hash,
                 },
-                DataItem::Bool(false), // is_admin false
+                DataItem::Bool(false), // write permission is false by default
             ],
             tnx_id,
         )?;
@@ -886,6 +931,57 @@ impl SysCatalog {
         };
         user.delete_row(&index, tnx_id)?;
         Ok(())
+    }
+    pub fn check_user_write_permission(
+        &self,
+        tnx_id: u64,
+        username: &str,
+    ) -> RsqlResult<bool> {
+        let read_table = vec![SYS_USER_ID];
+        TnxManager::global().acquire_read_locks(tnx_id, &read_table)?;
+        let user = Table::from(SYS_USER_ID, sys_user_schema(), true)?;
+        let index = DataItem::Chars { 
+            len: MAX_USERNAME_SIZE as u64, 
+            value: username.to_string(), 
+        };
+        let user_row_opt = user.get_row_by_pk(&index)?;
+        if let Some(user_row) = user_row_opt {
+            let DataItem::Bool(write_permission) = &user_row[2] else {
+                panic!("write_permission column is not Bool");
+            };
+            Ok(*write_permission)
+        } else {
+            Err(RsqlError::Unknown(format!("User {} not found", username)))
+        }
+    }
+    pub fn set_user_permission(
+        &self,
+        tnx_id: u64,
+        username: &str,
+        write_permission: bool,
+    ) -> RsqlResult<()> {
+        let write_table = vec![SYS_USER_ID];
+        TnxManager::global().acquire_write_locks(tnx_id, &write_table)?;
+        let mut user = Table::from(SYS_USER_ID, sys_user_schema(), true)?;
+        let index = DataItem::Chars { 
+            len: MAX_USERNAME_SIZE as u64, 
+            value: username.to_string(), 
+        };
+        let user_row_opt = user.get_row_by_pk(&index)?;
+        if let Some(user_row) = user_row_opt {
+            user.update_row(
+                &index,
+                vec![
+                    user_row[0].clone(),
+                    user_row[1].clone(),
+                    DataItem::Bool(write_permission),
+                ],
+                tnx_id,
+            )?;
+            Ok(())
+        } else {
+            Err(RsqlError::Unknown(format!("User {} not found", username)))
+        }
     }
     pub fn get_all_users(&self, tnx_id: u64) -> RsqlResult<Vec<String>> {
         let read_table = vec![SYS_USER_ID];

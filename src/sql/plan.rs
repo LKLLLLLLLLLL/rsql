@@ -73,6 +73,11 @@ pub enum DdlOperation {
         new_name: String,
         if_exists: bool,
     },
+    RenameColumn {
+        table_name: String,
+        old_name: String,
+        new_name: String,
+    },
 }
 
 /// Represents a logical query plan.
@@ -108,6 +113,13 @@ pub enum PlanNode {
     /// Projects specific columns from the input.
     Projection {
         exprs: Vec<Expr>,
+        input: Box<PlanNode>,
+    },
+    /// Sorts rows based on ORDER BY columns.
+    /// Store flattened column-level information instead of Expr
+    Sort {
+        columns: Vec<String>, // column name or simple identifier
+        asc: Vec<bool>,       // true = ASC, false = DESC
         input: Box<PlanNode>,
     },
     /// Joins two plans based on a condition.
@@ -148,6 +160,16 @@ pub enum PlanNode {
     DropUser {
         user_name: String,
         if_exists: bool,
+    },
+    /// Grants a privilege to a user.
+    Grant {
+        privilege: String,
+        user_name: String,
+    },
+    /// Revokes a privilege from a user.
+    Revoke {
+        privilege: String,
+        user_name: String,
     },
 }
 
@@ -298,6 +320,34 @@ impl Plan {
             }
             items.push(PlanItem::DCL(PlanNode::DropUser { user_name, if_exists }));
             return Ok(Plan { items });
+        } else if lower.starts_with("grant") {
+            // Parse: GRANT <privilege> TO <user_name>[;]
+            let rest: &str = &sql_trimmed[("grant".len())..].trim_start();
+            let tokens: Vec<&str> = rest.split_whitespace().collect();
+            if tokens.len() < 3 || !tokens[1].eq_ignore_ascii_case("to") {
+                return Err(RsqlError::ParserError("Invalid GRANT syntax".to_string()));
+            }
+            let privilege = tokens[0].to_string();
+            let user_name = tokens[2].trim_matches(|c: char| c == ';').to_string();
+            if user_name.is_empty() {
+                return Err(RsqlError::ParserError("GRANT missing user name".to_string()));
+            }
+            items.push(PlanItem::DCL(PlanNode::Grant { privilege, user_name }));
+            return Ok(Plan { items });
+        } else if lower.starts_with("revoke") {
+            // Parse: REVOKE <privilege> FROM <user_name>[;]
+            let rest: &str = &sql_trimmed[("revoke".len())..].trim_start();
+            let tokens: Vec<&str> = rest.split_whitespace().collect();
+            if tokens.len() < 3 || !tokens[1].eq_ignore_ascii_case("from") {
+                return Err(RsqlError::ParserError("Invalid REVOKE syntax".to_string()));
+            }
+            let privilege = tokens[0].to_string();
+            let user_name = tokens[2].trim_matches(|c: char| c == ';').to_string();
+            if user_name.is_empty() {
+                return Err(RsqlError::ParserError("REVOKE missing user name".to_string()));
+            }
+            items.push(PlanItem::DCL(PlanNode::Revoke { privilege, user_name }));
+            return Ok(Plan { items });
         }
 
         // Otherwise use sqlparser as normal
@@ -381,7 +431,42 @@ impl Plan {
 
     fn build_query(query: &Query) -> RsqlResult<PlanNode> {
         match &*query.body {
-            SetExpr::Select(select) => Self::build_select_plan(select),
+            SetExpr::Select(select) => {
+                let mut plan = Self::build_select_plan(select)?;
+
+                // === ORDER BY handling ===
+                if let Some(order_by) = &query.order_by {
+                    if let sqlparser::ast::OrderByKind::Expressions(items) = &order_by.kind {
+                        let mut columns = Vec::new();
+                        let mut asc = Vec::new();
+
+                        for ob in items {
+                            let col = match &ob.expr {
+                                Expr::Identifier(ident) => ident.value.clone(),
+                                Expr::CompoundIdentifier(idents) => {
+                                    idents.iter().map(|i| i.value.clone()).collect::<Vec<_>>().join(".")
+                                }
+                                _ => {
+                                    return Err(RsqlError::ParserError(
+                                        "ORDER BY only supports column identifiers".to_string(),
+                                    ));
+                                }
+                            };
+
+                            columns.push(col);
+                            asc.push(ob.options.asc.unwrap_or(true));
+                        }
+
+                        plan = PlanNode::Sort {
+                            columns,
+                            asc,
+                            input: Box::new(plan),
+                        };
+                    }
+                }
+
+                Ok(plan)
+            }
             _ => Err(RsqlError::ParserError("Only simple SELECT is supported".to_string())),
         }
     }
@@ -692,6 +777,15 @@ impl Plan {
                             },
                         })
                     }
+                    AstAlterTableOperation::RenameColumn { old_column_name, new_column_name } => {
+                        Ok(PlanNode::DDL {
+                            op: DdlOperation::RenameColumn {
+                                table_name: alter.name.to_string(),
+                                old_name: old_column_name.to_string(),
+                                new_name: new_column_name.to_string(),
+                            },
+                        })
+                    }
                     _ => Err(RsqlError::ParserError(
                         "Only ALTER TABLE RENAME TABLE is supported".to_string(),
                     )),
@@ -823,6 +917,11 @@ impl Plan {
                     if_exists: *if_exists,
                 })
             }
+            Statement::Grant { .. } | Statement::Revoke { .. } => {
+                return Err(RsqlError::ParserError(
+                    "GRANT/REVOKE should be handled by manual parser".to_string(),
+                ));
+            }
             _ => Err(RsqlError::ParserError("DDL/DCL not implemented yet".to_string())),
         }
     }
@@ -914,6 +1013,21 @@ impl Plan {
                     format!("Aggregate [group_by: {}, aggr: {}]", fmt_exprs(group_by), fmt_exprs(aggr_exprs))
                 }
                 PlanNode::Projection { exprs, .. } => format!("Projection [{}]", fmt_exprs(exprs)),
+                PlanNode::Sort { columns, asc, .. } => {
+                    let items = columns
+                        .iter()
+                        .zip(asc.iter())
+                        .map(|(c, a)| {
+                            if *a {
+                                format!("{} ASC", c)
+                            } else {
+                                format!("{} DESC", c)
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("Sort [{}]", items)
+                }
                 PlanNode::Join { join_type, on, .. } => format!("Join [{:?}, on: {}]", join_type, on.as_ref().map_or("None".to_string(), |e| format!("{}", e))),
                 PlanNode::DDL { op } => match op {
                     DdlOperation::CreateTable { table_name, .. } => {
@@ -933,6 +1047,9 @@ impl Plan {
                     DdlOperation::RenameTable { old_name, new_name, if_exists } => {
                         let _ = if_exists;
                         format!("AlterTable [{}] RENAME TO {}", old_name, new_name)
+                    }
+                    DdlOperation::RenameColumn { table_name, old_name, new_name } => {
+                        format!("AlterTable [{}] RENAME COLUMN {} TO {}", table_name, old_name, new_name)
                     }
                 },
                 PlanNode::Insert { table_name, columns, values, input } => {
@@ -958,6 +1075,12 @@ impl Plan {
                 PlanNode::DropUser { user_name, if_exists } => {
                     format!("DropUser [{} if_exists={}]", user_name, if_exists)
                 }
+                PlanNode::Grant { privilege, user_name } => {
+                    format!("Grant [{}] TO {}", privilege, user_name)
+                }
+                PlanNode::Revoke { privilege, user_name } => {
+                    format!("Revoke [{}] FROM {}", privilege, user_name)
+                }
             }
         }
 
@@ -969,6 +1092,7 @@ impl Plan {
                 PlanNode::Filter { input, .. } => vec![input],
                 PlanNode::Aggregate { input, .. } => vec![input],
                 PlanNode::Projection { input, .. } => vec![input],
+                PlanNode::Sort { input, .. } => vec![input],
                 PlanNode::Join { left, right, .. } => vec![left, right],
                 PlanNode::Delete { input } => vec![input],
                 PlanNode::Update { input, .. } => vec![input],
@@ -1090,6 +1214,14 @@ impl Plan {
                         print_expr_with_path(expr, prefix, &path);
                     }
                 }
+                PlanNode::Sort { columns, asc, .. } => {
+                    for i in 0..columns.len() {
+                        let col_path = format!("(PlanNode::Sort.columns[{}])", i);
+                        println!("{}{} -> {}", prefix, col_path, columns[i]);
+                        let dir_path = format!("(PlanNode::Sort.asc[{}])", i);
+                        println!("{}{} -> {}", prefix, dir_path, asc[i]);
+                    }
+                }
                 PlanNode::Join { on: Some(expr), .. } => {
                     let path = format!("(PlanNode::Join.on)");
                     print_expr_with_path(expr, prefix, &path);
@@ -1158,6 +1290,14 @@ impl Plan {
                             println!("{}{} -> {}", prefix, path_old, old_name);
                             println!("{}{} -> {}", prefix, path_new, new_name);
                         }
+                        DdlOperation::RenameColumn { table_name, old_name, new_name } => {
+                            let path_table = "(PlanNode::DDL.op[RenameColumn].table_name)";
+                            println!("{}{} -> {}", prefix, path_table, table_name);
+                            let path_old = "(PlanNode::DDL.op[RenameColumn].old_name)";
+                            println!("{}{} -> {}", prefix, path_old, old_name);
+                            let path_new = "(PlanNode::DDL.op[RenameColumn].new_name)";
+                            println!("{}{} -> {}", prefix, path_new, new_name);
+                        }
                     }
                 }
                 // ---- Add pretty print for CreateUser ----
@@ -1175,6 +1315,18 @@ impl Plan {
                     println!("{}{} -> {}", prefix, path_user, user_name);
                     let path_if_exists = "(PlanNode::DropUser.if_exists)";
                     println!("{}{} -> {}", prefix, path_if_exists, if_exists);
+                }
+                PlanNode::Grant { privilege, user_name } => {
+                    let p1 = "(PlanNode::Grant.privilege)";
+                    println!("{}{} -> {}", prefix, p1, privilege);
+                    let p2 = "(PlanNode::Grant.user_name)";
+                    println!("{}{} -> {}", prefix, p2, user_name);
+                }
+                PlanNode::Revoke { privilege, user_name } => {
+                    let p1 = "(PlanNode::Revoke.privilege)";
+                    println!("{}{} -> {}", prefix, p1, privilege);
+                    let p2 = "(PlanNode::Revoke.user_name)";
+                    println!("{}{} -> {}", prefix, p2, user_name);
                 }
                 _ => {}
             }
@@ -1300,6 +1452,21 @@ impl Plan {
                     format!("Aggregate [group_by: {}, aggr: {}]", fmt_exprs(group_by), fmt_exprs(aggr_exprs))
                 }
                 PlanNode::Projection { exprs, .. } => format!("Projection [{}]", fmt_exprs(exprs)),
+                PlanNode::Sort { columns, asc, .. } => {
+                    let items = columns
+                        .iter()
+                        .zip(asc.iter())
+                        .map(|(c, a)| {
+                            if *a {
+                                format!("{} ASC", c)
+                            } else {
+                                format!("{} DESC", c)
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("Sort [{}]", items)
+                }
                 PlanNode::Join { join_type, on, .. } => format!("Join [{:?}, on: {}]", join_type, on.as_ref().map_or("None".to_string(), |e| format!("{}", e))),
                 PlanNode::DDL { op } => match op {
                     DdlOperation::CreateTable { table_name, .. } => {
@@ -1319,6 +1486,9 @@ impl Plan {
                     DdlOperation::RenameTable { old_name, new_name, if_exists } => {
                         let _ = if_exists;
                         format!("AlterTable [{}] RENAME TO {}", old_name, new_name)
+                    }
+                    DdlOperation::RenameColumn { table_name, old_name, new_name } => {
+                        format!("AlterTable [{}] RENAME COLUMN {} TO {}", table_name, old_name, new_name)
                     }
                 },
                 PlanNode::Insert { table_name, columns, values, input } => {
@@ -1345,6 +1515,12 @@ impl Plan {
                 PlanNode::DropUser { user_name, if_exists } => {
                     format!("DropUser [{} if_exists={}]", user_name, if_exists)
                 }
+                PlanNode::Grant { privilege, user_name } => {
+                    format!("Grant [{}] TO {}", privilege, user_name)
+                }
+                PlanNode::Revoke { privilege, user_name } => {
+                    format!("Revoke [{}] FROM {}", privilege, user_name)
+                }
             }
         }
 
@@ -1356,6 +1532,7 @@ impl Plan {
                 PlanNode::Filter { input, .. } => vec![input],
                 PlanNode::Aggregate { input, .. } => vec![input],
                 PlanNode::Projection { input, .. } => vec![input],
+                PlanNode::Sort { input, .. } => vec![input],
                 PlanNode::Join { left, right, .. } => vec![left, right],
                 PlanNode::Delete { input } => vec![input],
                 PlanNode::Update { input, .. } => vec![input],

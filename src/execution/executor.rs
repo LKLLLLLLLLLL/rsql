@@ -8,6 +8,7 @@ use crate::catalog::SysCatalog;
 use crate::common::{RsqlResult, RsqlError};
 use crate::execution::result::ExecutionResult;
 use crate::sql::{Plan, plan::{PlanItem}};
+use crate::storage;
 use crate::storage::WAL;
 use crate::storage::storage::{Page, StorageManager};
 use crate::catalog::sys_catalog::is_sys_table;
@@ -259,5 +260,12 @@ pub fn disconnect_callback(connection_id: u64) -> RsqlResult<()> {
         warn!("Connection {} disconnected with active transaction, rolling back...", connection_id);
         rollback_transaction(connection_id)?;
     };
+    Ok(())
+}
+
+pub fn backup_database() -> RsqlResult<()> {
+    info!("Backing up database...");
+    storage::archiver::backup()?;
+    info!("Database backup completed.");
     Ok(())
 }
