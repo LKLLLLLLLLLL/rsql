@@ -1,14 +1,9 @@
 <!-- DataTable.vue -->
 <template>
-  <div class="table-container">
-    <div class="page-header">
-      <div class="header-content">
-        <h2><Icon :path="mdiTable" size="20" /> {{ currentTableName }} Table Data</h2>
-        <div class="header-info">
-          <span class="record-count">Total {{ recordsCount }} records</span>
-          <span class="last-update">Updated on <span id="update-time">{{ formattedUpdateTime }}</span></span>
-        </div>
-      </div>
+  <div class="table-container" :style="containerStyle">
+    <!-- delete 和 update 模式的返回按钮 -->
+    <div v-if="mode === 'delete' || mode === 'update'" class="mode-header">
+      <button class="back-btn" @click="emit('back')">← 返回表格视图</button>
     </div>
     
     <div class="table-wrapper">
@@ -19,6 +14,8 @@
         :leading-headers="leadingHeaders"
         :visible-count="15"
         :row-height="mode === 'update' ? 56 : 52"
+        :max-height="maxHeight"
+        :column-metadata="columnMetadata"
         class="virtual-table"
       >
         <template #leading-cell="{ rowIndex, leadingIndex }">
@@ -122,7 +119,9 @@ const props = defineProps({
   editingRow: { type: Number, default: null },
   draftValues: { type: Array, default: () => [] },
   renderKey: { type: Number, default: 0 },
-  columnMetadata: { type: Array, default: () => [] }
+  columnMetadata: { type: Array, default: () => [] },
+  maxHeight: { type: [Number, String, null], default: null },
+  compact: { type: Boolean, default: false }
 })
 
 const emit = defineEmits([
@@ -132,7 +131,8 @@ const emit = defineEmits([
   'start-update',
   'cancel-update',
   'confirm-update',
-  'update-draft'
+  'update-draft',
+  'back'
 ])
 
 const updateTime = ref(new Date())
@@ -152,6 +152,13 @@ const leadingHeaders = computed(() => {
   if (props.mode === 'delete') return ['Action', '#']
   if (props.mode === 'update') return ['Action', '#']
   return ['#']
+})
+
+const containerStyle = computed(() => {
+  if (props.compact) {
+    return { minHeight: 'auto', height: 'auto' }
+  }
+  return {}
 })
 
 function getDraftValue(colIndex) {
@@ -179,6 +186,37 @@ onMounted(() => {
   flex-direction: column;
   border: 1px solid #e3e8ef;
   min-height: 400px;
+}
+
+.mode-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid #e3e8ef;
+  background-color: #f9fafb;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.back-btn {
+  padding: 8px 16px;
+  background: transparent;
+  color: #6b7280;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 500;
+  font-size: 0.9rem;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.back-btn:hover {
+  background-color: #ffffff;
+  color: #1a1f36;
+  border-color: #9ca3af;
 }
 
 .page-header {
@@ -282,6 +320,7 @@ onMounted(() => {
   justify-content: center;
   gap: 8px;
   width: 100%;
+  padding: 0 8px;
 }
 
 .delete-row-btn,

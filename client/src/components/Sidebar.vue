@@ -10,11 +10,11 @@
         <h3>Dashboard</h3>
       </div>
     </div>
-    <div>
-      <p class="header-subtitle">A Rust Database Management System</p>
-    </div>
+    <!-- <div>
+      <p class="header-subtitle">A simple relational database system written in Rust.</p>
+    </div> -->
   </div>
-  
+
   <div class="functions-section">
     <div class="section-header">
       <h3>FUNCTIONS</h3>
@@ -52,13 +52,13 @@
       <h3>TABLE LIST</h3>
       <span class="table-count">{{ tables.length }} tables</span>
     </div>
-    <div v-for="table in tables" :key="table" class="table-item" :class="{ active: currentTable === table }" @click="handleTableSelect(table)">
+    <div v-for="table in tables" :key="table.tableName || table.tableId" class="table-item" :class="{ active: currentTable === table.tableName }" @click="handleTableSelect(table)">
       <div class="table-content">
         <div class="table-icon">
           <Icon :path="mdiTable" size="16" />
         </div>
-        <span class="table-name">{{ table }}</span>
-        <button v-if="isDropMode" class="table-delete-btn" @click.stop="emit('delete-table', table)">
+        <span class="table-name">{{ table.tableName }}</span>
+        <button v-if="isDropMode" class="table-delete-btn" @click.stop="emit('delete-table', table.tableName)">
           <Icon :path="mdiTrashCanOutline" size="14" />
         </button>
       </div>
@@ -90,7 +90,7 @@
 </template>
 
 <script setup>
-import { defineProps, defineEmits, computed, ref, onMounted, onBeforeUnmount, watch } from 'vue'
+import { defineProps, defineEmits, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import Icon from './Icon.vue'
 import {
@@ -105,9 +105,9 @@ import {
   mdiPower
 } from '@mdi/js'
 
+import { connected, connect, close } from '../services/wsService'
+
 const router = useRouter()
-const connected = ref(false)
-let wsRef = null
 
 const props = defineProps({
   tables: { type: Array, default: () => [] },
@@ -119,80 +119,14 @@ const props = defineProps({
 
 const emit = defineEmits(['create', 'rename', 'drop', 'terminal', 'select-table', 'delete-table', 'clear-selection', 'logout'])
 
-// 计算连接状态
-const connectionStatus = computed(() => {
-  return connected.value ? 'connected' : 'disconnected'
-})
+// 计算连接状态（使用单例 wsService 的连接状态）
+const connectionStatus = computed(() => (connected.value ? 'connected' : 'disconnected'))
+const connectionStatusText = computed(() => (connected.value ? 'Connected' : 'Disconnected'))
 
-const connectionStatusText = computed(() => {
-  return connected.value ? 'Connected' : 'Disconnected'
-})
+function handleButtonClick(button) {
+  // 点击功能按钮时，清除表的选中状态
+  emit('clear-selection')
 
-// 构建 WebSocket URL
-const buildWebSocketUrl = () => {
-  if (props.wsUrl) return props.wsUrl
-  
-  let username = 'root'
-  let password = 'password'
-  try {
-    const u = typeof window !== 'undefined' ? localStorage.getItem('username') : null
-    const p = typeof window !== 'undefined' ? localStorage.getItem('password') : null
-    if (u) username = u
-    if (p) password = p
-  } catch {}
-  
-  if (typeof window === 'undefined') {
-    return `ws://127.0.0.1:4456/ws?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`
-  }
-  const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
-  return `${protocol}://${window.location.host}/ws?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`
-}
-
-function connectWebSocket() {
-  const wsUrl = buildWebSocketUrl()
-  const socket = new WebSocket(wsUrl)
-  wsRef = socket
-
-  socket.onopen = () => {
-    connected.value = true
-    console.log('Sidebar WebSocket connected')
-  }
-
-  socket.onclose = () => {
-    connected.value = false
-    console.log('Sidebar WebSocket closed')
-    // 尝试重新连接
-    setTimeout(() => {
-      if (wsRef && wsRef.readyState === WebSocket.CLOSED) {
-        console.log('Attempting to reconnect...')
-        connectWebSocket()
-      }
-    }, 3000)
-  }
-
-  socket.onerror = (err) => {
-    console.warn('Sidebar WebSocket error', err)
-    connected.value = false
-  }
-
-  socket.onmessage = (ev) => {
-    try {
-      // 仅处理连接状态相关的消息
-      const data = JSON.parse(ev.data)
-      // 如果收到特定的连接成功消息，更新状态
-      if (data.success && 
-          data.rayon_response && 
-          (data.rayon_response.error === 'Websocket Connection Established' || 
-           data.rayon_response.error === 'Checkpoint Success')) {
-        connected.value = true
-      }
-    } catch (e) {
-      // 忽略解析错误
-    }
-  }
-}
-
-function handleButtonClick(button) {  
   if (button === 'create') {
     emit('create')
   } else if (button === 'rename') {
@@ -207,42 +141,41 @@ function handleButtonClick(button) {
 function handleTableSelect(table) {
   emit('select-table', table)
 }
-
 // 处理退出登录
 function handleLogout() {
   // 清除登录信息
   localStorage.removeItem('username')
   localStorage.removeItem('password')
-  // 关闭 WebSocket 连接
-  if (wsRef) {
-    wsRef.close()
-    wsRef = null
-  }
+  // 关闭 全局 WebSocket 连接
+  try { close() } catch (e) {}
   // 触发 logout 事件
   emit('logout')
-  // 跳转到登录页
-  router.push('/')
+
+  // 使用 replace 而不是 push，这样用户无法通过浏览器回退返回到工作页面
+  router.replace('/')
 }
 
-// 组件挂载时连接 WebSocket
+// 组件挂载时尝试连接（使用单例 wsService），若 props 提供 wsUrl 则使用之
 onMounted(() => {
-  connectWebSocket()
+  try {
+    if (props.wsUrl) connect(props.wsUrl)
+    else connect()
+  } catch (e) {
+    // ignore
+  }
 })
 
-// 组件卸载前关闭 WebSocket
+// 组件卸载时不再关闭全局连接（让单例管理生命周期）
 onBeforeUnmount(() => {
-  if (wsRef) {
-    wsRef.close()
-    wsRef = null
-  }
+  // no-op
 })
 
-// 监听 wsUrl 变化
-watch(() => props.wsUrl, () => {
-  if (wsRef) {
-    wsRef.close()
-  }
-  connectWebSocket()
+// 监听 wsUrl 变化，重新连接
+watch(() => props.wsUrl, (nv) => {
+  try {
+    close()
+  } catch (e) {}
+  try { connect(nv) } catch (e) {}
 })
 </script>
 
@@ -269,7 +202,7 @@ watch(() => props.wsUrl, () => {
   flex-direction: column;
   background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
   color: #f1f5f9;
-  gap: 14px;
+  gap: 10px;
   position: relative;
   overflow: hidden;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
@@ -293,20 +226,22 @@ watch(() => props.wsUrl, () => {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 70px;
-  height: 70px;
+  width: 60px;
+  height: 60px;
   border: 1px solid rgba(99, 102, 241, 0.2);
   box-shadow: 0 6px 16px rgba(99, 102, 241, 0.15);
 }
 
 .header-content {
   flex: 1;
+  border: 0;
 }
 
 .sidebar-header h1 {
   font-size: 1.8rem;
   font-weight: 650;
-  margin: 0 0 2px 0;
+  margin: 4px 0 0 0;
+  line-height: 1.05;
   color: #f8fafc;
   letter-spacing: 0.04em;
   background: linear-gradient(135deg, #f8fafc 0%, #cbd5e1 100%);
@@ -318,7 +253,9 @@ watch(() => props.wsUrl, () => {
 .sidebar-header h3 {
   font-size: 1.2rem;
   font-weight: 500;
+  padding: 0 0 4px 0;
   margin: 0;
+  line-height: 1.1;
   color: #d4dce7;
   letter-spacing: 0.03em;
 }
@@ -326,7 +263,7 @@ watch(() => props.wsUrl, () => {
 .header-container {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 10px;
 }
 
 .header-subtitle {
@@ -335,7 +272,7 @@ watch(() => props.wsUrl, () => {
   margin: 0;
   font-weight: 400;
   letter-spacing: 0.02em;
-  line-height: 1.4;
+  line-height: 1.3;
 }
 
 .functions-section {

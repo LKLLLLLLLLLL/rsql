@@ -140,25 +140,15 @@ impl WorkingThreadPool{
         }
     }
 
-    pub async fn make_checkpoint(&self, connection_id: u64) -> RsqlResult<String> {
+    pub async fn make_checkpoint(&self) -> RsqlResult<String> {
 
         let (sender, receiver) = oneshot::channel::<RsqlResult<String>>();
 
-        let serialize_lock = self.serialize_lock.clone();
-
         self.thread_pool.spawn(move ||{
-            let conn_mutex = {
-                let mut map_guard = serialize_lock.lock().unwrap();
-                map_guard.entry(connection_id).or_insert_with(|| {
-                    Arc::new(Mutex::new(true))
-                }).clone()
-            };
-
-            let _conn_guard = conn_mutex.lock().unwrap();
 
             match checkpoint(){
                 Ok(_) => {
-                    sender.send(Ok(format!("checkpointing for connection id: {}", connection_id))).unwrap();
+                    sender.send(Ok(format!("making checkpoint"))).unwrap();
                 }
                 Err(e) => {
                     sender.send(Err(e)).unwrap();
@@ -173,25 +163,14 @@ impl WorkingThreadPool{
 
     }
 
-    pub async fn make_backup(&self, connection_id: u64) -> RsqlResult<String> {
+    pub async fn make_backup(&self) -> RsqlResult<String> {
         let (sender, receiver) = oneshot::channel::<RsqlResult<String>>();
 
-        let serialize_lock = self.serialize_lock.clone();
-
         self.thread_pool.spawn(move ||{
-
-            let conn_mutex = {
-                let mut map_guard = serialize_lock.lock().unwrap();
-                map_guard.entry(connection_id).or_insert_with(|| {
-                    Arc::new(Mutex::new(true))
-                }).clone()
-            };
-
-            let _conn_guard = conn_mutex.lock().unwrap();
             
             match backup_database(){
                 Ok(_) => {
-                    sender.send(Ok(format!("backuping for connection id: {}", connection_id))).unwrap();
+                    sender.send(Ok(format!("making backup"))).unwrap();
                 }
                 Err(e) => {
                     sender.send(Err(e)).unwrap();
