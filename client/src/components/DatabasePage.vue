@@ -27,8 +27,6 @@
         @insert="showInsertSection"
         @delete="showSection('delete')"
         @update="showSection('update')"
-        @query="showSection('query')"
-        @export="showSection('export')"
       />
 
       <div class="content-container">
@@ -107,40 +105,6 @@
           @back="showSection('table')"
           @insert="handleInsertData"
         />
-
-        <!-- 查询功能 -->
-        <div v-if="activeSection === 'query'" class="page-content">
-          <div class="page-header">
-            <div class="header-content">
-              <h2><Icon :path="mdiMagnify" size="20" /> Query Builder</h2>
-              <p class="header-subtitle">Build advanced queries with visual tools</p>
-            </div>
-          </div>
-          <div class="content-placeholder">
-            <div class="placeholder-content">
-              <Icon :path="mdiChartLine" size="48" />
-              <h3>Advanced Query Builder</h3>
-              <p>Query builder with visual interface is under development.</p>
-            </div>
-          </div>
-        </div>
-
-        <!-- 导出功能 -->
-        <div v-if="activeSection === 'export'" class="page-content">
-          <div class="page-header">
-            <div class="header-content">
-              <h2><Icon :path="mdiDownload" size="20" /> Export Data</h2>
-              <p class="header-subtitle">Export table data in various formats</p>
-            </div>
-          </div>
-          <div class="content-placeholder">
-            <div class="placeholder-content">
-              <Icon :path="mdiDatabaseExport" size="48" />
-              <h3>Export Functionality</h3>
-              <p>Export to CSV, JSON, and Excel formats is under development.</p>
-            </div>
-          </div>
-        </div>
 
         <!-- 重命名表 -->
         <div v-if="activeSection === 'rename'" class="page-content">
@@ -226,7 +190,7 @@ import DropTableModal from './DropTableModal.vue'
 import RenameTableModal from './RenameTableModal.vue'
 import Toast from '../components/Toast.vue'
 import Icon from './Icon.vue'
-import { mdiMagnify, mdiDownload, mdiTableEdit, mdiChartLine, mdiDatabaseExport, mdiTable, mdiTableOff, mdiPencilOutline, mdiTrashCanOutline, mdiTableRemove } from '@mdi/js'
+import { mdiTableEdit, mdiTable, mdiTableOff, mdiPencilOutline, mdiTrashCanOutline, mdiTableRemove } from '@mdi/js'
 
 // 响应式数据
 const username = ref('')
@@ -295,7 +259,7 @@ const wsUrl = computed(() => {
 // 计算属性
 const recordsCount = computed(() => viewRows.value.length)
 const shouldShowTopBar = computed(() => 
-  ['table', 'insert', 'delete', 'update', 'query', 'export', 'create', 'rename', 'drop', 'terminal'].includes(activeSection.value)
+  ['table', 'insert', 'delete', 'update', 'create', 'rename', 'drop', 'terminal'].includes(activeSection.value)
 )
 
 // 辅助函数

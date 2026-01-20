@@ -37,22 +37,6 @@
         <Icon :path="mdiPencil" size="16" />
         <span>Update</span>
       </button>
-      <button 
-        class="action-btn query" 
-        :class="{ active: currentMode === 'query', disabled: isButtonDisabled }"
-        :disabled="isButtonDisabled"
-        @click="emit('query')">
-        <Icon :path="mdiMagnify" size="16" />
-        <span>Query</span>
-      </button>
-      <button 
-        class="action-btn export" 
-        :class="{ active: currentMode === 'export', disabled: isButtonDisabled }"
-        :disabled="isButtonDisabled"
-        @click="emit('export')">
-        <Icon :path="mdiDownload" size="16" />
-        <span>Export</span>
-      </button>
     </div>
   </div>
 </template>
@@ -62,8 +46,6 @@ import { defineProps, defineEmits, computed } from 'vue'
 import Icon from './Icon.vue'
 import {
   mdiDelete,
-  mdiDownload,
-  mdiMagnify,
   mdiPencil,
   mdiPlus,
   mdiTable,
@@ -79,7 +61,7 @@ const props = defineProps({
   currentMode: { type: String, default: 'table' } // table, create, rename, drop, terminal, insert, delete, update, query, export
 })
 
-const emit = defineEmits(['insert', 'delete', 'update', 'query', 'export'])
+const emit = defineEmits(['insert', 'delete', 'update'])
 
 // 计算显示的图标
 const titleIcon = computed(() => {
@@ -98,10 +80,6 @@ const titleIcon = computed(() => {
       return mdiDelete
     case 'update':
       return mdiPencil
-    case 'query':
-      return mdiMagnify
-    case 'export':
-      return mdiDownload
     default:
       return mdiTable
   }
@@ -127,7 +105,7 @@ const displayTitle = computed(() => {
 
 // 是否显示记录数
 const showRecordCount = computed(() => {
-  return ['table', 'insert', 'delete', 'update', 'query', 'export'].includes(props.currentMode)
+  return ['table', 'insert', 'delete', 'update'].includes(props.currentMode)
 })
 
 // 是否显示操作状态
@@ -286,18 +264,6 @@ const isButtonDisabled = computed(() => {
   background: #e0f2fe;
   color: #0284c7;
   border-color: #bae6fd;
-}
-
-.action-btn.query:hover {
-  background: #f0f9ff;
-  color: #0284c7;
-  border-color: #e0f2fe;
-}
-
-.action-btn.export:hover {
-  background: #f0f9ff;
-  color: #0284c7;
-  border-color: #e0f2fe;
 }
 
 @media (max-width: 1200px) {
