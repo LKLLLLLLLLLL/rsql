@@ -63,6 +63,7 @@
             @pending-delete="deletePendingRow = $event"
             @cancel-delete="deletePendingRow = null"
             @confirm-delete="confirmDelete"
+            @back="showSection('table')"
           />
         </div>
 
@@ -81,6 +82,7 @@
             @cancel-update="cancelUpdate"
             @confirm-update="confirmUpdate"
             @update-draft="updateDraft[$event.colIndex] = $event.value"
+            @back="showSection('table')"
           />
         </div>
 
@@ -192,6 +194,22 @@ import RenameTableModal from './RenameTableModal.vue'
 import Toast from '../components/Toast.vue'
 import Icon from './Icon.vue'
 import { mdiTableEdit, mdiTable, mdiTableOff, mdiPencilOutline, mdiTrashCanOutline, mdiTableRemove } from '@mdi/js'
+
+// 数据类型映射表
+const typeMapping = {
+  0: 'INTEGER',
+  1: 'FLOAT',
+  2: 'CHAR',
+  3: 'VARCHAR',
+  4: 'BOOLEAN',
+  5: 'DATE',
+  6: 'TIMESTAMP'
+}
+
+function getTypeName(typeCode) {
+  const code = typeof typeCode === 'number' ? typeCode : parseInt(typeCode)
+  return typeMapping[code] || `TYPE_${code}`
+}
 
 // 响应式数据
 const username = ref('')
@@ -337,13 +355,6 @@ function triggerToast(msg) {
 }
 
 function showSection(section) {
-  // 如果再次点击delete或update，则返回到table视图
-  if ((section === 'delete' || section === 'update') && activeSection.value === section) {
-    activeSection.value = 'table'
-    activeSidebarButton.value = ''
-    return
-  }
-
   activeSection.value = section
   activeSidebarButton.value = section
 
@@ -455,12 +466,12 @@ function handleWsMessage(data) {
             return idx >= 0 ? idx : fallback
           }
 
-          const idxTableId = findIdx('table_id', 0)
-          const idxColName = findIdx('column_name', 1)
-          const idxColType = findIdx('column_type', 2)
-          const idxAllowNull = findIdx('allow_null', 3)
-          const idxPrimary = findIdx('is_primary_key', 4)
-          const idxUnique = findIdx('is_unique', 5)
+            const idxTableId = findIdx('table_id', 0)
+            const idxColName = findIdx('column_name', 1)
+            const idxColType = findIdx('data_type', 2)
+            const idxAllowNull = findIdx('is_nullable', 3)
+            const idxPrimary = findIdx('is_primary', 4)
+            const idxUnique = findIdx('is_unique', 5)
 
           const filtered = rows.filter(row => {
             const raw = row[idxTableId]
@@ -475,19 +486,20 @@ function handleWsMessage(data) {
             const primaryRaw = row[idxPrimary]
             const uniqueRaw = row[idxUnique]
 
-            const name = typeof nameRaw === 'object' ? nameRaw.Chars?.value : nameRaw
-            const type = typeof typeRaw === 'object' ? typeRaw.Chars?.value : typeRaw
-            const allowNull = allowNullRaw === true || allowNullRaw === 'true' || allowNullRaw === 1
-            const primaryKey = primaryRaw === true || primaryRaw === 'true' || primaryRaw === 1
-            const unique = uniqueRaw === true || uniqueRaw === 'true' || uniqueRaw === 1
-            return {
-              name,
-              type: type || 'VARCHAR',
-              ableToBeNULL: allowNull,
-              primaryKey,
-              unique,
-            }
-          })
+              const name = typeof nameRaw === 'object' ? nameRaw.Chars?.value : nameRaw
+
+              const type = typeof typeRaw === 'number' ? getTypeName(typeRaw) : (typeof typeRaw === 'object' ? typeRaw.Chars?.value : typeRaw)
+              const allowNull = allowNullRaw === true || allowNullRaw === 'true' || allowNullRaw === 1
+              const primaryKey = primaryRaw === true || primaryRaw === 'true' || primaryRaw === 1
+              const unique = uniqueRaw === true || uniqueRaw === 'true' || uniqueRaw === 1
+              return {
+                name,
+                type: type || 'VARCHAR',
+                ableToBeNULL: allowNull,
+                primaryKey,
+                unique,
+              }
+            })
 
           currentDisplayHeaders = currentTableHeaders.map(h => h.name)
           isLoadingTableSchema = false
@@ -705,12 +717,52 @@ function handleInsertData(insertData) {
     const columns = Object.keys(row).filter(key => row[key] !== '')
     const values = columns.map(key => {
       const value = row[key]
-      // 根据类型判断是否需要加引号
       const meta = currentTableHeaders.find(h => h.name === key)
-      if (meta && (meta.type === 'INT' || meta.type === 'INTEGER' || meta.type === 'FLOAT')) {
-        return value
+
+      if (!meta) {
+        // 如果找不到列元数据，默认当作字符串处理
+        return `'${value.replace(/'/g, "''")}'`
       }
-      // 字符串类型加引号
+
+      const colType = meta.type?.toUpperCase() || 'VARCHAR'
+
+      // 数值类型：直接使用值，不加引号
+      if (colType === 'INTEGER' || colType === 'INT' || colType === 'FLOAT' || colType === 'DOUBLE') {
+        // 验证是否是有效的数值
+        if (colType === 'INTEGER' || colType === 'INT') {
+          const num = parseInt(value, 10)
+          if (isNaN(num)) {
+            throw new Error(`列 "${key}" 应为整数，但收到 "${value}"`)
+          }
+          return String(num)
+        } else {
+          // FLOAT/DOUBLE
+          const num = parseFloat(value)
+          if (isNaN(num)) {
+            throw new Error(`列 "${key}" 应为浮点数，但收到 "${value}"`)
+          }
+          // 如果是整数（没有小数点），转换为浮点数格式
+          if (!String(value).includes('.')) {
+            return num.toFixed(2)
+          }
+          return String(num)
+        }
+      }
+
+      // 布尔类型
+      if (colType === 'BOOLEAN' || colType === 'BOOL') {
+        const boolVal = String(value).toLowerCase()
+        if (['true', '1', 'yes', 't', 'y'].includes(boolVal)) {
+          return '1'
+        } else if (['false', '0', 'no', 'f', 'n'].includes(boolVal)) {
+          return '0'
+        } else {
+          throw new Error(`列 "${key}" 应为布尔值，但收到 "${value}"`)
+        }
+      }
+
+      // 日期/时间/字符串类型：加引号
+      // CHAR, VARCHAR, TEXT, DATE, DATETIME, TIMESTAMP, etc.
       return `'${value.replace(/'/g, "''")}'`
     })
 
@@ -731,6 +783,28 @@ function showInsertSection() {
   showSection('insert')
 }
 
+// 转换值为 SQL 适用格式
+function formatValueForSQL(value, colType) {
+  const upperType = colType?.toUpperCase() || 'VARCHAR'
+
+  // 数值类型
+  if (upperType === 'INTEGER' || upperType === 'INT' || upperType === 'FLOAT' || upperType === 'DOUBLE') {
+    const num = upperType === 'INTEGER' || upperType === 'INT'
+      ? parseInt(value, 10)
+      : parseFloat(value)
+
+    // 浮点数且没有小数点，转换为 xx.00 格式
+    if ((upperType === 'FLOAT' || upperType === 'DOUBLE') && !String(value).includes('.')) {
+      return num.toFixed(2)
+    }
+
+    return String(num)
+  }
+
+  // 其他类型：加引号
+  return `'${String(value).replace(/'/g, "''")}'`
+}
+
 function confirmDelete(idx) {
   if (!currentTableHeaders || currentTableHeaders.length === 0) {
     triggerToast('Cannot determine table structure')
@@ -748,11 +822,7 @@ function confirmDelete(idx) {
   currentTableHeaders.forEach((header, colIdx) => {
     const value = row[colIdx]
     if (value !== null && value !== undefined) {
-      if (header.type === 'INT' || header.type === 'INTEGER' || header.type === 'FLOAT') {
-        whereConditions.push(`${header.name} = ${value}`)
-      } else {
-        whereConditions.push(`${header.name} = '${String(value).replace(/'/g, "''")}'`)
-      }
+      whereConditions.push(`${header.name} = ${formatValueForSQL(value, header.type)}`)
     }
   })
 
@@ -761,6 +831,8 @@ function confirmDelete(idx) {
   if (sendSqlViaWebSocket(sql)) {
     triggerToast('Delete statement sent')
     deletePendingRow.value = null
+    // 重新加载表格数据
+    setTimeout(() => loadTableRows(currentTableName.value), 500)
   }
 }
 
@@ -794,11 +866,7 @@ function confirmUpdate(idx) {
   currentTableHeaders.forEach((header, colIdx) => {
     const newValue = newRow[colIdx]
     if (newValue !== null && newValue !== undefined && newValue !== '') {
-      if (header.type === 'INT' || header.type === 'INTEGER' || header.type === 'FLOAT') {
-        setClause.push(`${header.name} = ${newValue}`)
-      } else {
-        setClause.push(`${header.name} = '${String(newValue).replace(/'/g, "''")}'`)
-      }
+      setClause.push(`${header.name} = ${formatValueForSQL(newValue, header.type)}`)
     }
   })
 
@@ -807,11 +875,7 @@ function confirmUpdate(idx) {
   currentTableHeaders.forEach((header, colIdx) => {
     const value = oldRow[colIdx]
     if (value !== null && value !== undefined) {
-      if (header.type === 'INT' || header.type === 'INTEGER' || header.type === 'FLOAT') {
-        whereConditions.push(`${header.name} = ${value}`)
-      } else {
-        whereConditions.push(`${header.name} = '${String(value).replace(/'/g, "''")}'`)
-      }
+      whereConditions.push(`${header.name} = ${formatValueForSQL(value, header.type)}`)
     }
   })
 
@@ -821,6 +885,8 @@ function confirmUpdate(idx) {
     triggerToast('Update statement sent')
     updateEditingRow.value = null
     updateDraft.value = []
+    // 重新加载表格数据
+    setTimeout(() => loadTableRows(currentTableName.value), 500)
   }
 }
 

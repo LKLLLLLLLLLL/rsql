@@ -38,6 +38,7 @@
               <span class="result-status" :class="{ success: item.success }">
                 {{ item.success ? '✓ Success' : '✗ Error' }}
               </span>
+              <span class="execution-time">耗时: {{ item.rayon_response.execution_time }} ms</span>
             </div>
             <div class="result-content">
               <pre v-if="!item.success" class="error">执行的SQL语句：{{ item.rayon_response.request_content || codeInput || '(unknown)' }}
@@ -49,14 +50,11 @@
                 :rows="item.parsedTable.rows"
                 mode="view"
                 :max-height="Math.min(((item.parsedTable.rows?.length || 1) * 52) + 56, 600)"
+                :column-metadata="item.parsedTable.columnMetadata"
                 compact
                 class="result-table"
               />
               <pre v-else-if="item.textContent">{{ item.textContent }}</pre>
-            </div>
-            <div class="result-footer">
-              <span>Connection: {{ item.connection_id }}</span>
-              <span class="execution-time">耗时: {{ item.rayon_response.execution_time }} ms</span>
             </div>
           </div>
         </div>
@@ -84,27 +82,58 @@ const connected = wsConnected
 const codeInput = ref('')
 const codeResults = ref([])
 const resultContainer = ref(null)
-function onServiceMessage(data) {
-  try {
-    const parsedTable = parseTableFromResponse(data)
-    const textContent = formatResultContent(data)
-    if (!parsedTable && !textContent) {
-      return
+let wsRef = null
+
+function connectWebSocket() {
+  const socket = new WebSocket(props.wsUrl)
+  wsRef = socket
+
+  socket.onopen = () => {
+    connected.value = true
+  }
+
+  socket.onclose = () => {
+    connected.value = false
+  }
+
+  socket.onerror = (err) => {
+    console.warn('WebSocket error', err)
+    connected.value = false
+  }
+
+  socket.onmessage = (ev) => {
+    try {
+      const data = JSON.parse(ev.data)
+      const parsedTable = parseTableFromResponse(data)
+      const textContent = formatResultContent(data)
+      if (!parsedTable && !textContent) {
+        return
+      }
+
+      codeResults.value.push({ ...data, parsedTable, textContent })
+      emit('sql-executed', data)
+      // 自动滚动到底部
+      scrollToBottom()
+    } catch (e) {
+      console.warn('Parse WebSocket message failed', e, ev.data)
     }
-    codeResults.value.push({ ...data, parsedTable, textContent })
-    emit('sql-executed', data)
-    scrollToBottom()
-  } catch (e) {
-    console.warn('Parse WebSocket message failed', e, data)
   }
 }
 
 function parseTableFromResponse(payload) {
   const uniform = payload?.rayon_response?.uniform_result
   if (Array.isArray(uniform) && uniform[0]?.data?.rows && uniform[0]?.data?.columns) {
+    const data = uniform[0].data
+    const columnTypes = data.column_types || []
+    const columnMetadata = data.columns.map((colName, idx) => ({
+      name: String(colName || ''),
+      type: columnTypes[idx] || 'UNKNOWN'
+    }))
+
     return {
-      headers: uniform[0].data.columns.map(col => String(col || '')),
-      rows: uniform[0].data.rows
+      headers: data.columns.map(col => String(col || '')),
+      rows: data.rows,
+      columnMetadata
     }
   }
 
@@ -276,11 +305,49 @@ function formatResultContent(item) {
   // 非查询语句（如INSERT、UPDATE、DELETE、CREATE等）
   if (responseContent && Array.isArray(responseContent)) {
     if (responseContent.length === 0) {
-      output += '执行成功'
+      output += '✓ 执行成功'
       return output
     }
-    // 显示受影响的行数或其他信息
-    output += JSON.stringify(responseContent, null, 2)
+
+    // 尝试提取操作反馈信息
+    let feedback = []
+    for (const item of responseContent) {
+      if (typeof item === 'string') {
+        feedback.push(item)
+      } else if (item.Insert) {
+        feedback.push(`✓ 插入成功`)
+      } else if (item.Update) {
+        feedback.push(`✓ 更新成功`)
+      } else if (item.Delete) {
+        feedback.push(`✓ 删除成功`)
+      } else if (item.CreateTable || item.Ddl) {
+        // DDL 操作，尝试从 SQL 语句中识别具体操作
+        const sqlUpper = sql.toUpperCase()
+        if (sqlUpper.includes('CREATE TABLE')) {
+          feedback.push(`✓ 创建表成功`)
+        } else if (sqlUpper.includes('DROP TABLE')) {
+          feedback.push(`✓ 删除表成功`)
+        } else if (sqlUpper.includes('ALTER TABLE')) {
+          feedback.push(`✓ 修改表成功`)
+        } else {
+          feedback.push(`✓ DDL 操作成功`)
+        }
+      } else if (item.DropTable) {
+        feedback.push(`✓ 删除表成功`)
+      } else {
+        // 其他情况，显示简化的信息
+        const keys = Object.keys(item)
+        if (keys.length > 0) {
+          feedback.push(`✓ ${keys[0]} 操作成功`)
+        }
+      }
+    }
+
+    if (feedback.length > 0) {
+      output += feedback.join('\n')
+    } else {
+      output += '✓ 执行成功'
+    }
     return output
   }
 
@@ -568,6 +635,7 @@ defineExpose({
   font-size: 0.85rem;
   color: #6b7280;
   font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', Monaco, Consolas, monospace;
+  flex: 1;
 }
 
 .result-status {
@@ -606,19 +674,10 @@ defineExpose({
   color: #dc2626;
 }
 
-.result-footer {
-  display: flex;
-  justify-content: space-between;
-  font-size: 0.85rem;
-  color: #6b7280;
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid #e5e7eb;
-}
-
 .execution-time {
   color: #10b981;
   font-weight: 500;
+  margin-left: 20px;
 }
 
 .codeArea-result::-webkit-scrollbar {
