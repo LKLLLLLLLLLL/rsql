@@ -2,28 +2,54 @@
 <template>
   <div class="top-bar">
     <div class="table-info">
-      <h2>{{ currentTableName }}</h2>
-      <span class="table-count">{{ tableCount }} records</span>
+      <div class="title-row">
+        <h2>
+          <Icon :path="titleIcon" size="20" />
+          {{ displayTitle }}
+        </h2>
+        <span v-if="showOperationStatus" class="operation-status">{{ operationStatus }}</span>
+      </div>
+      <span v-if="showRecordCount" class="table-count">{{ tableCount }} records</span>
     </div>
     
     <div class="action-buttons">
-      <button class="action-btn insert" @click="emit('insert')">
+      <button 
+        class="action-btn insert" 
+        :class="{ active: currentMode === 'insert', disabled: isButtonDisabled }"
+        :disabled="isButtonDisabled"
+        @click="emit('insert')">
         <Icon :path="mdiPlus" size="16" />
         <span>Insert</span>
       </button>
-      <button class="action-btn delete" @click="emit('delete')">
+      <button 
+        class="action-btn delete" 
+        :class="{ active: currentMode === 'delete', disabled: isButtonDisabled }"
+        :disabled="isButtonDisabled"
+        @click="emit('delete')">
         <Icon :path="mdiDelete" size="16" />
         <span>Delete</span>
       </button>
-      <button class="action-btn update" @click="emit('update')">
+      <button 
+        class="action-btn update" 
+        :class="{ active: currentMode === 'update', disabled: isButtonDisabled }"
+        :disabled="isButtonDisabled"
+        @click="emit('update')">
         <Icon :path="mdiPencil" size="16" />
         <span>Update</span>
       </button>
-      <button class="action-btn query" @click="emit('query')">
+      <button 
+        class="action-btn query" 
+        :class="{ active: currentMode === 'query', disabled: isButtonDisabled }"
+        :disabled="isButtonDisabled"
+        @click="emit('query')">
         <Icon :path="mdiMagnify" size="16" />
         <span>Query</span>
       </button>
-      <button class="action-btn export" @click="emit('export')">
+      <button 
+        class="action-btn export" 
+        :class="{ active: currentMode === 'export', disabled: isButtonDisabled }"
+        :disabled="isButtonDisabled"
+        @click="emit('export')">
         <Icon :path="mdiDownload" size="16" />
         <span>Export</span>
       </button>
@@ -32,7 +58,7 @@
 </template>
 
 <script setup>
-import { defineProps, defineEmits } from 'vue'
+import { defineProps, defineEmits, computed } from 'vue'
 import Icon from './Icon.vue'
 import {
   mdiDelete,
@@ -40,14 +66,93 @@ import {
   mdiMagnify,
   mdiPencil,
   mdiPlus,
+  mdiTable,
+  mdiTablePlus,
+  mdiTableEdit,
+  mdiTableRemove,
+  mdiConsole,
 } from '@mdi/js'
 
 const props = defineProps({
   currentTableName: { type: String, default: '' },
-  tableCount: { type: Number, default: 0 }
+  tableCount: { type: Number, default: 0 },
+  currentMode: { type: String, default: 'table' } // table, create, rename, drop, terminal, insert, delete, update, query, export
 })
 
 const emit = defineEmits(['insert', 'delete', 'update', 'query', 'export'])
+
+// 计算显示的图标
+const titleIcon = computed(() => {
+  switch (props.currentMode) {
+    case 'create':
+      return mdiTablePlus
+    case 'rename':
+      return mdiTableEdit
+    case 'drop':
+      return mdiTableRemove
+    case 'terminal':
+      return mdiConsole
+    case 'insert':
+      return mdiPlus
+    case 'delete':
+      return mdiDelete
+    case 'update':
+      return mdiPencil
+    case 'query':
+      return mdiMagnify
+    case 'export':
+      return mdiDownload
+    default:
+      return mdiTable
+  }
+})
+
+// 计算显示的标题
+const displayTitle = computed(() => {
+  switch (props.currentMode) {
+    case 'create':
+      return 'Creating New Table'
+    case 'rename':
+      return 'Renaming Table'
+    case 'drop':
+      return 'Dropping Table'
+    case 'terminal':
+      return 'Terminal'
+    case 'table':
+      return `Table: ${props.currentTableName}`
+    default:
+      return props.currentTableName
+  }
+})
+
+// 是否显示记录数
+const showRecordCount = computed(() => {
+  return ['table', 'insert', 'delete', 'update', 'query', 'export'].includes(props.currentMode)
+})
+
+// 是否显示操作状态
+const showOperationStatus = computed(() => {
+  return ['insert', 'delete', 'update'].includes(props.currentMode)
+})
+
+// 操作状态文本
+const operationStatus = computed(() => {
+  switch (props.currentMode) {
+    case 'insert':
+      return 'Inserting Data'
+    case 'delete':
+      return 'Deleting Records'
+    case 'update':
+      return 'Updating Records'
+    default:
+      return ''
+  }
+})
+
+// 按钮是否禁用
+const isButtonDisabled = computed(() => {
+  return ['create', 'rename', 'drop', 'terminal'].includes(props.currentMode)
+})
 </script>
 
 <style scoped>
@@ -68,6 +173,13 @@ const emit = defineEmits(['insert', 'delete', 'update', 'query', 'export'])
   min-width: 0; /* 允许子元素收缩 */
 }
 
+.title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
 .table-info h2 {
   font-size: 1.1rem;
   font-weight: 600;
@@ -77,6 +189,9 @@ const emit = defineEmits(['insert', 'delete', 'update', 'query', 'export'])
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 300px; /* 限制最大宽度 */
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .table-count {
@@ -91,6 +206,20 @@ const emit = defineEmits(['insert', 'delete', 'update', 'query', 'export'])
   width: fit-content; /* 宽度跟随内容 */
   min-width: fit-content; /* 最小宽度跟随内容 */
   max-width: fit-content; /* 最大宽度跟随内容 */
+}
+
+.operation-status {
+  font-size: 0.85rem;
+  color: #0284c7;
+  background: #e0f2fe;
+  padding: 4px 8px;
+  border-radius: 12px;
+  display: inline-block;
+  font-weight: 500;
+  white-space: nowrap;
+  width: fit-content;
+  min-width: fit-content;
+  max-width: fit-content;
 }
 
 .action-buttons {
@@ -122,6 +251,23 @@ const emit = defineEmits(['insert', 'delete', 'update', 'query', 'export'])
 
 .action-btn:active {
   transform: translateY(0);
+}
+
+.action-btn.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.action-btn.active {
+  background: #0284c7;
+  color: #ffffff;
+  border-color: #0284c7;
+}
+
+.action-btn.active:hover {
+  background: #0369a1;
+  border-color: #0369a1;
 }
 
 .action-btn.insert:hover {

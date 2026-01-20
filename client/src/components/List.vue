@@ -93,31 +93,8 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { 
-  mdiTable,
-  mdiInformation
-} from '@mdi/js'
-
-// Define the Icon component inside this script
-const Icon = {
-  name: 'Icon',
-  props: {
-    path: { type: String, required: true },
-    size: { type: [Number, String], default: 18 },
-  },
-  setup(props) {
-    return () => {
-      return {
-        __html: `<svg class="icon" width="${props.size}" height="${props.size}" viewBox="0 0 24 24" aria-hidden="true"><path d="${props.path}" fill="currentColor"/></svg>`
-      }
-    }
-  },
-  render() {
-    return {
-      template: `<svg class="icon" :width="size" :height="size" viewBox="0 0 24 24" aria-hidden="true"><path :d="path" fill="currentColor"/></svg>`
-    }
-  }
-}
+import Icon from './Icon.vue'
+import { mdiTable } from '@mdi/js'
 
 const props = defineProps({
   headers: { type: Array, default: () => [] },

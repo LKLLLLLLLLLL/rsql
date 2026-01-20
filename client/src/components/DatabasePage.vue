@@ -23,6 +23,7 @@
         v-if="shouldShowTopBar"
         :current-table-name="currentTableName"
         :table-count="recordsCount"
+        :current-mode="activeSection"
         @insert="showInsertSection"
         @delete="showSection('delete')"
         @update="showSection('update')"
@@ -143,12 +144,6 @@
 
         <!-- 重命名表 -->
         <div v-if="activeSection === 'rename'" class="page-content">
-          <div class="page-header">
-            <div class="header-content">
-              <h2><Icon :path="mdiTableEdit" size="20" /> Rename Table</h2>
-              <!-- <p class="header-subtitle">Select a table to rename</p> -->
-            </div>
-          </div>
           <div class="table-list-content">
             <div v-if="tables.length === 0" class="empty-state">
               <Icon :path="mdiTableOff" size="48" />
@@ -175,12 +170,6 @@
 
         <!-- 删除表 -->
         <div v-if="activeSection === 'drop'" class="page-content">
-          <div class="page-header">
-            <div class="header-content">
-              <h2><Icon :path="mdiTableRemove" size="20" /> Drop Table</h2>
-              <!-- <p class="header-subtitle">Select a table to delete (this action cannot be undone)</p> -->
-            </div>
-          </div>
           <div class="table-list-content">
             <div v-if="tables.length === 0" class="empty-state">
               <Icon :path="mdiTableOff" size="48" />
@@ -305,7 +294,9 @@ const wsUrl = computed(() => {
 
 // 计算属性
 const recordsCount = computed(() => viewRows.value.length)
-const shouldShowTopBar = computed(() => ['table', 'delete', 'update'].includes(activeSection.value))
+const shouldShowTopBar = computed(() => 
+  ['table', 'insert', 'delete', 'update', 'query', 'export', 'create', 'rename', 'drop', 'terminal'].includes(activeSection.value)
+)
 
 // 辅助函数
 function checkTypeMatches(type, data) {

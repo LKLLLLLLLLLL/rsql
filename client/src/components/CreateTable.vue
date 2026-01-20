@@ -1,13 +1,6 @@
 <!-- CreateTable.vue -->
 <template>
   <div class="page-content">
-    <div class="page-header">
-      <div class="header-content">
-        <h2><Icon :path="mdiTablePlus" size="20" /> Create New Table</h2>
-        <!-- <p class="header-subtitle">Define table structure and create a new database table</p> -->
-      </div>
-    </div>
-
     <div class="create-panel">
       <div class="form-section">
         <div class="form-group">

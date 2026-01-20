@@ -1,16 +1,6 @@
 <!-- DataTable.vue -->
 <template>
   <div class="table-container">
-    <div class="page-header">
-      <div class="header-content">
-        <h2><Icon :path="mdiTable" size="20" /> {{ currentTableName }} Table Data</h2>
-        <div class="header-info">
-          <span class="record-count">Total {{ recordsCount }} records</span>
-          <span class="last-update">Updated on <span id="update-time">{{ formattedUpdateTime }}</span></span>
-        </div>
-      </div>
-    </div>
-    
     <div class="table-wrapper">
       <VirtualList
         :key="renderKey"

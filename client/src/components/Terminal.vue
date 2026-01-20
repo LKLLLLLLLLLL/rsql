@@ -1,11 +1,5 @@
 <template>
   <div class="terminal-operation">
-    <div class="page-header">
-      <div class="header-content">
-        <h2><Icon :path="mdiConsole" size="20" /> Terminal</h2>
-      </div>
-    </div>
-    
     <div class="terminal-panel">
       <div class="code-area">
         <SqlEditor
