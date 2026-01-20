@@ -155,14 +155,14 @@
             <div v-else class="table-operation-list">
               <div 
                 v-for="table in tables" 
-                :key="table" 
+                :key="`${table.tableId}`" 
                 class="table-operation-item"
               >
                 <div class="table-info-section">
                   <Icon :path="mdiTable" size="20" />
-                  <span class="table-name-text">{{ table }}</span>
+                  <span class="table-name-text">{{ table.tableName }}</span>
                 </div>
-                <button class="operation-btn rename-btn" @click="openRenameModal(table)">
+                <button class="operation-btn rename-btn" @click="openRenameModal(table.tableName)">
                   <Icon :path="mdiPencilOutline" size="16" />
                   Rename
                 </button>
@@ -187,14 +187,14 @@
             <div v-else class="table-operation-list">
               <div 
                 v-for="table in tables" 
-                :key="table" 
+                :key="`${table.tableId}`" 
                 class="table-operation-item"
               >
                 <div class="table-info-section">
                   <Icon :path="mdiTable" size="20" />
-                  <span class="table-name-text">{{ table }}</span>
+                  <span class="table-name-text">{{ table.tableName }}</span>
                 </div>
-                <button class="operation-btn drop-btn" @click="openDropModal(table)">
+                <button class="operation-btn drop-btn" @click="openDropModal(table.tableName)">
                   <Icon :path="mdiTrashCanOutline" size="16" />
                   Delete
                 </button>
@@ -274,6 +274,10 @@ let wsRef = null
 let currentTableHeaders = [] // 列元数据 (name, type, ableToBeNULL, primaryKey, unique)
 let currentTableRows = [] // 所有数据行
 let currentDisplayHeaders = [] // 显示用的列名
+
+// 表列表查询标志
+let isLoadingTableList = false
+let tableListTimeoutId = null
 
 // WebSocket URL
 const wsUrl = computed(() => {
@@ -413,7 +417,9 @@ function confirmRenameTable(newName) {
   }
 }
 
-function selectTable(tableName) {
+function selectTable(tableObj) {
+  // tableObj 可以是字符串（向后兼容）或对象 { tableId, tableName }
+  const tableName = typeof tableObj === 'string' ? tableObj : tableObj.tableName
   currentTableName.value = tableName
   activeSidebarButton.value = 'list'
   showSection('table')
@@ -441,6 +447,8 @@ function connectWebSocket() {
   socket.onopen = () => {
     wsConnected.value = true
     console.log('WebSocket connected')
+    // 连接建立后立即加载表列表
+    loadTablesList()
   }
 
   socket.onclose = () => {
@@ -456,21 +464,73 @@ function connectWebSocket() {
   socket.onmessage = (ev) => {
     try {
       const data = JSON.parse(ev.data)
-      console.log('WebSocket response:', data)
-      handleSqlResult(data)
+      console.log('WebSocket response:', data, 'isLoadingTableList:', isLoadingTableList)
       
-      // 如果操作成功，重新加载数据
-      if (data.success) {
-        // 延迟加载，给后端一点时间完成操作
-        setTimeout(() => {
-          loadTablesList()
-          if (currentTableName.value) {
-            loadTableData(currentTableName.value)
+      // 检查是否是表列表查询的结果
+      if (isLoadingTableList) {
+        // 可能的两种格式：
+        // 1) data.Query.rows (结构化返回)
+        // 2) data.rayon_response.uniform_result[0].data.rows (扁平数组返回)
+        const rows = data?.Query?.rows
+          || data?.rayon_response?.uniform_result?.[0]?.data?.rows
+          || []
+
+        if (Array.isArray(rows) && rows.length > 0) {
+          console.log('Processing table list query response')
+          isLoadingTableList = false
+
+          // 系统表列表
+          const systemTables = ['sys_table', 'sys_column', 'sys_index', 'sys_sequence', 'sys_user']
+
+          try {
+            // rows 可能是对象数组或原始值数组，统一处理
+            const tableList = rows
+              .map(row => {
+                // 支持 [{Integer:0},{Chars:{value:'sys'}}] 和 [0,'sys'] 两种格式
+                const tableId = typeof row[0] === 'object' ? row[0].Integer : row[0]
+                const tableName = typeof row[1] === 'object' ? row[1].Chars?.value : row[1]
+                return { tableId, tableName }
+              })
+              .filter(item => item.tableName && !systemTables.includes(item.tableName))
+
+            tables.value = tableList
+            console.log('Tables loaded successfully:', tables.value)
+          } catch (parseError) {
+            console.error('Error parsing table list:', parseError)
+            tables.value = []
           }
-        }, 100)
+        } else {
+          console.warn('Expected table list rows but got empty or invalid format:', rows)
+          isLoadingTableList = false
+        }
+        // 清理超时计时器
+        if (tableListTimeoutId) {
+          clearTimeout(tableListTimeoutId)
+          tableListTimeoutId = null
+        }
+      } else if (!isLoadingTableList) {
+        // 只有在不是等待表列表查询时，才处理其他类型的 SQL 结果
+        console.log('Processing SQL result')
+        handleSqlResult(data)
+        
+        // 如果操作成功，重新加载数据
+        if (data.success) {
+          // 延迟加载，给后端一点时间完成操作
+          setTimeout(() => {
+            loadTablesList()
+            if (currentTableName.value) {
+              loadTableData(currentTableName.value)
+            }
+          }, 100)
+        }
+      } else {
+        // 这是表列表查询但格式不对，重置标志
+        console.warn('Expected table list query response but got different format:', data)
+        isLoadingTableList = false
       }
     } catch (e) {
       console.warn('Parse WebSocket message failed', e, ev.data)
+      isLoadingTableList = false
     }
   }
 }
@@ -546,20 +606,54 @@ async function loadTableData(tableName) {
   }
 }
 
-async function loadTablesList() {
-  // 从 public/TABLES.json 加载表格列表
-  try {
-    const response = await fetch('/TABLES.json')
-    if (!response.ok) {
-      throw new Error(`Failed to load TABLES.json: ${response.statusText}`)
-    }
-    const data = await response.json()
-    tables.value = Array.isArray(data.tables) ? data.tables : []
-    console.log('Tables loaded:', tables.value)
-  } catch (error) {
-    console.error('Error loading tables:', error)
+function loadTablesList() {
+  // 通过 WebSocket 发送 SQL 查询获取系统表中的表列表
+  if (!wsRef || wsRef.readyState !== WebSocket.OPEN) {
+    console.warn('WebSocket not connected, cannot load tables')
     tables.value = []
+    return
   }
+
+  // 防止重复查询
+  if (isLoadingTableList) {
+    console.warn('Table list query already in progress, skipping')
+    return
+  }
+
+  // 设置标志位，让 onmessage 处理器知道这是一个表列表查询
+  isLoadingTableList = true
+  
+  // 清理旧的超时计时器
+  if (tableListTimeoutId) {
+    clearTimeout(tableListTimeoutId)
+    tableListTimeoutId = null
+  }
+
+  // 设置超时，防止被永久锁定
+  tableListTimeoutId = setTimeout(() => {
+    if (isLoadingTableList) {
+      console.warn('Table list query timeout, resetting flag')
+      isLoadingTableList = false
+    }
+    tableListTimeoutId = null
+  }, 5000)
+  
+  // 发送查询命令
+  const payload = {
+    username: (() => {
+      try {
+        const u = typeof window !== 'undefined' ? localStorage.getItem('username') : null
+        return u || 'root'
+      } catch {
+        return 'root'
+      }
+    })(),
+    userid: 0,
+    request_content: 'select * from sys_table',
+  }
+  
+  console.log('Sending table list query')
+  wsRef.send(JSON.stringify(payload))
 }
 
 function handleCreateTable({ tableName, columns }) {
@@ -741,7 +835,6 @@ onMounted(() => {
     username.value = localStorage.getItem('username') || ''
   } catch {}
   connectWebSocket()
-  loadTablesList()
   // 默认不加载任何表格数据，让用户选择
   showSection('terminal')
 })
