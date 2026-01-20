@@ -11,7 +11,7 @@
           <!-- <div class="logo">RSQL</div> -->
           <div class="text-container">
             <h2>RSQL Dashboard</h2>
-            <p>A relational Database System built with Rust</p>
+            <p>A modern relational database system built with Rust</p>
           </div>
         </div>
       </div>
@@ -20,7 +20,7 @@
     <section class="card">
       <form class="form" @submit.prevent="handleSubmit">
         <div class="login-title">
-          <h2>Login</h2>
+          <h2>Sign In</h2>
         </div>
         <div class="field">
           <label for="username">Username</label>
@@ -41,7 +41,7 @@
 
         <div class="actions">
           <button class="submit" type="submit" :disabled="pending">
-            <span v-if="!pending">Login</span>
+            <span v-if="!pending">Sign In</span>
             <span v-else>Processing...</span>
           </button>
         </div>
@@ -177,6 +177,7 @@ const handleSubmit = async () => {
   color: #d7e2ff;
   font-size: 15px;
   line-height: 1.5;
+  opacity: 0.9;
 }
 
 .card {
@@ -204,6 +205,7 @@ const handleSubmit = async () => {
 label {
   font-size: 13px;
   color: #475569;
+  font-weight: 500;
 }
 
 input[type='email'],
@@ -236,17 +238,23 @@ input:focus {
   background: #315efb;
   color: #ffffff;
   padding: 12px 18px;
+  width: 100%;
   border-radius: 10px;
   font-weight: 700;
   cursor: pointer;
   min-width: 140px;
-  transition: transform 0.12s ease, box-shadow 0.16s ease;
+  transition: background 0.2s ease, box-shadow 0.2s ease;
   box-shadow: 0 12px 30px rgba(49, 94, 251, 0.24);
 }
 
 .submit:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: 0 16px 36px rgba(49, 94, 251, 0.28);
+  background: #2a56e6;
+  box-shadow: 0 14px 36px rgba(49, 94, 251, 0.32);
+}
+
+.submit:active:not(:disabled) {
+  background: #254ed9;
+  box-shadow: 0 8px 24px rgba(49, 94, 251, 0.28);
 }
 
 .submit:disabled {
@@ -254,10 +262,19 @@ input:focus {
   cursor: not-allowed;
 }
 
+.login-title h2 {
+  color: #0f172a;
+  font-weight: 700;
+  font-size: 24px;
+  /* margin: 0 0 16px; */
+  text-align: center;
+}
+
 .message {
   margin: 6px 0 0;
   font-size: 13px;
   color: #475569;
+  text-align: center;
 }
 
 .message.error {
