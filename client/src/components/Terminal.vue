@@ -43,18 +43,16 @@
               <pre v-if="!item.success" class="error">执行的SQL语句：{{ item.rayon_response.request_content || codeInput || '(unknown)' }}
 
 错误信息：{{ item.rayon_response.error || '未知错误' }}</pre>
-              <div v-else-if="item.parsedTable" class="result-table-wrapper">
-                <div class="result-sql">执行的SQL语句：{{ item.rayon_response.request_content || codeInput || '(unknown)' }}</div>
-                <DataTable
-                  :headers="item.parsedTable.headers"
-                  :rows="item.parsedTable.rows"
-                  mode="view"
-                  :max-height="Math.min(((item.parsedTable.rows?.length || 1) * 52) + 56, 600)"
-                  compact
-                  class="result-table"
-                />
-              </div>
-              <pre v-else>{{ formatResultContent(item) }}</pre>
+              <DataTable
+                v-else-if="item.parsedTable"
+                :headers="item.parsedTable.headers"
+                :rows="item.parsedTable.rows"
+                mode="view"
+                :max-height="Math.min(((item.parsedTable.rows?.length || 1) * 52) + 56, 600)"
+                compact
+                class="result-table"
+              />
+              <pre v-else-if="item.textContent">{{ item.textContent }}</pre>
             </div>
             <div class="result-footer">
               <span>Connection: {{ item.connection_id }}</span>
@@ -107,7 +105,11 @@ function connectWebSocket() {
     try {
       const data = JSON.parse(ev.data)
       const parsedTable = parseTableFromResponse(data)
-      codeResults.value.push({ ...data, parsedTable })
+      const textContent = formatResultContent(data)
+      if (!parsedTable && !textContent) {
+        return
+      }
+      codeResults.value.push({ ...data, parsedTable, textContent })
       emit('sql-executed', data)
       // 自动滚动到底部
       scrollToBottom()
@@ -230,12 +232,12 @@ function formatResultContent(item) {
   if (item.rayon_response.error === 'Websocket Connection Established' && 
       Array.isArray(item.rayon_response.response_content) && 
       item.rayon_response.response_content.length === 0) {
-    return 'WebSocket连接成功'
+    return ''
   }
   if (item.rayon_response.error === 'Checkpoint Success' && 
       Array.isArray(item.rayon_response.response_content) && 
       item.rayon_response.response_content.length === 0) {
-    return 'WebSocket连接正常'
+    return ''
   }
   
   // 正常错误处理
@@ -471,6 +473,8 @@ defineExpose({
   margin: 20px 0;
   display: flex;
   gap: 12px;
+  justify-content: flex-end;
+  align-items: center;
 }
 
 .codeArea-submit {
@@ -604,22 +608,6 @@ defineExpose({
 
 .result-content {
   margin: 12px 0;
-}
-
-.result-table-wrapper {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.result-sql {
-  font-size: 0.9rem;
-  color: #374151;
-  background: #f8fafc;
-  border: 1px solid #e5e7eb;
-  border-radius: 6px;
-  padding: 8px 12px;
-  word-break: break-all;
 }
 
 .result-content pre {

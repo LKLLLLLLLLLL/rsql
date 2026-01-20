@@ -127,12 +127,12 @@ onBeforeUnmount(() => {
 
 .sql-editor :deep(.cm-editor) {
   height: 100%;
-  font-size: 24px;
+  font-size: 18px;
   font-family: 'Consolas', 'Courier New', monospace;
 }
 
 .sql-editor :deep(.cm-content) {
-  font-size: 24px;
+  font-size: 18px;
 }
 
 .sql-editor :deep(.cm-line) {

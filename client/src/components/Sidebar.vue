@@ -11,7 +11,7 @@
       </div>
     </div>
     <div>
-      <p class="header-subtitle">A Rust Database Management System</p>
+      <p class="header-subtitle">A simple relational database system written in Rust.</p>
     </div>
   </div>
   
