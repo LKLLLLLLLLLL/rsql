@@ -2,13 +2,22 @@ use crate::catalog::SysCatalog;
 use crate::common::{RsqlResult, RsqlError};
 use crate::sql::plan::{PlanNode};
 use crate::config::DEFAULT_PASSWORD;
+use crate::server::conncetion_user_map::ConnectionUserMap;
 use super::result::{ExecutionResult::{self, Dcl}};
 use tracing::info;
 
 /// user relevent sql statements
-pub fn execute_dcl_plan_node(node: &PlanNode, tnx_id: u64) -> RsqlResult<ExecutionResult> {
+pub fn execute_dcl_plan_node(node: &PlanNode, tnx_id: u64, connection_id: u64) -> RsqlResult<ExecutionResult> {
+    let username = ConnectionUserMap::global()
+        .get_username(connection_id)
+        .ok_or(RsqlError::ExecutionError("Failed to get username from connection ID".to_string()))?;
     match node {
         PlanNode::CreateUser {user_name, password, if_not_exists} => {
+            // verify permision
+            let has_permission = SysCatalog::global().check_user_write_permission(tnx_id, &username)?;
+            if !has_permission {
+                return Err(RsqlError::ExecutionError(format!("User {} does not have permission to create user.", username)));
+            }
             // check if user exists
             let all_users = SysCatalog::global().get_all_users(tnx_id)?;
             if all_users.contains(user_name) {
@@ -26,6 +35,11 @@ pub fn execute_dcl_plan_node(node: &PlanNode, tnx_id: u64) -> RsqlResult<Executi
             Ok(Dcl(format!("User {} created successfully.", user_name)))
         },
         PlanNode::DropUser {user_name, if_exists} => {
+            // verify permision
+            let has_permission = SysCatalog::global().check_user_write_permission(tnx_id, &username)?;
+            if !has_permission {
+                return Err(RsqlError::ExecutionError(format!("User {} does not have permission to drop user.", username)));
+            }
             // check if user exists
             let all_users = SysCatalog::global().get_all_users(tnx_id)?;
             if !all_users.contains(user_name) {
@@ -41,6 +55,11 @@ pub fn execute_dcl_plan_node(node: &PlanNode, tnx_id: u64) -> RsqlResult<Executi
         },
         // only support write permission for now
         PlanNode::Grant { privilege, user_name } => {
+            // verify permision
+            let has_permission = SysCatalog::global().check_user_write_permission(tnx_id, &username)?;
+            if !has_permission {
+                return Err(RsqlError::ExecutionError(format!("User {} does not have permission to grant write permission.", username)));
+            }
             if privilege.to_uppercase() != "WRITE" {
                 return Err(RsqlError::ExecutionError(format!("Unsupported privilege: {}", privilege)));
             }
@@ -60,6 +79,11 @@ pub fn execute_dcl_plan_node(node: &PlanNode, tnx_id: u64) -> RsqlResult<Executi
         },
         // only support write permission for now
         PlanNode::Revoke { privilege, user_name } => {
+            // verify permision
+            let has_permission = SysCatalog::global().check_user_write_permission(tnx_id, &username)?;
+            if !has_permission {
+                return Err(RsqlError::ExecutionError(format!("User {} does not have permission to revoke write permission.", username)));
+            }
             if privilege.to_uppercase() != "WRITE" {
                 return Err(RsqlError::ExecutionError(format!("Unsupported privilege: {}", privilege)));
             }

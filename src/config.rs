@@ -20,7 +20,7 @@ pub const MAX_USERNAME_SIZE: usize = 64; // 64 bytes
 pub const MAX_TABLE_NAME_SIZE: usize = 64; // 64 bytes
 
 pub const MAX_PAGE_CACHE_BYTES: usize = 100 * 1024 * 1024; // 100 MB
-pub const PAGE_SIZE_BYTES: usize = 4 * 1024; // 4 KB
+pub const PAGE_SIZE_BYTES: usize = 16 * 1024; // 16 KB
 
 pub const DEFAULT_USERNAME: &str = "root";
 pub const DEFAULT_PASSWORD: &str = "password";
