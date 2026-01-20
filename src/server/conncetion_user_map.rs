@@ -27,10 +27,10 @@ impl ConnectionUserMap {
         map.get(&connection_id).cloned()
     }
 
-    pub fn get_all_connections(&self) -> Vec<u64> {
-        let map = self.map.lock().unwrap();
-        map.keys().cloned().collect()
-    }
+    // pub fn get_all_connections(&self) -> Vec<u64> {
+    //     let map = self.map.lock().unwrap();
+    //     map.keys().cloned().collect()
+    // }
 
     pub fn insert_connection(&self, connection_id: u64, username: String) {
         let mut map = self.map.lock().unwrap();

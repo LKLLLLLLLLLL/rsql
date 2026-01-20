@@ -150,8 +150,9 @@ function handleLogout() {
   try { close() } catch (e) {}
   // 触发 logout 事件
   emit('logout')
-  // 跳转到登录页
-  router.push('/')
+
+  // 使用 replace 而不是 push，这样用户无法通过浏览器回退返回到工作页面
+  router.replace('/')
 }
 
 // 组件挂载时尝试连接（使用单例 wsService），若 props 提供 wsUrl 则使用之
