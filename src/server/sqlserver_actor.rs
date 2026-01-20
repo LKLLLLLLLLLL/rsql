@@ -4,6 +4,7 @@ use crate::common::data_item::DataItem;
 use crate::execution::result::ExecutionResult;
 use crate::catalog::table_schema::ColType;
 use crate::server::conncetion_user_map::ConnectionUserMap;
+use crate::config::{BACKUP_INTERVAL_SECS, CHECKPOINT_INTERVAL_SECS};
 
 use actix_web_actors::ws;
 use actix::{Actor, StreamHandler, AsyncContext};
@@ -187,12 +188,13 @@ impl Actor for SQLWebsocketActor {
             ctx.text(json_msg);
         }
 
-        let thread_pool = self.working_thread_pool.clone();
+        let thread_pool_checkpoint = self.working_thread_pool.clone();
+        let thread_pool_backup = self.working_thread_pool.clone();
         let connection_id = self.current_connection_id;
         // let addr = ctx.address().clone();
         
-        ctx.run_interval(std::time::Duration::from_secs(60), move |_act, _ctx| {
-            let thread_pool = thread_pool.clone();
+        ctx.run_interval(std::time::Duration::from_secs(CHECKPOINT_INTERVAL_SECS), move |_act, _ctx| {
+            let thread_pool = thread_pool_checkpoint.clone();
             // let addr = addr.clone();
             
             actix::spawn(async move {
@@ -219,6 +221,19 @@ impl Actor for SQLWebsocketActor {
                         // }
                     }
                     Err(e) => error!("Checkpoint failed: {:?}", e),
+                }
+            });
+        });
+        ctx.run_interval(std::time::Duration::from_secs(BACKUP_INTERVAL_SECS), move |_act, _ctx| {
+            let thread_pool = thread_pool_backup.clone();
+            
+            actix::spawn(async move {
+                match thread_pool.make_backup(connection_id).await {
+                    Ok(msg) => {
+                        info!("Backup successful: {}", msg);
+                        
+                    }
+                    Err(e) => error!("Backup failed: {:?}", e),
                 }
             });
         });
