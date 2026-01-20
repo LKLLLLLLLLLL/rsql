@@ -83,6 +83,17 @@ const codeInput = ref('')
 const codeResults = ref([])
 const resultContainer = ref(null)
 let wsRef = null
+// 标记用户是否主动发起了一次查询，防止系统自发推送被终端展示
+const userRequestPending = ref(false)
+let userRequestResetTimer = null
+
+function scheduleUserRequestReset(delay = 600) {
+  if (userRequestResetTimer) clearTimeout(userRequestResetTimer)
+  userRequestResetTimer = setTimeout(() => {
+    userRequestPending.value = false
+    userRequestResetTimer = null
+  }, delay)
+}
 
 function connectWebSocket() {
   const socket = new WebSocket(props.wsUrl)
@@ -102,11 +113,13 @@ function connectWebSocket() {
   }
 
   socket.onmessage = (ev) => {
+    if (!userRequestPending.value) return
     try {
       const data = JSON.parse(ev.data)
       const parsedTable = parseTableFromResponse(data)
       const textContent = formatResultContent(data)
       if (!parsedTable && !textContent) {
+        scheduleUserRequestReset()
         return
       }
 
@@ -114,6 +127,7 @@ function connectWebSocket() {
       emit('sql-executed', data)
       // 自动滚动到底部
       scrollToBottom()
+      scheduleUserRequestReset()
     } catch (e) {
       console.warn('Parse WebSocket message failed', e, ev.data)
     }
@@ -194,6 +208,7 @@ function submitSql() {
     userid: 0,
     request_content: sql,
   }
+  userRequestPending.value = true
   try { wsSend(JSON.stringify(payload)) } catch (e) { console.warn('ws send failed', e) }
 }
 
@@ -224,6 +239,7 @@ function sendSqlStatement(sql, actionLabel = 'SQL') {
     userid: 0,
     request_content: trimmed,
   }
+  userRequestPending.value = true
   try { wsSend(JSON.stringify(payload)) } catch (e) { console.warn('ws send failed', e) }
   codeInput.value = trimmed
 }
@@ -415,10 +431,14 @@ function formatCellValue(cell) {
 }
 
 function onServiceMessage(payload) {
+  if (!userRequestPending.value) return
   try {
     const parsedTable = parseTableFromResponse(payload)
     const textContent = formatResultContent(payload)
-    if (!parsedTable && !textContent) return
+    if (!parsedTable && !textContent) {
+      scheduleUserRequestReset()
+      return
+    }
 
     // ensure timestamp and success fields for the UI
     const entry = {
@@ -432,6 +452,7 @@ function onServiceMessage(payload) {
     codeResults.value.push(entry)
     emit('sql-executed', payload)
     scrollToBottom()
+    scheduleUserRequestReset()
   } catch (e) {
     console.warn('onServiceMessage parse failed', e, payload)
   }
