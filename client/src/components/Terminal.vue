@@ -1,14 +1,8 @@
-<!-- Terminal.vue -->
 <template>
   <div class="terminal-operation">
     <div class="page-header">
       <div class="header-content">
         <h2><Icon :path="mdiConsole" size="20" /> Terminal</h2>
-        <p class="header-subtitle">Execute SQL commands directly</p>
-      </div>
-      <div class="header-status" :class="{ connected: connected }">
-        <span class="status-dot"></span>
-        {{ connected ? 'Connected' : 'Connecting...' }}
       </div>
     </div>
     
@@ -31,7 +25,7 @@
         </button>
         <button v-if="codeResults.length > 0" class="clear-results" @click="codeResults = []">Clear Results</button>
       </div>
-      <div class="codeArea-result">
+      <div class="codeArea-result" ref="resultContainer">
         <div class="result-header">
           <h4>Execution Results</h4>
         </div>
@@ -53,7 +47,9 @@
             </div>
             <div class="result-content">
               <pre v-if="item.success">{{ formatResultContent(item) }}</pre>
-              <pre v-else class="error">{{ item.rayon_response.error || '未知错误' }}</pre>
+              <pre v-else class="error">执行的SQL语句：{{ item.rayon_response.request_content || codeInput || '(unknown)' }}
+
+错误信息：{{ item.rayon_response.error || '未知错误' }}</pre>
             </div>
             <div class="result-footer">
               <span>Connection: {{ item.connection_id }}</span>
@@ -67,7 +63,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import SqlEditor from './SqlEditor.vue'
 import Icon from './Icon.vue'
 import { mdiLanDisconnect, mdiConsole } from '@mdi/js'
@@ -81,6 +77,7 @@ const emit = defineEmits(['sql-executed'])
 const connected = ref(false)
 const codeInput = ref('')
 const codeResults = ref([])
+const resultContainer = ref(null)
 let wsRef = null
 
 function connectWebSocket() {
@@ -105,10 +102,20 @@ function connectWebSocket() {
       const data = JSON.parse(ev.data)
       codeResults.value.push(data)
       emit('sql-executed', data)
+      // 自动滚动到底部
+      scrollToBottom()
     } catch (e) {
       console.warn('Parse WebSocket message failed', e, ev.data)
     }
   }
+}
+
+function scrollToBottom() {
+  nextTick(() => {
+    if (resultContainer.value) {
+      resultContainer.value.scrollTop = resultContainer.value.scrollHeight
+    }
+  })
 }
 
 function submitSql() {
@@ -195,13 +202,126 @@ function formatResultContent(item) {
     return item.rayon_response.error || '未知错误'
   }
   
-  // 处理响应内容
-  const content = item.rayon_response.response_content
-  if (Array.isArray(content) && content.length === 0) {
-    return '(empty result)'
+  // 提取执行的SQL语句
+  const sql = item.rayon_response.request_content || codeInput.value || '(unknown SQL)'
+  let output = `执行的SQL语句：${sql}\n\n`
+  
+  // 处理响应内容 - 尝试解析查询结果
+  const responseContent = item.rayon_response.response_content
+  
+  // 检查是否是查询结果（包含uniform_result）
+  if (item.rayon_response.uniform_result && 
+      Array.isArray(item.rayon_response.uniform_result) && 
+      item.rayon_response.uniform_result.length > 0) {
+    
+    const result = item.rayon_response.uniform_result[0]
+    if (result.data && result.data.rows && result.data.columns) {
+      const rows = result.data.rows
+      const columns = result.data.columns
+      
+      if (rows.length === 0) {
+        output += '(没有查询结果)\n'
+        return output
+      }
+      
+      // 格式化表格
+      output += formatTable(columns, rows)
+      output += `\n总记录数: ${rows.length}`
+      return output
+    }
   }
   
-  return content || '(no output)'
+  // 检查是否是旧格式的Query结果
+  if (responseContent && Array.isArray(responseContent)) {
+    for (const item of responseContent) {
+      if (item.Query && item.Query.rows && item.Query.columns) {
+        const rows = item.Query.rows
+        const columns = item.Query.columns
+        
+        if (rows.length === 0) {
+          output += '(没有查询结果)\n'
+          return output
+        }
+        
+        output += formatTable(columns, rows)
+        output += `\n总记录数: ${rows.length}`
+        return output
+      }
+    }
+  }
+  
+  // 非查询语句（如INSERT、UPDATE、DELETE、CREATE等）
+  if (responseContent && Array.isArray(responseContent)) {
+    if (responseContent.length === 0) {
+      output += '执行成功'
+      return output
+    }
+    // 显示受影响的行数或其他信息
+    output += JSON.stringify(responseContent, null, 2)
+    return output
+  }
+  
+  output += '执行成功'
+  return output
+}
+
+function formatTable(columns, rows) {
+  // 计算每列的最大宽度
+  const columnWidths = columns.map((col, idx) => {
+    const colName = String(col || `col${idx}`)
+    let maxWidth = colName.length
+    
+    rows.forEach(row => {
+      const value = formatCellValue(row[idx])
+      maxWidth = Math.max(maxWidth, value.length)
+    })
+    
+    return Math.min(maxWidth, 50) // 限制最大宽度为50
+  })
+  
+  let output = ''
+  
+  // 输出列名
+  const headerLine = columns.map((col, idx) => {
+    const colName = String(col || `col${idx}`)
+    return colName.padEnd(columnWidths[idx], ' ')
+  }).join(' | ')
+  
+  output += headerLine + '\n'
+  
+  // 输出分隔线
+  const separatorLine = columnWidths.map(width => '-'.repeat(width)).join('-+-')
+  output += separatorLine + '\n'
+  
+  // 输出数据行
+  rows.forEach(row => {
+    const rowLine = row.map((cell, idx) => {
+      const value = formatCellValue(cell)
+      return value.padEnd(columnWidths[idx], ' ')
+    }).join(' | ')
+    output += rowLine + '\n'
+  })
+  
+  return output
+}
+
+function formatCellValue(cell) {
+  if (cell === null || cell === undefined) {
+    return 'NULL'
+  }
+  
+  // 处理对象类型（如 {Integer: 1}, {Chars: {value: "text"}}）
+  if (typeof cell === 'object') {
+    if (cell.Integer !== undefined) return String(cell.Integer)
+    if (cell.Float !== undefined) return String(cell.Float)
+    if (cell.Chars && cell.Chars.value !== undefined) return String(cell.Chars.value)
+    if (cell.Boolean !== undefined) return String(cell.Boolean)
+    return JSON.stringify(cell)
+  }
+  
+  const str = String(cell)
+  // 截断过长的字符串
+  return str.length > 50 ? str.substring(0, 47) + '...' : str
 }
 
 onMounted(() => {
@@ -437,10 +557,14 @@ defineExpose({
   margin: 0;
   font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', Monaco, Consolas, monospace;
   font-size: 13px;
-  line-height: 1.5;
+  line-height: 1.6;
   color: #1a1f36;
-  white-space: pre-wrap;
-  word-break: break-word;
+  white-space: pre;
+  overflow-x: auto;
+  padding: 12px;
+  background: #ffffff;
+  border-radius: 6px;
+  border: 1px solid #e5e7eb;
 }
 
 .result-content pre.error {

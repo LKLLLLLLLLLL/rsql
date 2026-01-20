@@ -1,25 +1,39 @@
 <template>
   <div class="auth">
     <section class="hero">
-      <div class="logo">RSQL</div>
-      <h2>轻量数据库云控台</h2>
-      <p>弹性 · 好用 · 省心</p>
+      <div class="logo-container">
+        <div class="icon-container">
+          <div class="logo-icon">
+            <Icon :path="mdiDatabase" size="36" />
+          </div>
+        </div>
+        <div class="logo-text">
+          <!-- <div class="logo">RSQL</div> -->
+          <div class="text-container">
+            <h2>RSQL Dashboard</h2>
+            <p>A relational Database System built with Rust</p>
+          </div>
+        </div>
+      </div>
     </section>
 
     <section class="card">
       <form class="form" @submit.prevent="handleSubmit">
+        <div class="login-title">
+          <h2>Login</h2>
+        </div>
         <div class="field">
-          <label for="username">用户名</label>
-          <input id="username" v-model.trim="form.username" type="text" placeholder="请输入用户名" autocomplete="username" />
+          <label for="username">Username</label>
+          <input id="username" v-model.trim="form.username" type="text" placeholder="Enter username" autocomplete="username" />
         </div>
 
         <div class="field">
-          <label for="password">密码</label>
+          <label for="password">Password</label>
           <input
             id="password"
             v-model.trim="form.password"
             type="password"
-            placeholder="请输入密码"
+            placeholder="Enter password"
             autocomplete="current-password"
             required
           />
@@ -27,8 +41,8 @@
 
         <div class="actions">
           <button class="submit" type="submit" :disabled="pending">
-            <span v-if="!pending">登录</span>
-            <span v-else>处理中...</span>
+            <span v-if="!pending">Login</span>
+            <span v-else>Processing...</span>
           </button>
         </div>
 
@@ -43,6 +57,8 @@
 <script setup>
 import { reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import Icon from './Icon.vue'
+import { mdiDatabase } from '@mdi/js'
 
 const router = useRouter()
 const pending = ref(false)
@@ -73,7 +89,7 @@ const handleSubmit = async () => {
     localStorage.setItem('password', form.password || '')
   } catch {}
   messageType.value = 'success'
-  message.value = '登录成功，即将进入控制台'
+  message.value = 'Login successful, redirecting to dashboard...'
   router.push('/database')
 }
 </script>
@@ -97,27 +113,70 @@ const handleSubmit = async () => {
   background: radial-gradient(circle at 20% 20%, rgba(255, 255, 255, 0.08), transparent 48%),
     linear-gradient(160deg, #0c1a3a 0%, #0a1531 100%);
   color: #fff;
-  padding: 64px 48px;
+  padding: 64px 64px;
   display: flex;
   flex-direction: column;
   justify-content: center;
   gap: 16px;
 }
 
+.logo-container {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.icon-container{
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+}
+
+.logo-icon {
+  padding: 16px;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.15) 0%, rgba(99, 102, 241, 0.3) 100%);
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 80px;
+  height: 80px;
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  box-shadow: 0 8px 24px rgba(99, 102, 241, 0.2);
+}
+
+.logo-text {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.text-container{
+  width: 100%;
+  text-align: center;
+}
+
 .logo {
-  font-size: 18px;
+  font-size: 20px;
   font-weight: 700;
   letter-spacing: 0.08em;
+  color: #f8fafc;
 }
 
 .hero h2 {
-  font-size: 28px;
+  font-size: 32px;
   margin: 0;
+  font-weight: 700;
+  color: #f8fafc;
 }
 
 .hero p {
   margin: 0;
   color: #d7e2ff;
+  font-size: 15px;
+  line-height: 1.5;
 }
 
 .card {
@@ -129,8 +188,6 @@ const handleSubmit = async () => {
   padding: 32px;
   box-shadow: 0 20px 60px rgba(15, 23, 42, 0.08);
 }
-
-
 
 .form {
   display: flex;
@@ -173,8 +230,6 @@ input:focus {
   gap: 12px;
   margin-top: 6px;
 }
-
-
 
 .submit {
   border: none;
@@ -222,10 +277,18 @@ input:focus {
     min-height: 200px;
     border-bottom-left-radius: 20px;
     border-bottom-right-radius: 20px;
+    padding: 40px 32px;
+  }
+
+  .logo-container {
+    align-items: center;
+    text-align: center;
+    gap: 20px;
   }
 
   .card {
     margin: 24px auto 40px;
+    max-width: 380px;
   }
 }
 </style>

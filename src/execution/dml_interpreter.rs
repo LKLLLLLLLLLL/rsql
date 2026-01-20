@@ -83,6 +83,31 @@ pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64, read_only: bool) -> R
                 }
             }
         },
+        PlanNode::Sort { columns, asc, input } => {
+            if columns.len() > 1 {
+                return Err(RsqlError::ExecutionError(format!("Sort by multiple columns is not supported")));
+            }
+            let input_result = execute_dml_plan_node(input, tnx_id, read_only)?;
+            if let Query { cols, rows } = input_result {
+                let sort_col_idx = cols.0.iter().position(|x| x == &columns[0]).unwrap();
+                let asc = asc[0];
+                let mut rows = rows;
+                rows.sort_by(|a, b| {
+                    let cmp = a[sort_col_idx].partial_cmp(&b[sort_col_idx]).unwrap_or(std::cmp::Ordering::Equal);
+                    if asc {
+                        cmp
+                    }else {
+                        cmp.reverse()
+                    }
+                });
+                Ok(Query {
+                    cols,
+                    rows,
+                })
+            }else {
+                Err(RsqlError::ExecutionError(format!("Sort input must be a Query")))
+            }
+        },
         PlanNode::Projection { exprs, input } => {
             info!("Implement Projection execution");
             let input_result = execute_dml_plan_node(input, tnx_id, true)?;

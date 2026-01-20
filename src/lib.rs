@@ -19,6 +19,7 @@ use std::sync::{Arc, Mutex};
 use tracing::info;
 
 use crate::common::RsqlResult;
+use crate::server::conncetion_user_map::ConnectionUserMap;
 use crate::storage::WAL;
 use crate::storage::storage::{Page, StorageManager};
 use crate::storage::table::get_table_path;
@@ -123,8 +124,13 @@ pub fn init_database() -> RsqlResult<()> {
     Ok(())
 }
 
+pub fn init_connection_user_map() {
+    ConnectionUserMap::init();
+}
+
 pub fn run() {
     init_log();
+    init_connection_user_map();
     init_database().expect("Failed to initialize database");
     server::daemon::daemon();
 

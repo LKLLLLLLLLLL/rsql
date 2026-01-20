@@ -4,7 +4,7 @@
     <div class="page-header">
       <div class="header-content">
         <h2><Icon :path="mdiTablePlus" size="20" /> Create New Table</h2>
-        <p class="header-subtitle">Define table structure and create a new database table</p>
+        <!-- <p class="header-subtitle">Define table structure and create a new database table</p> -->
       </div>
     </div>
 
