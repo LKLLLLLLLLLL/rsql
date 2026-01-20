@@ -115,6 +115,7 @@ const emit = defineEmits(['row-click', 'cell-click', 'row-double-click'])
 const scrollRef = ref(null)
 const startIndex = ref(0)
 const highlightedCells = ref(new Set())
+const containerHeight = ref(0) // 容器实际高度
 
 const maxHeightPx = computed(() => 
   props.maxHeight != null ? `${props.maxHeight}px` : `${props.visibleCount * props.rowHeight}px`
@@ -124,10 +125,20 @@ const totalColumns = computed(() => props.headers.length + props.leadingHeaders.
 
 const bufferSize = computed(() => Number.isFinite(props.buffer) ? props.buffer : 4)
 
+// 动态计算可见行数：根据容器实际高度
+const dynamicVisibleCount = computed(() => {
+  if (containerHeight.value === 0) {
+    return props.visibleCount // 初始值使用 prop
+  }
+  // 容器高度 - 表头高度，然后除以行高
+  const contentHeight = containerHeight.value - headerHeight.value
+  return Math.ceil(contentHeight / props.rowHeight)
+})
+
 const safeStart = computed(() => Math.max(startIndex.value - bufferSize.value, 0))
 
 const endIndex = computed(() => 
-  Math.min(startIndex.value + props.visibleCount + bufferSize.value, props.rows.length)
+  Math.min(startIndex.value + dynamicVisibleCount.value + bufferSize.value, props.rows.length)
 )
 
 const renderStart = computed(() => safeStart.value)
@@ -227,7 +238,14 @@ let resizeObserver = null
 onMounted(() => {
   const el = scrollRef.value
   if (!el || typeof ResizeObserver === 'undefined') return
+  
+  // 初始化容器高度
+  containerHeight.value = el.clientHeight
+  
   resizeObserver = new ResizeObserver(() => {
+    // 更新容器高度
+    containerHeight.value = el.clientHeight
+    // 更新滚动位置
     startIndex.value = Math.floor((el.scrollTop || 0) / props.rowHeight)
   })
   resizeObserver.observe(el)

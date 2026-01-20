@@ -28,9 +28,9 @@
             <div class="insert-fields-grid">
               <div v-for="column in columns" :key="column.name" class="insert-field">
                 <label>
-                  {{ column.name }}
-                  <span v-if="column.primaryKey">*</span>
-                  <span v-if="column.unique"> (Unique)</span>
+                  {{ column.name }} <span class="column-type">({{ column.type || 'VARCHAR' }})</span>
+                  <span v-if="column.primaryKey" class="required-mark">*</span>
+                  <span v-if="column.unique" class="unique-mark"> (Unique)</span>
                 </label>
                 <input 
                   type="text" 
@@ -405,9 +405,21 @@ watch(() => props.columns, () => {
   font-size: 0.85rem;
 }
 
-.insert-field label span {
+.insert-field label .column-type {
+  color: #1a1f36;
+  font-weight: 400;
+  margin-left: 4px;
+}
+
+.insert-field label .required-mark {
   color: #ef4444;
-  margin: 0 4px;
+  margin-left: 4px;
+}
+
+.insert-field label .unique-mark {
+  color: #6b7280;
+  font-weight: 400;
+  margin-left: 4px;
 }
 
 .insert-field .insert-value {
