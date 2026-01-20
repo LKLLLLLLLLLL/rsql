@@ -5,6 +5,7 @@ use tracing::info;
 use rust_embed::RustEmbed;
 
 use crate::config::{PORT};
+use crate::server::conncetion_user_map::ConnectionUserMap;
 use super::sqlserver_actor::SQLWebsocketActor;
 use super::thread_pool::WorkingThreadPool;
 
@@ -126,14 +127,17 @@ async fn handle_ws_query(
     let thread_pool = state.working_thread_pool.clone();
     match thread_pool.validate(0, &username, &password).await {// use connection_id 0 to validate user
         Ok(true) => {
+            let connection_id = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64;
+            let username_tmp = username.clone();
+            ConnectionUserMap::global().insert_connection(connection_id, username_tmp);
             ws::start(
                 SQLWebsocketActor::new(
                     state.working_thread_pool.clone(),
                     state.working_query.clone(),
-                    SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_millis() as u64,
+                    connection_id,
                     true,
                     username,
                 ),

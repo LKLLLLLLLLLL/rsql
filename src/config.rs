@@ -11,6 +11,8 @@ pub const LOG_PATH: &str = "./logs/rsql.log";
 pub const THREAD_MAXNUM: usize = 0;
 
 pub const DB_DIR: &str = "./data";
+pub const SINGLE_FILE_MODE: bool = true; // unstable feature
+
 pub const MAX_WAL_SIZE: u64 = 10 * 1024 * 1024; // 10 MB
 pub const MAX_VARCHAR_SIZE: usize = 65535; // 64 KB
 pub const MAX_COL_NAME_SIZE: usize = 64; // 64 bytes
@@ -25,6 +27,9 @@ pub const DEFAULT_PASSWORD: &str = "password";
 
 pub const MAX_RESTART_TIMES: u32 = 5;
 pub const RESTART_DELAY_SECS: u64 = 2; // 2 seconds
+
+pub const BACKUP_INTERVAL_SECS: u64 = 60*10; // 10 minutes
+pub const CHECKPOINT_INTERVAL_SECS: u64 = 60; // 1 minute
 
 pub const LOCK_TIMEOUT_MS: u64 = 5000; // 5 seconds
 pub const LOCK_MAX_RETRY: u32 = 3; // Maximum number of retries for acquiring a lock

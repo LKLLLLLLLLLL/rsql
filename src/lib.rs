@@ -19,6 +19,7 @@ use std::sync::{Arc, Mutex};
 use tracing::info;
 
 use crate::common::RsqlResult;
+use crate::server::conncetion_user_map::ConnectionUserMap;
 use crate::storage::WAL;
 use crate::storage::storage::{Page, StorageManager};
 use crate::storage::table::get_table_path;
@@ -112,6 +113,10 @@ fn recovery_wal() -> RsqlResult<u64> {
 
 pub fn init_database() -> RsqlResult<()> {
     info!("Initializing database...");
+    // If single file mode is enabled, unpack the archive first
+    if config::SINGLE_FILE_MODE {
+        storage::archiver::init_single_file()?;
+    }
     let max_tnx_id = recovery_wal()?;
     TnxManager::init(max_tnx_id + 1);
     catalog::SysCatalog::init()?;
@@ -119,8 +124,19 @@ pub fn init_database() -> RsqlResult<()> {
     Ok(())
 }
 
+pub fn init_connection_user_map() {
+    ConnectionUserMap::init();
+}
+
 pub fn run() {
     init_log();
+    init_connection_user_map();
     init_database().expect("Failed to initialize database");
     server::daemon::daemon();
+
+    // After daemon returns (server shut down)
+    if config::SINGLE_FILE_MODE {
+        info!("Single file mode enabled, archiving database...");
+        storage::archiver::archive_single_file().expect("Failed to archive single file on shutdown");
+    }
 }

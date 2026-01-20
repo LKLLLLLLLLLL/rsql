@@ -9,7 +9,7 @@ use crate::execution::result::ExecutionResult;
 use crate::{config::THREAD_MAXNUM};
 use crate::common::{ RsqlResult};
 use super::types::{ RayonQueryRequest };
-use crate::execution::{execute, checkpoint, validate_user, disconnect_callback};
+use crate::execution::{execute, checkpoint, validate_user, disconnect_callback, backup_database};
 
 pub struct WorkingThreadPool{
     thread_pool: rayon::ThreadPool,
@@ -171,6 +171,39 @@ impl WorkingThreadPool{
             Err(e) => Err(e)
         }
 
+    }
+
+    pub async fn make_backup(&self, connection_id: u64) -> RsqlResult<String> {
+        let (sender, receiver) = oneshot::channel::<RsqlResult<String>>();
+
+        let serialize_lock = self.serialize_lock.clone();
+
+        self.thread_pool.spawn(move ||{
+
+            let conn_mutex = {
+                let mut map_guard = serialize_lock.lock().unwrap();
+                map_guard.entry(connection_id).or_insert_with(|| {
+                    Arc::new(Mutex::new(true))
+                }).clone()
+            };
+
+            let _conn_guard = conn_mutex.lock().unwrap();
+            
+            match backup_database(){
+                Ok(_) => {
+                    sender.send(Ok(format!("backuping for connection id: {}", connection_id))).unwrap();
+                }
+                Err(e) => {
+                    sender.send(Err(e)).unwrap();
+                }
+            }
+        });
+
+        let result = receiver.await.unwrap();
+        match result {
+            Ok(result) => Ok(result),
+            Err(e) => Err(e)
+        }
     }
 
     pub fn show_info(&self){
