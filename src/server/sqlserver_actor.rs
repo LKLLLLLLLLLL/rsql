@@ -3,6 +3,7 @@ use super::types::{RayonQueryRequest, WebsocketResponse, RayonQueryResponse, Uni
 use crate::common::data_item::DataItem;
 use crate::execution::result::ExecutionResult;
 use crate::catalog::table_schema::ColType;
+use crate::server::conncetion_user_map::ConnectionUserMap;
 
 use actix_web_actors::ws;
 use actix::{Actor, StreamHandler, AsyncContext};
@@ -227,9 +228,11 @@ impl Actor for SQLWebsocketActor {
     fn stopped(&mut self, _ctx: &mut Self::Context) {
         info!("WebSocket connection closed, connection_id: {}, username: {}", self.current_connection_id, self.username);
 
+        
         let thread_pool = self.working_thread_pool.clone();
         let connection_id = self.current_connection_id;
-        
+        let connection_id_temp = self.current_connection_id.clone();
+        ConnectionUserMap::global().remove_connection(connection_id_temp);
         let result = executor::block_on(async {
             thread_pool.rollback(connection_id).await
         });

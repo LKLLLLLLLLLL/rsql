@@ -1,14 +1,8 @@
-<!-- Terminal.vue -->
 <template>
   <div class="terminal-operation">
     <div class="page-header">
       <div class="header-content">
         <h2><Icon :path="mdiConsole" size="20" /> Terminal</h2>
-        <p class="header-subtitle">Execute SQL commands directly</p>
-      </div>
-      <div class="header-status" :class="{ connected: connected }">
-        <span class="status-dot"></span>
-        {{ connected ? 'Connected' : 'Connecting...' }}
       </div>
     </div>
     
