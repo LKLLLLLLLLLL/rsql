@@ -828,6 +828,7 @@ impl SysCatalog {
                         row[6].clone(),
                         DataItem::Bool(true), // set is_indexed to true
                         DataItem::Bool(unique), // set is_unique
+                        row[9].clone(),
                     ],
                     tnx_id,
                 )?;

@@ -533,6 +533,9 @@ impl Table {
         if col.index {
             return Err(RsqlError::InvalidInput(format!("Column {} is already indexed", col_name)));
         };
+        if col.is_dropped {
+            return Err(RsqlError::InvalidInput(format!("Column {} is dropped", col_name)));
+        }
         // update schema
         let mut columns = vec![];
         for schema_col in self.schema.get_columns().iter() {
@@ -548,8 +551,20 @@ impl Table {
         // create new index
         let mut btree_index = btree_index::BTreeIndex::new(&mut self.storage, tnx_id)?;
         // populate index with existing data
-        let pk_index = self.schema.get_columns().iter().position(|c| c.pk).unwrap();
-        let col_index = self.schema.get_columns().iter().position(|c| c.name == col_name).unwrap();
+        let mut pk_index = 0;
+        let mut col_index = 0;
+        let mut visible_idx = 0;
+        for col in self.schema.get_columns() {
+            if col.is_dropped { continue; }
+            if col.pk {
+                pk_index = visible_idx;
+            }
+            if col.name == col_name {
+                col_index = visible_idx;
+            }
+            visible_idx += 1;
+        }
+
         let entry_iter = self.get_all_rows()?
             .collect::<RsqlResult<Vec<_>>>()?;
         for row_res in entry_iter {
@@ -910,6 +925,81 @@ mod tests {
 
         // now querying by that index should return an error
         assert!(table.get_rows_by_range_indexed_col("age", &start, &end).is_err());
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_create_index_after_drop_column() {
+        let table_id = 4000;
+        let columns = vec![
+            crate::catalog::table_schema::TableColumn {
+                name: "id".to_string(),
+                data_type: crate::catalog::table_schema::ColType::Integer,
+                pk: true,
+                nullable: false,
+                unique: true,
+                index: true,
+                is_dropped: false,
+            },
+            crate::catalog::table_schema::TableColumn { // to be dropped
+                name: "temp".to_string(),
+                data_type: crate::catalog::table_schema::ColType::Integer,
+                pk: false,
+                nullable: false,
+                unique: false,
+                index: false,
+                is_dropped: false,
+            },
+            crate::catalog::table_schema::TableColumn {
+                name: "age".to_string(),
+                data_type: crate::catalog::table_schema::ColType::Integer,
+                pk: false,
+                nullable: false,
+                unique: false,
+                index: false, // will create index on this later
+                is_dropped: false,
+            },
+        ];
+        let schema = crate::catalog::table_schema::TableSchema::new(columns).unwrap();
+        let tnx_id = 1;
+        let path = get_table_path(table_id, false);
+        let _ = std::fs::remove_file(&path);
+
+        let mut table = Table::create(table_id, schema, tnx_id, false).expect("Failed to create table");
+
+        // insert rows
+        for i in 1..=5 {
+            table.insert_row(
+                vec![
+                    DataItem::Integer(i as i64),
+                    DataItem::Integer(i as i64),
+                    DataItem::Integer((i * 10) as i64),
+                ],
+                tnx_id,
+            ).expect("Failed to insert row");
+        }
+
+        // Drop 'temp' column manually (simulating what SysCatalog::drop_column does)
+        let mut new_cols = table.schema.get_columns().clone();
+        new_cols[1].is_dropped = true;
+        table.schema = crate::catalog::table_schema::TableSchema::new(new_cols).unwrap();
+
+        // Now create index on 'age' (which is effectively index 1 now, was index 2)
+        table.create_index("age", tnx_id).expect("Failed to create index after drop column");
+        assert!(table.indexes.contains_key("age"));
+
+        // Verify index usage
+        let start = Some(DataItem::Integer(20));
+        let end = Some(DataItem::Integer(40));
+        let rows: Vec<_> = table.get_rows_by_range_indexed_col("age", &start, &end)
+            .expect("Range scan failed")
+            .collect::<RsqlResult<Vec<_>>>()
+            .expect("Iterator error");
+        // visible columns: id, age
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].len(), 2); 
+        assert_eq!(rows[0][1], DataItem::Integer(20));
 
         let _ = std::fs::remove_file(&path);
     }
