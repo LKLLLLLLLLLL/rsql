@@ -200,15 +200,22 @@ pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64, read_only: bool, conn
                     if let AggrTable{cols: input_cols, rows: input_rows, aggr_cols} = input_result {
                         // 1. get projection columns
                         let mut cols_name = vec![];
+                        let mut cols_type = vec![];
                         for expr in exprs {
                             match expr {
                                 Expr::Identifier(ident) => {
+                                    let col_idx = input_cols.0.iter().position(|x| x == &ident.value).unwrap();
                                     cols_name.push(ident.value.clone());
+                                    cols_type.push(input_cols.1[col_idx].clone());
                                 },
                                 _ => (), // skip aggr cols
                             }
                         }
-                        cols_name.extend(aggr_cols);
+                        for aggr_col in aggr_cols.iter() {
+                            let col_idx = input_cols.0.iter().position(|x| x == aggr_col).unwrap();
+                            cols_type.push(input_cols.1[col_idx].clone());
+                        } // aggr cols type
+                        cols_name.extend(aggr_cols); // aggr cols
                         // 2. get projection rows
                         let mut rows = vec![];
                         for row in input_rows.iter() {
@@ -220,7 +227,7 @@ pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64, read_only: bool, conn
                             rows.push(r);
                         }
                         Ok(Query {
-                            cols: (cols_name, vec![]), // aggr col types are useless
+                            cols: (cols_name, cols_type),
                             rows,
                         }) // get aggr query result
                     }else {
