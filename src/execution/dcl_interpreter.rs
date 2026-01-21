@@ -54,52 +54,57 @@ pub fn execute_dcl_plan_node(node: &PlanNode, tnx_id: u64, connection_id: u64) -
             Ok(Dcl(format!("User {} dropped successfully.", user_name)))
         },
         // only support write permission for now
-        PlanNode::Grant { privilege, user_name } => {
+        PlanNode::Grant { privilege, table_name, user_name } => {
             // verify permision
             let has_permission = SysCatalog::global().check_user_write_permission(tnx_id, &username)?;
             if !has_permission {
-                return Err(RsqlError::ExecutionError(format!("User {} does not have permission to grant write permission.", username)));
+                return Err(RsqlError::ExecutionError(format!("User {} does not have permission to grant permission.", username)));
             }
-            if privilege.to_uppercase() != "WRITE" {
-                return Err(RsqlError::ExecutionError(format!("Unsupported privilege: {}", privilege)));
-            }
+            let priv_code = match privilege.to_uppercase().as_str() {
+                "WRITE" | "W" => "W",
+                "READ" | "R"  => "R",
+                _ => return Err(RsqlError::ExecutionError(format!("Unsupported privilege: {}", privilege))),
+            };
             // check if user exists
             let all_users = SysCatalog::global().get_all_users(tnx_id)?;
             if !all_users.contains(user_name) {
                 return Err(RsqlError::ExecutionError(format!("User {} does not exist.", user_name)));
             }
-            // check if user already has write permission
-            let has_permission = SysCatalog::global().check_user_write_permission(tnx_id, user_name)?;
-            if has_permission {
-                return Ok(Dcl(format!("User {} already has write permission.", user_name)));
-            };
-            // grant write permission
-            SysCatalog::global().set_user_permission(tnx_id, user_name, true)?;
-            Ok(Dcl(format!("Granted write permission to user {}.", user_name)))
+
+            match table_name {
+                Some(table) => {
+                    SysCatalog::global().set_user_table_privilege(tnx_id, user_name, table, Some(priv_code))?;
+                    Ok(Dcl(format!("Granted {} permission to user {} on table {}.", privilege, user_name, table)))
+                },
+                None => {
+                    SysCatalog::global().set_user_permission(tnx_id, user_name, Some(priv_code))?;
+                    Ok(Dcl(format!("Granted global {} permission to user {}.", privilege, user_name)))
+                }
+            }
         },
         // only support write permission for now
-        PlanNode::Revoke { privilege, user_name } => {
+        PlanNode::Revoke { privilege: _, table_name, user_name } => {
             // verify permision
             let has_permission = SysCatalog::global().check_user_write_permission(tnx_id, &username)?;
             if !has_permission {
-                return Err(RsqlError::ExecutionError(format!("User {} does not have permission to revoke write permission.", username)));
-            }
-            if privilege.to_uppercase() != "WRITE" {
-                return Err(RsqlError::ExecutionError(format!("Unsupported privilege: {}", privilege)));
+                return Err(RsqlError::ExecutionError(format!("User {} does not have permission to revoke permission.", username)));
             }
             // check if user exists
             let all_users = SysCatalog::global().get_all_users(tnx_id)?;
             if !all_users.contains(user_name) {
                 return Err(RsqlError::ExecutionError(format!("User {} does not exist.", user_name)));
             }
-            // check if user has write permission
-            let has_permission = SysCatalog::global().check_user_write_permission(tnx_id, user_name)?;
-            if !has_permission {
-                return Ok(Dcl(format!("User {} does not have write permission.", user_name)));
-            };
-            // revoke write permission
-            SysCatalog::global().set_user_permission(tnx_id, user_name, false)?;
-            Ok(Dcl(format!("Revoked write permission from user {}.", user_name)))
+
+            match table_name {
+                Some(table) => {
+                    SysCatalog::global().set_user_table_privilege(tnx_id, user_name, table, None)?;
+                    Ok(Dcl(format!("Revoked permission from user {} on table {}.", user_name, table)))
+                },
+                None => {
+                    SysCatalog::global().set_user_permission(tnx_id, user_name, None)?;
+                    Ok(Dcl(format!("Revoked all global permissions from user {}.", user_name)))
+                }
+            }
         },
         _ => {
             panic!("Unsupported DCL operation")

@@ -1,5 +1,5 @@
 /// Definitions for logical query plans.
-/// This module defines the LogicalPlan enum and related structures for representing query execution plans.
+/// This module defines the LogicalPlan enum and related structures for representing query execution plans
 
 // sqlparser crate
 use sqlparser::ast::{
@@ -164,11 +164,13 @@ pub enum PlanNode {
     /// Grants a privilege to a user.
     Grant {
         privilege: String,
+        table_name: Option<String>,
         user_name: String,
     },
     /// Revokes a privilege from a user.
     Revoke {
         privilege: String,
+        table_name: Option<String>,
         user_name: String,
     },
 }
@@ -321,33 +323,153 @@ impl Plan {
             items.push(PlanItem::DCL(PlanNode::DropUser { user_name, if_exists }));
             return Ok(Plan { items });
         } else if lower.starts_with("grant") {
-            // Parse: GRANT <privilege> TO <user_name>[;]
+            // Parse: 
+            // GRANT <privilege> TO <user_name>[;]
+            // GRANT <privilege> ON [TABLE] <table_name> TO <user_name>[;]
             let rest: &str = &sql_trimmed[("grant".len())..].trim_start();
             let tokens: Vec<&str> = rest.split_whitespace().collect();
-            if tokens.len() < 3 || !tokens[1].eq_ignore_ascii_case("to") {
-                return Err(RsqlError::ParserError("Invalid GRANT syntax".to_string()));
+            
+            if tokens.is_empty() {
+                 return Err(RsqlError::ParserError("Invalid GRANT syntax".to_string()));
             }
+
             let privilege = tokens[0].to_string();
-            let user_name = tokens[2].trim_matches(|c: char| c == ';').to_string();
-            if user_name.is_empty() {
-                return Err(RsqlError::ParserError("GRANT missing user name".to_string()));
+            let mut table_name = None;
+
+            if tokens.len() >= 3 && tokens[1].eq_ignore_ascii_case("on") {
+                // GRANT <priv> ON [TABLE] <name> TO <user>
+                let mut i = 2;
+                if tokens.len() > i && tokens[i].eq_ignore_ascii_case("table") {
+                    i += 1;
+                }
+                if tokens.len() > i {
+                    table_name = Some(tokens[i].to_string());
+                    i += 1;
+                } else {
+                    return Err(RsqlError::ParserError("Missing table name in GRANT".to_string()));
+                }
+
+                if tokens.len() > i && tokens[i].eq_ignore_ascii_case("to") {
+                    i += 1;
+                } else {
+                    return Err(RsqlError::ParserError("Missing TO keyword in GRANT ON".to_string()));
+                }
+
+                let user_name = if tokens.len() > i {
+                    let u = tokens[i].trim_matches(|c: char| c == ';').to_string();
+                    i += 1;
+                    u
+                } else {
+                    return Err(RsqlError::ParserError("Missing user name in GRANT ON".to_string()));
+                };
+                
+                if i < tokens.len() {
+                     return Err(RsqlError::ParserError(format!("Unexpected token after user name: {}", tokens[i])));
+                }
+
+                items.push(PlanItem::DCL(PlanNode::Grant { privilege, table_name, user_name }));
+                return Ok(Plan { items });
+            } else if tokens.len() >= 3 && tokens[1].eq_ignore_ascii_case("to") {
+                // GRANT <privilege> TO <user_name> [ON [TABLE] <name>]?
+                let user_name = tokens[2].trim_matches(|c: char| c == ';').to_string();
+                
+                let mut i = 3;
+                if tokens.len() > i && tokens[i].eq_ignore_ascii_case("on") {
+                    i += 1;
+                    if tokens.len() > i && tokens[i].eq_ignore_ascii_case("table") {
+                        i += 1;
+                    }
+                    if tokens.len() > i {
+                        table_name = Some(tokens[i].trim_matches(|c: char| c == ';').to_string());
+                        i += 1;
+                    } else {
+                        return Err(RsqlError::ParserError("Missing table name after ON".to_string()));
+                    }
+                }
+
+                if i < tokens.len() {
+                     return Err(RsqlError::ParserError(format!("Unexpected token after GRANT: {}", tokens[i])));
+                }
+
+                items.push(PlanItem::DCL(PlanNode::Grant { privilege, table_name, user_name }));
+                return Ok(Plan { items });
+            } else {
+                return Err(RsqlError::ParserError("Invalid GRANT syntax. Expected GRANT <priv> [ON <table>] TO <user>".to_string()));
             }
-            items.push(PlanItem::DCL(PlanNode::Grant { privilege, user_name }));
-            return Ok(Plan { items });
         } else if lower.starts_with("revoke") {
-            // Parse: REVOKE <privilege> FROM <user_name>[;]
+            // Parse: 
+            // REVOKE <privilege> FROM <user_name>[;]
+            // REVOKE <privilege> ON [TABLE] <table_name> FROM <user_name>[;]
             let rest: &str = &sql_trimmed[("revoke".len())..].trim_start();
             let tokens: Vec<&str> = rest.split_whitespace().collect();
-            if tokens.len() < 3 || !tokens[1].eq_ignore_ascii_case("from") {
-                return Err(RsqlError::ParserError("Invalid REVOKE syntax".to_string()));
+
+            if tokens.is_empty() {
+                 return Err(RsqlError::ParserError("Invalid REVOKE syntax".to_string()));
             }
+
             let privilege = tokens[0].to_string();
-            let user_name = tokens[2].trim_matches(|c: char| c == ';').to_string();
-            if user_name.is_empty() {
-                return Err(RsqlError::ParserError("REVOKE missing user name".to_string()));
+            let mut table_name = None;
+
+            if tokens.len() >= 3 && tokens[1].eq_ignore_ascii_case("on") {
+                // REVOKE <priv> ON [TABLE] <name> FROM <user>
+                let mut i = 2;
+                if tokens.len() > i && tokens[i].eq_ignore_ascii_case("table") {
+                    i += 1;
+                }
+                if tokens.len() > i {
+                    table_name = Some(tokens[i].to_string());
+                    i += 1;
+                } else {
+                    return Err(RsqlError::ParserError("Missing table name in REVOKE".to_string()));
+                }
+
+                if tokens.len() > i && tokens[i].eq_ignore_ascii_case("from") {
+                    i += 1;
+                } else {
+                    return Err(RsqlError::ParserError("Missing FROM keyword in REVOKE ON".to_string()));
+                }
+
+                let user_name = if tokens.len() > i {
+                    let u = tokens[i].trim_matches(|c: char| c == ';').to_string();
+                    i += 1;
+                    u
+                } else {
+                    return Err(RsqlError::ParserError("Missing user name in REVOKE ON".to_string()));
+                };
+                
+                if i < tokens.len() {
+                     return Err(RsqlError::ParserError(format!("Unexpected token after user name: {}", tokens[i])));
+                }
+
+                items.push(PlanItem::DCL(PlanNode::Revoke { privilege, table_name, user_name }));
+                return Ok(Plan { items });
+            } else if tokens.len() >= 3 && tokens[1].eq_ignore_ascii_case("from") {
+                // REVOKE <privilege> FROM <user_name> [ON [TABLE] <name>]?
+                let user_name = tokens[2].trim_matches(|c: char| c == ';').to_string();
+                
+                let mut i = 3;
+                if tokens.len() > i && tokens[i].eq_ignore_ascii_case("on") {
+                    i += 1;
+                    if tokens.len() > i && tokens[i].eq_ignore_ascii_case("table") {
+                        i += 1;
+                    }
+                    if tokens.len() > i {
+                        table_name = Some(tokens[i].trim_matches(|c: char| c == ';').to_string());
+                        i += 1;
+                    } else {
+                        return Err(RsqlError::ParserError("Missing table name after ON".to_string()));
+                    }
+                }
+
+                if i < tokens.len() {
+                     return Err(RsqlError::ParserError(format!("Unexpected token after REVOKE: {}", tokens[i])));
+                }
+
+                items.push(PlanItem::DCL(PlanNode::Revoke { privilege, table_name, user_name }));
+                return Ok(Plan { items });
+            } else {
+                return Err(RsqlError::ParserError("Invalid REVOKE syntax. Expected REVOKE <priv> [ON <table>] FROM <user>".to_string()));
             }
-            items.push(PlanItem::DCL(PlanNode::Revoke { privilege, user_name }));
-            return Ok(Plan { items });
         }
 
         // Otherwise use sqlparser as normal
@@ -657,9 +779,46 @@ impl Plan {
                     "EXISTS subquery is not supported".to_string(),
                 ))
             }
-            Expr::Like { .. } | Expr::ILike { .. } => {
-                Err(RsqlError::ParserError(
-                    "LIKE / ILIKE expressions are not supported".to_string(),
+            Expr::Like { negated, expr, pattern, escape_char, any } => {
+                let (expr_clean, expr_sub) = Self::extract_subqueries_from_expr(expr)?;
+                let (pattern_clean, pattern_sub) = Self::extract_subqueries_from_expr(pattern)?;
+                Ok((
+                    Expr::Like {
+                        negated: *negated,
+                        expr: Box::new(expr_clean),
+                        pattern: Box::new(pattern_clean),
+                        escape_char: escape_char.clone(),
+                        any: *any,
+                    },
+                    expr_sub.or(pattern_sub),
+                ))
+            }
+            Expr::ILike { negated, expr, pattern, escape_char, any } => {
+                let (expr_clean, expr_sub) = Self::extract_subqueries_from_expr(expr)?;
+                let (pattern_clean, pattern_sub) = Self::extract_subqueries_from_expr(pattern)?;
+                Ok((
+                    Expr::ILike {
+                        negated: *negated,
+                        expr: Box::new(expr_clean),
+                        pattern: Box::new(pattern_clean),
+                        escape_char: escape_char.clone(),
+                        any: *any,
+                    },
+                    expr_sub.or(pattern_sub),
+                ))
+            }
+            Expr::Between { expr, negated, low, high } => {
+                let (expr_clean, expr_sub) = Self::extract_subqueries_from_expr(expr)?;
+                let (low_clean, low_sub) = Self::extract_subqueries_from_expr(low)?;
+                let (high_clean, high_sub) = Self::extract_subqueries_from_expr(high)?;
+                Ok((
+                    Expr::Between {
+                        expr: Box::new(expr_clean),
+                        negated: *negated,
+                        low: Box::new(low_clean),
+                        high: Box::new(high_clean),
+                    },
+                    expr_sub.or(low_sub).or(high_sub),
                 ))
             }
             Expr::BinaryOp { left, op, right } => {
@@ -1075,10 +1234,10 @@ impl Plan {
                 PlanNode::DropUser { user_name, if_exists } => {
                     format!("DropUser [{} if_exists={}]", user_name, if_exists)
                 }
-                PlanNode::Grant { privilege, user_name } => {
+                PlanNode::Grant { privilege, user_name, table_name: _ } => {
                     format!("Grant [{}] TO {}", privilege, user_name)
                 }
-                PlanNode::Revoke { privilege, user_name } => {
+                PlanNode::Revoke { privilege, user_name, table_name: _ } => {
                     format!("Revoke [{}] FROM {}", privilege, user_name)
                 }
             }
@@ -1316,15 +1475,23 @@ impl Plan {
                     let path_if_exists = "(PlanNode::DropUser.if_exists)";
                     println!("{}{} -> {}", prefix, path_if_exists, if_exists);
                 }
-                PlanNode::Grant { privilege, user_name } => {
+                PlanNode::Grant { privilege, user_name, table_name } => {
                     let p1 = "(PlanNode::Grant.privilege)";
                     println!("{}{} -> {}", prefix, p1, privilege);
+                    if let Some(t) = table_name {
+                        let p_table = "(PlanNode::Grant.table_name)";
+                        println!("{}{} -> {}", prefix, p_table, t);
+                    }
                     let p2 = "(PlanNode::Grant.user_name)";
                     println!("{}{} -> {}", prefix, p2, user_name);
                 }
-                PlanNode::Revoke { privilege, user_name } => {
+                PlanNode::Revoke { privilege, user_name, table_name } => {
                     let p1 = "(PlanNode::Revoke.privilege)";
                     println!("{}{} -> {}", prefix, p1, privilege);
+                    if let Some(t) = table_name {
+                        let p_table = "(PlanNode::Revoke.table_name)";
+                        println!("{}{} -> {}", prefix, p_table, t);
+                    }
                     let p2 = "(PlanNode::Revoke.user_name)";
                     println!("{}{} -> {}", prefix, p2, user_name);
                 }
@@ -1515,10 +1682,10 @@ impl Plan {
                 PlanNode::DropUser { user_name, if_exists } => {
                     format!("DropUser [{} if_exists={}]", user_name, if_exists)
                 }
-                PlanNode::Grant { privilege, user_name } => {
+                PlanNode::Grant { privilege, user_name, table_name: _ } => {
                     format!("Grant [{}] TO {}", privilege, user_name)
                 }
-                PlanNode::Revoke { privilege, user_name } => {
+                PlanNode::Revoke { privilege, user_name, table_name: _ } => {
                     format!("Revoke [{}] FROM {}", privilege, user_name)
                 }
             }

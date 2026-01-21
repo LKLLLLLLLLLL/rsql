@@ -84,16 +84,21 @@ INSERT INTO users (id, name, age, email, is_active) VALUES (1, 'Alice', 30, 'ali
 ### 2.2 SELECT
 Supported:
 - basic `SELECT` statements
-- `WHERE` clause with simple conditions(=, <, >, <=, >=, !=)
+- `WHERE` clause with complex conditions:
+  - Simple comparisons: `=`, `<`, `>`, `<=`, `>=`, `!=`
+  - Pattern matching: `LIKE`, `ILIKE` (case-insensitive)
+  - Range matching: `BETWEEN <low> AND <high>` (optimized with B-Tree index)
 - `JOIN` operations (INNER JOIN, LEFT JOIN, RIGHT JOIN, FULL JOIN, CROSS JOIN)
 - `GROUP BY` clause and aggregation functions (`COUNT`, `SUM`, `AVG`, `MIN`, `MAX`)
 - `FROM` clause with one subquery
-- `ORDER BY` clause // TO BE SUPPORTED IN FUTURE
+- `ORDER BY` clause
 - Renaming columns using `AS` // TO BE SUPPORTED IN FUTURE
 
 e.g.
 ```sql
 SELECT name, age FROM users WHERE age > 25;
+SELECT name FROM users WHERE name LIKE 'A%';
+SELECT * FROM users WHERE age BETWEEN 20 AND 30;
 SELECT u.name, o.order_id FROM users u INNER JOIN orders o ON u.id = o.user_id;
 SELECT age, COUNT(*) FROM users GROUP BY age;
 ```
@@ -101,21 +106,23 @@ SELECT age, COUNT(*) FROM users GROUP BY age;
 ### 2.3 UPDATE
 Supported:
 - `UPDATE` statements with `SET` clause
-- `WHERE` clause with simple conditions(=, <, >, <=, >=, !=)
+- `WHERE` clause with all supported conditions (comparisons, `LIKE`, `BETWEEN`, etc.)
 
 e.g.
 ```sql
 UPDATE users SET is_active = false WHERE last_login < 1600000000;
+UPDATE users SET bio = 'Secret' WHERE name LIKE 'Private%';
 ```
 
 ### 2.4 DELETE
 Supported:
 - `DELETE` statements
-- `WHERE` clause with simple conditions(=, <, >, <=, >=, !=)
+- `WHERE` clause with all supported conditions
 
 e.g.
 ```sql
 DELETE FROM users WHERE is_active = false;
+DELETE FROM users WHERE age BETWEEN 0 AND 18;
 ```
 
 ## 3. Transaction Control Language (TCL)
@@ -150,7 +157,7 @@ Supported:
 - `IF NOT EXISTS` clause
 - `PASSWORD` specification
 
-Created user will have default, read-only permissions on all existing tables.
+Created users have **no permissions** by default and cannot read or write any tables until granted.
 
 e.g.
 ```sql
@@ -169,18 +176,26 @@ DROP USER IF EXISTS alice;
 
 ### 4.3 GRANT
 Supported:
-- `GRANT WRITE TO user`
+- `GRANT READ TO user`: Grant global read access.
+- `GRANT WRITE TO user`: Grant global write access (includes read).
+- `GRANT READ ON table TO user`: Grant table-specific read access.
+- `GRANT WRITE ON table TO user`: Grant table-specific write access.
 
 e.g.
 ```sql
 GRANT WRITE TO alice;
+GRANT READ ON orders TO guest_user;
 ```
 
 ### 4.4 REVOKE
 Supported:
-- `REVOKE WRITE FROM user`
+- `REVOKE READ FROM user`: Revoke all global permissions.
+- `REVOKE WRITE FROM user`: Revoke all global permissions.
+- `REVOKE READ ON table FROM user`: Revoke table-specific access.
+- `REVOKE WRITE ON table FROM user`: Revoke table-specific access.
 
 e.g.
 ```sql
 REVOKE WRITE FROM alice;
+REVOKE READ ON orders FROM guest_user;
 ```

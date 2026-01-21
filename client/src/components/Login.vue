@@ -20,7 +20,7 @@
     <section class="card">
       <form class="form" @submit.prevent="handleSubmit">
         <div class="login-title">
-          <h2>Sign In</h2>
+          <h2>Log In</h2>
         </div>
         <div class="field">
           <label for="username">Username</label>
@@ -41,7 +41,7 @@
 
         <div class="actions">
           <button class="submit" type="submit" :disabled="pending">
-            <span v-if="!pending">Sign In</span>
+            <span v-if="!pending">Loge In</span>
             <span v-else>Processing...</span>
           </button>
         </div>
@@ -59,6 +59,7 @@ import { reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import Icon from './Icon.vue'
 import { mdiDatabase } from '@mdi/js'
+import { connect as wsConnect, connected as wsConnected, addOpenListener, removeOpenListener, addErrorListener, removeErrorListener } from '../services/wsService'
 
 const router = useRouter()
 const pending = ref(false)
@@ -88,9 +89,49 @@ const handleSubmit = async () => {
     localStorage.setItem('username', form.username || '')
     localStorage.setItem('password', form.password || '')
   } catch {}
+
+  // Try to connect to WebSocket before redirecting. If connection fails, show error.
   messageType.value = 'success'
-  message.value = 'Login successful, redirecting to dashboard...'
-  router.push('/database')
+  message.value = 'Connecting to server...'
+
+  try {
+    const ok = await new Promise((resolve) => {
+      if (wsConnected && wsConnected.value) return resolve(true)
+
+      let resolved = false
+      const cleanup = () => {
+        removeOpenListener(onOpen)
+        removeErrorListener(onError)
+      }
+
+      const onOpen = () => { if (!resolved) { resolved = true; cleanup(); resolve(true) } }
+      const onError = () => { if (!resolved) { resolved = true; cleanup(); resolve(false) } }
+
+      addOpenListener(onOpen)
+      addErrorListener(onError)
+
+      const started = wsConnect()
+      if (!started) {
+        cleanup()
+        return resolve(false)
+      }
+
+      setTimeout(() => { if (!resolved) { resolved = true; cleanup(); resolve(false) } }, 2000)
+    })
+
+    if (!ok) {
+      messageType.value = 'error'
+      message.value = 'Unable to connect: invalid credentials or server unreachable'
+      return
+    }
+
+    messageType.value = 'success'
+    message.value = 'Login successful, redirecting to dashboard...'
+    router.push('/database')
+  } catch (e) {
+    messageType.value = 'error'
+    message.value = 'Connection failed'
+  }
 }
 </script>
 
