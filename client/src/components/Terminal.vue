@@ -81,6 +81,7 @@ import { connected as wsConnected, send as wsSend, addMessageListener, removeMes
 const connected = wsConnected
 const codeInput = ref('')
 const codeResults = ref([])
+let USER_COUNT = 0
 const resultContainer = ref(null)
 let wsRef = null
 // 标记用户是否主动发起了一次查询，防止系统自发推送被终端展示
@@ -209,7 +210,12 @@ function submitSql() {
     request_content: sql,
   }
   userRequestPending.value = true
-  try { wsSend(JSON.stringify(payload)) } catch (e) { console.warn('ws send failed', e) }
+  try {
+    wsSend(JSON.stringify(payload))
+    USER_COUNT++
+  } catch (e) {
+    console.warn('ws send failed', e)
+  }
 }
 
 function ensureWsReady() {
@@ -240,7 +246,12 @@ function sendSqlStatement(sql, actionLabel = 'SQL') {
     request_content: trimmed,
   }
   userRequestPending.value = true
-  try { wsSend(JSON.stringify(payload)) } catch (e) { console.warn('ws send failed', e) }
+  try {
+    wsSend(JSON.stringify(payload))
+    USER_COUNT++
+  } catch (e) {
+    console.warn('ws send failed', e)
+  }
   codeInput.value = trimmed
 }
 
@@ -432,6 +443,8 @@ function formatCellValue(cell) {
 
 function onServiceMessage(payload) {
   if (!userRequestPending.value) return
+  if (USER_COUNT <= 0) return
+  USER_COUNT--
   try {
     const parsedTable = parseTableFromResponse(payload)
     const textContent = formatResultContent(payload)
