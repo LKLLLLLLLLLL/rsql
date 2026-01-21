@@ -1,5 +1,5 @@
 <template>
-  <div class="modern-virtual-scroll" ref="scrollRef" @scroll="onScroll" :style="{ maxHeight: maxHeightPx }">
+  <div class="modern-virtual-scroll" ref="scrollRef" @scroll="onScroll" :style="containerStyle">
     <table class="modern-virtual-table">
       <thead class="table-header">
         <tr>
@@ -120,6 +120,15 @@ const containerHeight = ref(0) // 容器实际高度
 const maxHeightPx = computed(() => 
   props.maxHeight != null ? `${props.maxHeight}px` : `${props.visibleCount * props.rowHeight}px`
 )
+
+// 如果外部没有提供 maxHeight，则使用 height:100% 以便填满父容器（用于大屏幕）
+const containerStyle = computed(() => {
+  if (props.maxHeight != null) {
+    return { maxHeight: maxHeightPx.value }
+  }
+  // 当没有传入 maxHeight 时，优先使用 height:100%，允许外层 flex 布局决定高度
+  return { height: '100%' }
+})
 
 const totalColumns = computed(() => props.headers.length + props.leadingHeaders.length)
 
