@@ -1,4 +1,5 @@
 import { ref } from 'vue'
+import { getCredentials } from './sessionService'
 
 const connected = ref(false)
 let socket = null
@@ -13,15 +14,9 @@ const errorListeners = new Set()
 function buildWebSocketUrl(overrideUrl) {
   if (overrideUrl) return overrideUrl
 
-  let username = null
-  let password = null
-  try {
-    username = typeof window !== 'undefined' ? localStorage.getItem('username') : null
-    password = typeof window !== 'undefined' ? localStorage.getItem('password') : null
-  } catch (e) {
-    // ignore
-  }
-
+  const creds = getCredentials()
+  const username = creds.username
+  const password = creds.password
   if (!username || !password) return null
 
   // In non-browser (SSR/test) environment, default to backend address

@@ -60,6 +60,7 @@ import { useRouter } from 'vue-router'
 import Icon from './Icon.vue'
 import { mdiDatabase } from '@mdi/js'
 import { connect as wsConnect, connected as wsConnected, addOpenListener, removeOpenListener, addErrorListener, removeErrorListener } from '../services/wsService'
+import { setCredentials } from '../services/sessionService'
 
 const router = useRouter()
 const pending = ref(false)
@@ -86,8 +87,7 @@ const handleSubmit = async () => {
   await simulateAuth()
   console.log('Login credentials:', { username: form.username, password: form.password })
   try {
-    localStorage.setItem('username', form.username || '')
-    localStorage.setItem('password', form.password || '')
+    setCredentials(form.username || '', form.password || '')
   } catch {}
 
   // Try to connect to WebSocket before redirecting. If connection fails, show error.
