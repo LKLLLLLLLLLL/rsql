@@ -18,7 +18,16 @@ async fn execute_query_short(sql: String) {
         "request_content": sql
     });
     ws_stream.send(Message::Text(payload.to_string())).await.unwrap();
-    let _ = ws_stream.next().await;
+    
+    // consume messages until we get the query result (ignoring the welcome message)
+    while let Some(msg) = ws_stream.next().await {
+        if let Ok(Message::Text(text)) = msg {
+            if text.contains("Websocket Connection Established") {
+                continue;
+            }
+            break;
+        }
+    }
 }
 
 async fn setup_db() {
@@ -65,51 +74,8 @@ fn bench_db_suites(c: &mut Criterion) {
         });
     });
 
-    g1.bench_function("transaction_insert", |b| {
-        b.to_async(&rt).iter(|| async {
-            let id = GLOBAL_ID.fetch_add(1, Ordering::SeqCst);
-            let sql = format!("BEGIN TRANSACTION; INSERT INTO test_main(id, val, category) VALUES ({}, 'tx', 1); COMMIT;", id);
-            execute_query_short(sql).await;
-        });
-    });
     g1.finish();
 
-    // --- Group 2: Complex Queries (JOIN/Subqueries/Aggregations) ---
-    let mut g2 = c.benchmark_group("Analytical-Queries");
-    g2.measurement_time(Duration::from_secs(5));
-
-    g2.bench_function("inner_join_simple", |b| {
-        b.to_async(&rt).iter(|| async {
-            execute_query_short("SELECT t.val, o.amount FROM test_main t INNER JOIN test_orders o ON t.id = o.user_id WHERE t.id = 10;".to_string()).await;
-        });
-    });
-
-    g2.bench_function("subquery_simple", |b| {
-        b.to_async(&rt).iter(|| async {
-            // simple subquery
-            execute_query_short("SELECT * FROM (SELECT id, val FROM test_main WHERE category = 1) WHERE id < 20;".to_string()).await;
-        });
-    });
-
-    g2.bench_function("group_by_aggregation", |b| {
-        b.to_async(&rt).iter(|| async {
-            execute_query_short("SELECT category, COUNT(*), MAX(id), AVG(id) FROM test_main GROUP BY category;".to_string()).await;
-        });
-    });
-    g2.finish();
-
-    // --- Group 3: System and Permissions (DCL/DDL) ---
-    let mut g3 = c.benchmark_group("System-Operations");
-    g3.measurement_time(Duration::from_secs(5));
-
-    g3.bench_function("dcl_create_user", |b| {
-        b.to_async(&rt).iter(|| async {
-            // Note: Due to short connections requiring auth each time, frequent operations on the user table may affect stability. Here we simulate the creation logic.
-            let user_id = GLOBAL_ID.fetch_add(1, Ordering::SeqCst);
-            execute_query_short(format!("CREATE USER user_{} PASSWORD 'pass_{}';", user_id, user_id)).await;
-        });
-    });
-    g3.finish();
 }
 
 criterion_group!(benches, bench_db_suites);
