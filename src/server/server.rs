@@ -218,6 +218,8 @@ fn start_scheduled_tasks(thread_pool: Arc<WorkingThreadPool>) {
         
         info!("Scheduled backup task started, interval: {} seconds", BACKUP_INTERVAL_SECS);
         
+        interval.tick().await;
+        
         loop {
             interval.tick().await;
             
