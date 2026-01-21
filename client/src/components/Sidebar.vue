@@ -72,6 +72,12 @@
     </div> -->
   </div>
 
+  <div style="display: flex; flex-direction: column; gap: 6px; width: 100%;">
+    <div class="username-row" style="font-size: 0.85rem; color: #a0aec0; font-weight: 500; padding-bottom: 2px;margin-left: 30px;">
+      Username: <span style="color: #f1f5f9; font-weight: 600;">{{ username }}</span>
+    </div>
+  </div>
+
   <!-- Information Panel -->
   <div class="info-panel">
     <div class="info-content">
@@ -91,6 +97,17 @@
 
 <script setup>
 import { defineProps, defineEmits, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref } from 'vue'
+
+// 获取本地存储的用户名
+const username = ref(localStorage.getItem('username') || '')
+
+// 监听本地存储变化（如有需要，可扩展为响应式）
+window.addEventListener('storage', (e) => {
+  if (e.key === 'username') {
+    username.value = e.newValue || ''
+  }
+})
 import { useRouter } from 'vue-router'
 import Icon from './Icon.vue'
 import {

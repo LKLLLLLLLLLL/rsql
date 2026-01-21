@@ -32,7 +32,7 @@
           <p>暂无执行结果，请输入 SQL 并执行</p>
         </div>
         <div v-else class="results-list">
-          <div v-for="(item, idx) in codeResults" :key="idx" class="codeArea-result-item">
+          <div v-for="(item, idx) in [...codeResults].reverse()" :key="idx" class="codeArea-result-item">
             <div class="result-header-item">
               <span class="result-time">{{ formatTime(item.timestamp) }}</span>
               <span class="result-status" :class="{ success: item.success }">
@@ -41,9 +41,11 @@
               <span class="execution-time">耗时: {{ item.rayon_response.execution_time }} ms</span>
             </div>
             <div class="result-content">
-              <pre v-if="!item.success" class="error">执行的SQL语句：{{ item.rayon_response.request_content || codeInput || '(unknown)' }}
+              <pre v-if="!item.success" class="error">
+执行的SQL语句：{{ item.sqlSnapshot || item.rayon_response.request_content || '(unknown)' }}
 
-错误信息：{{ item.rayon_response.error || '未知错误' }}</pre>
+错误信息：{{ item.rayon_response.error || '未知错误' }}
+              </pre>
               <DataTable
                 v-else-if="item.parsedTable"
                 :headers="item.parsedTable.headers"
@@ -180,7 +182,7 @@ function parseTableFromResponse(payload) {
 function scrollToBottom() {
   nextTick(() => {
     if (resultContainer.value) {
-      resultContainer.value.scrollTop = resultContainer.value.scrollHeight
+      resultContainer.value.scrollTop = 0
     }
   })
 }
@@ -281,8 +283,8 @@ function formatResultContent(item) {
     return item.rayon_response.error || '未知错误'
   }
 
-  // 提取执行的SQL语句
-  const sql = item.rayon_response.request_content || codeInput.value || '(unknown SQL)'
+  // 优先使用 sqlSnapshot 字段，其次 request_content，最后 codeInput.value
+  const sql = item.sqlSnapshot || item.rayon_response.request_content || '(unknown SQL)'
   let output = `执行的SQL语句：${sql}\n\n`
 
   // 处理响应内容 - 尝试解析查询结果
@@ -352,15 +354,19 @@ function formatResultContent(item) {
         const sqlUpper = sql.toUpperCase()
         if (sqlUpper.includes('CREATE TABLE')) {
           feedback.push(`✓ 创建表成功`)
-        } else if (sqlUpper.includes('DROP TABLE')) {
-          feedback.push(`✓ 删除表成功`)
+        } else if (sqlUpper.includes('DROP')) {
+          if (item.Ddl.includes('skipping') || item.Ddl.includes('SKIPPING')) {
+            feedback.push(`? 表不存在`)
+          } else if (item.Ddl.includes('successfully') || item.Ddl.includes('SUCCESSFULLY')) {
+            feedback.push(`✓ 删除表成功`)
+          } else {
+            feedback.push(`✓ 表操作成功`)
+          }
         } else if (sqlUpper.includes('ALTER TABLE')) {
           feedback.push(`✓ 修改表成功`)
         } else {
           feedback.push(`✓ DDL 操作成功`)
         }
-      } else if (item.DropTable) {
-        feedback.push(`✓ 删除表成功`)
       } else {
         // 其他情况，显示简化的信息
         const keys = Object.keys(item)
@@ -447,21 +453,18 @@ function onServiceMessage(payload) {
   USER_COUNT--
   try {
     const parsedTable = parseTableFromResponse(payload)
-    const textContent = formatResultContent(payload)
-    if (!parsedTable && !textContent) {
-      scheduleUserRequestReset()
-      return
-    }
-
-    // ensure timestamp and success fields for the UI
+    // 快照当前 SQL 输入
+    const sqlSnapshot = codeInput.value
+    // 直接生成 textContent，保证 DDL 等语句有输出
+    const textContent = formatResultContent({ ...payload, parsedTable, sqlSnapshot })
     const entry = {
       ...payload,
       parsedTable,
+      sqlSnapshot,
       textContent,
       timestamp: payload?.rayon_response?.timestamp || Math.floor(Date.now() / 1000),
       success: payload?.success !== undefined ? payload.success : true,
     }
-
     codeResults.value.push(entry)
     emit('sql-executed', payload)
     scrollToBottom()
