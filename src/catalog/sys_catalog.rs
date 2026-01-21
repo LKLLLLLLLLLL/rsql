@@ -1,5 +1,6 @@
 use std::sync::{OnceLock};
 use std::time;
+use std::collections::HashMap;
 
 use bcrypt::{hash, DEFAULT_COST};
 use tracing::info;
@@ -210,8 +211,8 @@ fn sys_user_schema() -> TableSchema {
             index: false,
         },
         TableColumn {
-            name: "write_permission".to_string(),
-            data_type: super::table_schema::ColType::Bool,
+            name: "privileges".to_string(),
+            data_type: super::table_schema::ColType::VarChar(4096),
             pk: false,
             nullable: false,
             unique: false,
@@ -365,6 +366,7 @@ impl SysCatalog {
         let user_schema = sys_user_schema();
         let mut user = Table::create(SYS_USER_ID, user_schema, tnx_id, true)?;
         // insert default admin user
+        let root_privileges = "{\"global\":\"W\"}".to_string();
         user.insert_row( // default user
             vec![
                 DataItem::Chars { 
@@ -375,7 +377,14 @@ impl SysCatalog {
                     len: 128, 
                     value: hash(DEFAULT_PASSWORD, DEFAULT_COST).unwrap(),
                 },
-                DataItem::Bool(true),
+                DataItem::VarChar {
+                    head: crate::common::VarCharHead {
+                        max_len: 4096,
+                        len: root_privileges.len() as u64, // len of "{\"global\":\"W\"}"
+                        page_ptr: None,
+                    },
+                    value: root_privileges,
+                },
             ],
             tnx_id,
         )?;
@@ -891,32 +900,6 @@ impl SysCatalog {
             Err(_) => Ok(false),
         }
     }
-    pub fn register_user(
-        &self,
-        tnx_id: u64,
-        username: &str,
-        password: &str,
-    ) -> RsqlResult<()> {
-        let write_table = vec![SYS_USER_ID];
-        TnxManager::global().acquire_write_locks(tnx_id, &write_table)?;
-        let mut user = Table::from(SYS_USER_ID, sys_user_schema(), true)?;
-        let password_hash = hash(password, DEFAULT_COST).unwrap();
-        user.insert_row(
-            vec![
-                DataItem::Chars { 
-                    len: MAX_USERNAME_SIZE as u64, 
-                    value: username.to_string(), 
-                },
-                DataItem::Chars { 
-                    len: 128, 
-                    value: password_hash,
-                },
-                DataItem::Bool(false), // write permission is false by default
-            ],
-            tnx_id,
-        )?;
-        Ok(())
-    }
     pub fn unregister_user(
         &self,
         tnx_id: u64,
@@ -932,10 +915,12 @@ impl SysCatalog {
         user.delete_row(&index, tnx_id)?;
         Ok(())
     }
-    pub fn check_user_write_permission(
+    pub fn check_user_privilege(
         &self,
         tnx_id: u64,
         username: &str,
+        table_name: Option<&str>,
+        privilege: &str, // "R" or "W"
     ) -> RsqlResult<bool> {
         let read_table = vec![SYS_USER_ID];
         TnxManager::global().acquire_read_locks(tnx_id, &read_table)?;
@@ -946,19 +931,54 @@ impl SysCatalog {
         };
         let user_row_opt = user.get_row_by_pk(&index)?;
         if let Some(user_row) = user_row_opt {
-            let DataItem::Bool(write_permission) = &user_row[2] else {
-                panic!("write_permission column is not Bool");
+            let DataItem::VarChar { value: privileges_json, .. } = &user_row[2] else {
+                panic!("privileges column is not VarChar");
             };
-            Ok(*write_permission)
+            
+            // 1. Check Global Write (W implies R)
+            if privileges_json.contains("\"global\":\"W\"") {
+                return Ok(true);
+            }
+            
+            // 2. Check Global Read
+            if privilege == "R" && privileges_json.contains("\"global\":\"R\"") {
+                return Ok(true);
+            }
+
+            // 3. Check Table-specific Permissions
+            if let Some(table) = table_name {
+                let target = format!("\"{}\":\"{}", table, privilege);
+                if privileges_json.contains(&target) {
+                    return Ok(true);
+                }
+                // If checking Read and have Write, also allow
+                if privilege == "R" {
+                    let target_w = format!("\"{}\":\"W", table);
+                    if privileges_json.contains(&target_w) {
+                        return Ok(true);
+                    }
+                }
+            }
+            
+            Ok(false)
         } else {
             Err(RsqlError::Unknown(format!("User {} not found", username)))
         }
     }
-    pub fn set_user_permission(
+    pub fn check_user_write_permission(
         &self,
         tnx_id: u64,
         username: &str,
-        write_permission: bool,
+    ) -> RsqlResult<bool> {
+        self.check_user_privilege(tnx_id, username, None, "W")
+    }
+
+    pub fn set_user_table_privilege(
+        &self,
+        tnx_id: u64,
+        username: &str,
+        table_name: &str,
+        privilege: Option<&str>, // Some("R"), Some("W"), or None to revoke
     ) -> RsqlResult<()> {
         let write_table = vec![SYS_USER_ID];
         TnxManager::global().acquire_write_locks(tnx_id, &write_table)?;
@@ -969,12 +989,58 @@ impl SysCatalog {
         };
         let user_row_opt = user.get_row_by_pk(&index)?;
         if let Some(user_row) = user_row_opt {
+            let DataItem::VarChar { value: privileges_json, .. } = &user_row[2] else {
+                panic!("privileges column is not VarChar");
+            };
+            
+            // Re-construct the privileges JSON-like string
+            // Very basic implementation: 
+            // 1. Remove existing entry for table_name
+            // 2. Add new entry if privilege is Some
+            
+            let mut privs: HashMap<String, String> = HashMap::new();
+            // rudimentary parsing of {"k":"v", "k2":"v2"}
+            let trimmed = privileges_json.trim_matches(|c| c == '{' || c == '}');
+            if !trimmed.is_empty() {
+                for part in trimmed.split(',') {
+                    let kv: Vec<&str> = part.split(':').collect();
+                    if kv.len() == 2 {
+                        let k = kv[0].trim().trim_matches('"').to_string();
+                        let v = kv[1].trim().trim_matches('"').to_string();
+                        privs.insert(k, v);
+                    }
+                }
+            }
+
+            if let Some(p) = privilege {
+                privs.insert(table_name.to_string(), p.to_string());
+            } else {
+                privs.remove(table_name);
+            }
+
+            let mut new_json = "{".to_string();
+            let mut first = true;
+            for (k, v) in privs {
+                if !first { new_json.push_str(", "); }
+                new_json.push_str(&format!("\"{}\":\"{}\"", k, v));
+                first = false;
+            }
+            new_json.push('}');
+
+            let new_len = new_json.len() as u64;
             user.update_row(
                 &index,
                 vec![
                     user_row[0].clone(),
                     user_row[1].clone(),
-                    DataItem::Bool(write_permission),
+                    DataItem::VarChar {
+                        head: crate::common::VarCharHead {
+                            max_len: 4096,
+                            len: new_len,
+                            page_ptr: None,
+                        },
+                        value: new_json,
+                    },
                 ],
                 tnx_id,
             )?;
@@ -982,6 +1048,14 @@ impl SysCatalog {
         } else {
             Err(RsqlError::Unknown(format!("User {} not found", username)))
         }
+    }
+    pub fn set_user_permission(
+        &self,
+        tnx_id: u64,
+        username: &str,
+        privilege: Option<&str>, // Some("W"), Some("R"), or None
+    ) -> RsqlResult<()> {
+        self.set_user_table_privilege(tnx_id, username, "global", privilege)
     }
     pub fn get_all_users(&self, tnx_id: u64) -> RsqlResult<Vec<String>> {
         let read_table = vec![SYS_USER_ID];
@@ -991,12 +1065,44 @@ impl SysCatalog {
         let user_rows = user.get_all_rows()?;
         for row in user_rows {
             let row = row?;
-            let DataItem::Chars{ len: _, value: username} = &row[0] else {
+            let DataItem::Chars{ value: username, .. } = &row[0] else {
                 panic!("username column is not Chars");
             };
             usernames.push(username.clone());
         }
         Ok(usernames)
+    }
+    pub fn register_user(
+        &self,
+        tnx_id: u64,
+        username: &str,
+        password: &str,
+    ) -> RsqlResult<()> {
+        let write_table = vec![SYS_USER_ID];
+        TnxManager::global().acquire_write_locks(tnx_id, &write_table)?;
+        let mut user = Table::from(SYS_USER_ID, sys_user_schema(), true)?;
+        user.insert_row(
+            vec![
+                DataItem::Chars { 
+                    len: MAX_USERNAME_SIZE as u64, 
+                    value: username.to_string(), 
+                },
+                DataItem::Chars { 
+                    len: 128, 
+                    value: hash(password, DEFAULT_COST).unwrap(),
+                },
+                DataItem::VarChar {
+                    head: crate::common::VarCharHead {
+                        max_len: 4096,
+                        len: 2, 
+                        page_ptr: None,
+                    },
+                    value: "{}".to_string(),
+                },
+            ],
+            tnx_id,
+        )?;
+        Ok(())
     }
 }
 

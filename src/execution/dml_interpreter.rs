@@ -63,6 +63,10 @@ pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64, read_only: bool, conn
     match node {
         PlanNode::TableScan { table } => {
             info!("Implement TableScan execution");
+            let has_permission = SysCatalog::global().check_user_privilege(tnx_id, &username, Some(table), "R")?;
+            if !has_permission {
+                return Err(RsqlError::ExecutionError(format!("User {} has no permission to read table {}.", username, table)));
+            }
             let table_object = get_table_object(table, read_only, tnx_id)?;
             Ok(TableObj(table_object)) // get table object after scan
         },
@@ -309,7 +313,7 @@ pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64, read_only: bool, conn
             if sys_catalog::is_sys_table(table_object.table_obj.get_table_id()) {
                 return Err(RsqlError::ExecutionError(format!("System table {} cannot be inserted.", table_name)));
             }
-            let has_permission = SysCatalog::global().check_user_write_permission(tnx_id, &username)?;
+            let has_permission = SysCatalog::global().check_user_privilege(tnx_id, &username, Some(table_name), "W")?;
             if !has_permission {
                 return Err(RsqlError::ExecutionError(format!("User {} has no permission to insert table {}.", username, table_name)));
             }
@@ -345,13 +349,16 @@ pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64, read_only: bool, conn
             info!("Implement Delete execution");
             let input_result = execute_dml_plan_node(input, tnx_id, false, conn_id)?;
             if let TableWithFilter{mut table_obj, rows} = input_result {
+                let table_id = table_obj.table_obj.get_table_id();
+                let table_name = SysCatalog::global().get_table_name(table_id, tnx_id)?.ok_or(RsqlError::ExecutionError("Table name not found".to_string()))?;
+
                 // check if table is system table
-                if sys_catalog::is_sys_table(table_obj.table_obj.get_table_id()) {
-                    return Err(RsqlError::ExecutionError(format!("System table {:?} cannot be deleted.", SysCatalog::global().get_table_name(table_obj.table_obj.get_table_id(), tnx_id))));
+                if sys_catalog::is_sys_table(table_id) {
+                    return Err(RsqlError::ExecutionError(format!("System table {} cannot be deleted.", table_name)));
                 }
-                let has_permission = SysCatalog::global().check_user_write_permission(tnx_id, &username)?;
+                let has_permission = SysCatalog::global().check_user_privilege(tnx_id, &username, Some(&table_name), "W")?;
                 if !has_permission {
-                    return Err(RsqlError::ExecutionError(format!("User {} has no permission to delete table.", username)));
+                    return Err(RsqlError::ExecutionError(format!("User {} has no permission to delete table {}.", username, table_name)));
                 }
                 for row in rows.iter() {
                     let pk_col_idx = table_obj.map.get(&table_obj.pk_col.0).unwrap();
@@ -366,13 +373,16 @@ pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64, read_only: bool, conn
             info!("Implement Update execution");
             let input_result = execute_dml_plan_node(input, tnx_id, false, conn_id)?;
             if let TableWithFilter {mut table_obj, rows} = input_result {
+                let table_id = table_obj.table_obj.get_table_id();
+                let table_name = SysCatalog::global().get_table_name(table_id, tnx_id)?.ok_or(RsqlError::ExecutionError("Table name not found".to_string()))?;
+
                 // check if table is system table
-                if sys_catalog::is_sys_table(table_obj.table_obj.get_table_id()) {
-                    return Err(RsqlError::ExecutionError(format!("System table {:?} cannot be deleted.", SysCatalog::global().get_table_name(table_obj.table_obj.get_table_id(), tnx_id))));
+                if sys_catalog::is_sys_table(table_id) {
+                    return Err(RsqlError::ExecutionError(format!("System table {} cannot be modified.", table_name)));
                 }
-                let has_permission = SysCatalog::global().check_user_write_permission(tnx_id, &username)?;
+                let has_permission = SysCatalog::global().check_user_privilege(tnx_id, &username, Some(&table_name), "W")?;
                 if !has_permission {
-                    return Err(RsqlError::ExecutionError(format!("User {} has no permission to update table.", username)));
+                    return Err(RsqlError::ExecutionError(format!("User {} has no permission to update table {}.", username, table_name)));
                 }
                 handle_update_expr(&mut table_obj, assignments, &rows, tnx_id)?;
                 Ok(Mutation("Update successful".to_string()))
