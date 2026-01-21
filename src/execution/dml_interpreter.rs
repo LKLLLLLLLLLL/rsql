@@ -176,7 +176,11 @@ pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64, read_only: bool, conn
                     for expr in exprs {
                         match expr {
                             Expr::Identifier(ident) => {
-                                let col_idx = input_cols.0.iter().position(|x| x == &ident.value).unwrap();
+                                let col_idx = input_cols.0.iter().position(|x| x == &ident.value);
+                                let col_idx = match col_idx {
+                                    Some(id) => id,
+                                    None => return Err(RsqlError::ExecutionError(format!("column {} is not found", &ident.value))),
+                                };
                                 cols_name.push(ident.value.clone());
                                 cols_type.push(input_cols.1[col_idx].clone());
                             },
