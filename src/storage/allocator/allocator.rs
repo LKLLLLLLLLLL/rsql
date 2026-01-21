@@ -368,6 +368,9 @@ impl Allocator {
             let mut page = storage.read(current_page)?;
             let mut current_chunk = HeapPage::first_free_chunk_offset(&page);
             while current_chunk != 0 { // traverse chunks
+                if !HeapChunk::is_free(&page, current_chunk) {
+                    break;
+                }
                 let chunk_size = HeapChunk::chunk_size(&page, current_chunk);
                 if chunk_size >= size {
                     // found a suitable chunk

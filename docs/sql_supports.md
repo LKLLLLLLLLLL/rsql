@@ -53,10 +53,12 @@ Supported:
 - `ALTER TABLE RENAME TO`
 - `IF EXISTS` clause
 - `ALTER TABLE RENAME COLUMN TO`: Only support renaming unindexed columns
+- `ALTER TABLE DROP COLUMN`: Support dropping columns (logical deletion)
 
 e.g.
 ```sql
 ALTER TABLE old_table_name IF EXISTS RENAME TO new_table_name;
+ALTER TABLE users DROP COLUMN age;
 ```
 
 ### 1.4 DROP TABLE

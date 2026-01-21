@@ -4,7 +4,6 @@ use crate::common::data_item::DataItem;
 use crate::execution::result::ExecutionResult;
 use crate::catalog::table_schema::ColType;
 use crate::server::conncetion_user_map::ConnectionUserMap;
-use crate::config::{BACKUP_INTERVAL_SECS, CHECKPOINT_INTERVAL_SECS};
 
 use actix_web_actors::ws;
 use actix::{Actor, StreamHandler, AsyncContext};
