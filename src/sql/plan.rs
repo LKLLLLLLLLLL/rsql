@@ -657,9 +657,32 @@ impl Plan {
                     "EXISTS subquery is not supported".to_string(),
                 ))
             }
-            Expr::Like { .. } | Expr::ILike { .. } => {
-                Err(RsqlError::ParserError(
-                    "LIKE / ILIKE expressions are not supported".to_string(),
+            Expr::Like { negated, expr, pattern, escape_char, any } => {
+                let (expr_clean, expr_sub) = Self::extract_subqueries_from_expr(expr)?;
+                let (pattern_clean, pattern_sub) = Self::extract_subqueries_from_expr(pattern)?;
+                Ok((
+                    Expr::Like {
+                        negated: *negated,
+                        expr: Box::new(expr_clean),
+                        pattern: Box::new(pattern_clean),
+                        escape_char: escape_char.clone(),
+                        any: *any,
+                    },
+                    expr_sub.or(pattern_sub),
+                ))
+            }
+            Expr::ILike { negated, expr, pattern, escape_char, any } => {
+                let (expr_clean, expr_sub) = Self::extract_subqueries_from_expr(expr)?;
+                let (pattern_clean, pattern_sub) = Self::extract_subqueries_from_expr(pattern)?;
+                Ok((
+                    Expr::ILike {
+                        negated: *negated,
+                        expr: Box::new(expr_clean),
+                        pattern: Box::new(pattern_clean),
+                        escape_char: escape_char.clone(),
+                        any: *any,
+                    },
+                    expr_sub.or(pattern_sub),
                 ))
             }
             Expr::BinaryOp { left, op, right } => {

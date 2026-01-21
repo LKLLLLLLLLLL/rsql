@@ -12,6 +12,7 @@ use sqlparser::ast::{Expr,
     ObjectName,
     ObjectNamePart,
 };
+use regex::RegexBuilder;
 // use tracing::info;
 
 fn parse_number(s: &str) -> RsqlResult<DataItem> {
@@ -518,6 +519,43 @@ pub fn handle_table_obj_filter_expr(table_obj: &TableObject, predicate: &Expr) -
                 },
             }
         },
+        Expr::Like { negated, expr, pattern, .. } | Expr::ILike { negated, expr, pattern, .. } => {
+            let case_insensitive = matches!(predicate, Expr::ILike { .. });
+            if let (Expr::Identifier(ident), Expr::Value(value)) = (&**expr, &**pattern) {
+                if let SingleQuotedString(s_pattern) = &value.value {
+                    let col = ident.value.clone();
+                    let col_idx = table_obj.map.get(&col).ok_or_else(|| RsqlError::ExecutionError(format!("Column {} not found", col)))?;
+                    
+                    let escaped = regex::escape(s_pattern);
+                    let re_pattern = format!("^{}$", escaped.replace("%", ".*").replace("_", "."));
+                    let mut builder = RegexBuilder::new(&re_pattern);
+                    builder.case_insensitive(case_insensitive);
+                    let re = builder.build().map_err(|e| RsqlError::ExecutionError(format!("Invalid LIKE pattern: {}", e)))?;
+
+                    let rows_iter = table_obj.table_obj.get_all_rows()?;
+                    let mut rows = vec![];
+                    for row_res in rows_iter {
+                        let row = row_res?;
+                        let text = match &row[*col_idx] {
+                            DataItem::Chars { value, .. } => Some(value.as_str()),
+                            DataItem::VarChar { value, .. } => Some(value.as_str()),
+                            _ => None,
+                        };
+                        
+                        if let Some(t) = text {
+                            if re.is_match(t) != *negated {
+                                rows.push(row);
+                            }
+                        }
+                    }
+                    Ok(rows)
+                } else {
+                    Err(RsqlError::ExecutionError(format!("LIKE pattern must be a string literal")))
+                }
+            } else {
+                Err(RsqlError::ExecutionError(format!("Unsupported LIKE expression format. Expected: column LIKE 'pattern'")))
+            }
+        },
         _ => {
             Err(RsqlError::ExecutionError(format!("Unsupported filter expression: {:?}", predicate)))
         }
@@ -667,7 +705,7 @@ pub fn handle_temp_table_filter_expr(cols: &Vec<String>, cols_type: &Vec<ColType
                                 },
                                 _ => {
                                     Err(RsqlError::ExecutionError(format!("Unsupported filter expression: {:?}", predicate)))
-                                }
+                                },
                             }
                         },
                         (Expr::Identifier(left_ident), Expr::Identifier(right_ident)) => {
@@ -847,6 +885,41 @@ pub fn handle_temp_table_filter_expr(cols: &Vec<String>, cols_type: &Vec<ColType
                 _ => {
                     Err(RsqlError::ExecutionError(format!("Unsupported filter expression: {:?}", predicate)))
                 },
+            }
+        },
+        Expr::Like { negated, expr, pattern, .. } | Expr::ILike { negated, expr, pattern, .. } => {
+            let case_insensitive = matches!(predicate, Expr::ILike { .. });
+            if let (Expr::Identifier(ident), Expr::Value(value)) = (&**expr, &**pattern) {
+                if let SingleQuotedString(s_pattern) = &value.value {
+                    let col = ident.value.clone();
+                    let col_idx = cols.iter().position(|c| c == &col).ok_or_else(|| RsqlError::ExecutionError(format!("Column {} not found", col)))?;
+                    
+                    let escaped = regex::escape(s_pattern);
+                    let re_pattern = format!("^{}$", escaped.replace("%", ".*").replace("_", "."));
+                    let mut builder = RegexBuilder::new(&re_pattern);
+                    builder.case_insensitive(case_insensitive);
+                    let re = builder.build().map_err(|e| RsqlError::ExecutionError(format!("Invalid LIKE pattern: {}", e)))?;
+
+                    let mut filtered_rows = vec![];
+                    for row in rows.iter() {
+                        let text = match &row[col_idx] {
+                            DataItem::Chars { value, .. } => Some(value.as_str()),
+                            DataItem::VarChar { value, .. } => Some(value.as_str()),
+                            _ => None,
+                        };
+                        
+                        if let Some(t) = text {
+                            if re.is_match(t) != *negated {
+                                filtered_rows.push(row.clone());
+                            }
+                        }
+                    }
+                    Ok(filtered_rows)
+                } else {
+                    Err(RsqlError::ExecutionError(format!("LIKE pattern must be a string literal")))
+                }
+            } else {
+                Err(RsqlError::ExecutionError(format!("Unsupported LIKE expression format. Expected: column LIKE 'pattern'")))
             }
         },
         _ => {

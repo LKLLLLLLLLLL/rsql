@@ -20,7 +20,7 @@
     <section class="card">
       <form class="form" @submit.prevent="handleSubmit">
         <div class="login-title">
-          <h2>Sign In</h2>
+          <h2>Log In</h2>
         </div>
         <div class="field">
           <label for="username">Username</label>
@@ -41,7 +41,7 @@
 
         <div class="actions">
           <button class="submit" type="submit" :disabled="pending">
-            <span v-if="!pending">Sign In</span>
+            <span v-if="!pending">Loge In</span>
             <span v-else>Processing...</span>
           </button>
         </div>

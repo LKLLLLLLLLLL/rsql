@@ -28,6 +28,7 @@ rust-embed = "8.11.0"
 mime_guess = "2.0.5"
 tar = "0.4.44"
 chrono = "0.4.43"
+regex = "1.12.2"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["async_tokio"] }
