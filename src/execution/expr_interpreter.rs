@@ -13,6 +13,7 @@ use sqlparser::ast::{Expr,
     ObjectNamePart,
 };
 use regex::RegexBuilder;
+use std::collections::HashSet;
 // use tracing::info;
 
 fn parse_number(s: &str) -> RsqlResult<DataItem> {
@@ -1078,15 +1079,21 @@ pub fn handle_on_expr(left_null_row: &Vec<DataItem>, right_null_row: &Vec<DataIt
                                         let right_col = right_ident[1].value.clone();
                                         let right_col_idx = extended_cols.iter().rposition(|col| col == &right_col).unwrap();
                                         let mut filtered_rows = vec![];
+                                        let mut is_left_matched = HashSet::new();
                                         for row in extended_rows.iter() {
                                             if row[left_col_idx] == row[right_col_idx] {
                                                 filtered_rows.push(row.clone());
-                                            }else {
+                                                is_left_matched.insert(row[left_col_idx].clone());
+                                            }
+                                        }
+                                        for row in extended_rows.iter() {
+                                            if !is_left_matched.contains(&row[left_col_idx]) {
                                                 let left_table_cols_len = left_null_row.len(); 
                                                 let mut new_row = row.clone();
                                                 new_row.truncate(left_table_cols_len);  // remove right table cols from the extended cols
                                                 new_row.extend(right_null_row.clone()); // append right null row
                                                 filtered_rows.push(new_row);
+                                                is_left_matched.insert(row[left_col_idx].clone()); // mark left table row as matched to avoid duplicate
                                             }
                                         }
                                         Ok(filtered_rows)
@@ -1122,16 +1129,22 @@ pub fn handle_on_expr(left_null_row: &Vec<DataItem>, right_null_row: &Vec<DataIt
                                         let right_col = right_ident[1].value.clone();
                                         let right_col_idx = extended_cols.iter().rposition(|col| col == &right_col).unwrap();
                                         let mut filtered_rows = vec![];
+                                        let mut is_right_matched = HashSet::new();
                                         for row in extended_rows.iter() {
                                             if row[left_col_idx] == row[right_col_idx] {
                                                 filtered_rows.push(row.clone());
-                                            }else {
+                                                is_right_matched.insert(row[right_col_idx].clone());
+                                            }
+                                        }
+                                        for row in extended_rows.iter() {
+                                            if !is_right_matched.contains(&row[right_col_idx]) {
                                                 let left_table_cols_len = left_null_row.len();
                                                 let mut right_table_row = row.clone();
                                                 right_table_row.drain(0..left_table_cols_len); // keep right table cols from the extended cols
                                                 let mut new_row = left_null_row.clone(); // create a new row with left null row
                                                 new_row.extend(right_table_row); // append right table row
                                                 filtered_rows.push(new_row);
+                                                is_right_matched.insert(row[right_col_idx].clone()); // mark right table row as matched to avoid duplicate
                                             }
                                         }
                                         Ok(filtered_rows)
@@ -1167,22 +1180,34 @@ pub fn handle_on_expr(left_null_row: &Vec<DataItem>, right_null_row: &Vec<DataIt
                                         let right_col = right_ident[1].value.clone();
                                         let right_col_idx = extended_cols.iter().rposition(|col| col == &right_col).unwrap();
                                         let mut filtered_rows = vec![];
+                                        let mut is_left_matched = HashSet::new();
+                                        let mut is_right_matched = HashSet::new();
                                         for row in extended_rows.iter() {
                                             if row[left_col_idx] == row[right_col_idx] {
                                                 filtered_rows.push(row.clone());
-                                            }else {
+                                                is_left_matched.insert(row[left_col_idx].clone());
+                                                is_right_matched.insert(row[right_col_idx].clone());
+                                            }
+                                        }
+                                        for row in extended_rows.iter() {
+                                            // 1. left join
+                                            if !is_left_matched.contains(&row[left_col_idx]) {
                                                 let left_table_cols_len = left_null_row.len();
                                                 let mut left_join_new_row = row.clone();
-                                                // 1. left join
                                                 left_join_new_row.truncate(left_table_cols_len);  // remove right table cols from the extended cols
                                                 left_join_new_row.extend(right_null_row.clone()); // append right null row
                                                 filtered_rows.push(left_join_new_row);
-                                                // 2. right join
+                                                is_left_matched.insert(row[left_col_idx].clone()); // mark left table row as matched to avoid duplicate
+                                            }
+                                            // 2. right join
+                                            if !is_right_matched.contains(&row[right_col_idx]) {
+                                                let left_table_cols_len = left_null_row.len();
                                                 let mut right_table_row = row.clone();
                                                 right_table_row.drain(0..left_table_cols_len); // keep right table cols from the extended cols
                                                 let mut right_join_new_row = left_null_row.clone(); // create a new row with left null row
                                                 right_join_new_row.extend(right_table_row); // append right table row
                                                 filtered_rows.push(right_join_new_row);
+                                                is_right_matched.insert(row[right_col_idx].clone()); // mark right table row as matched to avoid duplicate
                                             }
                                         }
                                         Ok(filtered_rows)
