@@ -477,10 +477,18 @@ function handleWsMessage(data) {
             const idxAllowNull = findIdx('is_nullable', 3)
             const idxPrimary = findIdx('is_primary', 4)
             const idxUnique = findIdx('is_unique', 5)
+            const idxIsDropped = findIdx('is_dropped', 9)
 
           const filtered = rows.filter(row => {
             const raw = row[idxTableId]
             const tid = typeof raw === 'object' ? raw.Integer : raw
+
+            // Filter out dropped columns
+            const droppedRaw = row[idxIsDropped]
+            const droppedVal = (typeof droppedRaw === 'object' && droppedRaw !== null && 'Bool' in droppedRaw) ? droppedRaw.Bool : droppedRaw
+            const isDropped = droppedVal === true || droppedVal === 'true' || droppedVal === 1
+            if (isDropped) return false
+
             return pendingTableIdForSchema === null || tid === pendingTableIdForSchema
           })
 

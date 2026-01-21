@@ -78,6 +78,11 @@ pub enum DdlOperation {
         old_name: String,
         new_name: String,
     },
+    DropColumn {
+        table_name: String,
+        column_name: String,
+        if_exists: bool,
+    },
 }
 
 /// Represents a logical query plan.
@@ -945,6 +950,20 @@ impl Plan {
                             },
                         })
                     }
+                    AstAlterTableOperation::DropColumn { column_names, if_exists, .. } => {
+                        if column_names.len() != 1 {
+                             return Err(RsqlError::ParserError(
+                                "DROP COLUMN only supports one column at a time".to_string(),
+                             ));
+                        }
+                        Ok(PlanNode::DDL {
+                            op: DdlOperation::DropColumn {
+                                table_name: alter.name.to_string(),
+                                column_name: column_names[0].value.clone(),
+                                if_exists: *if_exists,
+                            },
+                        })
+                    }
                     _ => Err(RsqlError::ParserError(
                         "Only ALTER TABLE RENAME TABLE is supported".to_string(),
                     )),
@@ -1210,6 +1229,9 @@ impl Plan {
                     DdlOperation::RenameColumn { table_name, old_name, new_name } => {
                         format!("AlterTable [{}] RENAME COLUMN {} TO {}", table_name, old_name, new_name)
                     }
+                    DdlOperation::DropColumn { table_name, column_name, if_exists } => {
+                         format!("AlterTable [{}] DROP COLUMN {} (if_exists={})", table_name, column_name, if_exists)
+                    }
                 },
                 PlanNode::Insert { table_name, columns, values, input } => {
                     if let Some(_) = input {
@@ -1457,6 +1479,14 @@ impl Plan {
                             let path_new = "(PlanNode::DDL.op[RenameColumn].new_name)";
                             println!("{}{} -> {}", prefix, path_new, new_name);
                         }
+                        DdlOperation::DropColumn { table_name, column_name, if_exists } => {
+                            let path_table = "(PlanNode::DDL.op[DropColumn].table_name)";
+                            println!("{}{} -> {}", prefix, path_table, table_name);
+                            let path_col = "(PlanNode::DDL.op[DropColumn].column_name)";
+                            println!("{}{} -> {}", prefix, path_col, column_name);
+                            let path_exists = "(PlanNode::DDL.op[DropColumn].if_exists)";
+                            println!("{}{} -> {}", prefix, path_exists, if_exists);
+                        }
                     }
                 }
                 // ---- Add pretty print for CreateUser ----
@@ -1657,6 +1687,9 @@ impl Plan {
                     DdlOperation::RenameColumn { table_name, old_name, new_name } => {
                         format!("AlterTable [{}] RENAME COLUMN {} TO {}", table_name, old_name, new_name)
                     }
+                    DdlOperation::DropColumn { table_name, column_name, if_exists } => {
+                         format!("AlterTable [{}] DROP COLUMN {} (if_exists={})", table_name, column_name, if_exists)
+                    }
                 },
                 PlanNode::Insert { table_name, columns, values, input } => {
                     if let Some(_) = input {
@@ -1760,7 +1793,7 @@ pub(crate) fn columns_ast_to_schema(
             }
         }
 
-        table_columns.push(TableColumn { name, data_type, pk, nullable, unique, index });
+        table_columns.push(TableColumn { name, data_type, pk, nullable, unique, index, is_dropped: false });
     }
 
     TableSchema::new(table_columns)
@@ -1797,7 +1830,7 @@ mod tests {
         // let sql = "\
         //     SELECT  dept_id,
         //             job_title,
-        //             COUNT(*),
+               //             COUNT(*),
         //             SUM(salary),
         //             AVG(salary),
         //             MAX(salary),

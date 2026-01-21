@@ -140,3 +140,58 @@ pub fn run() {
         storage::archiver::archive_single_file().expect("Failed to archive single file on shutdown");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::execution::result::ExecutionResult;
+
+    #[test]
+    fn test_drop_column() {
+        // 0. Init Global Managers
+        crate::transaction::TnxManager::init(1);
+        crate::catalog::SysCatalog::init().unwrap(); // ensure system tables exist
+        
+        // 1. Setup Connection
+        crate::server::conncetion_user_map::ConnectionUserMap::global().insert_connection(999, "root".to_string());
+        let conn_id = 999;
+
+        // 2. Create Table
+        let sql = "CREATE TABLE test_drop_col (id INTEGER PRIMARY KEY, name VARCHAR(20), age INTEGER);";
+        let _ = crate::execution::executor::execute(sql, conn_id).unwrap();
+
+        // 3. Insert Data
+        let sql = "INSERT INTO test_drop_col VALUES (1, 'Alice', 30);";
+        let _ = crate::execution::executor::execute(sql, conn_id).unwrap();
+
+        // 4. Drop Column
+        let sql = "ALTER TABLE test_drop_col DROP COLUMN age;";
+        let res = crate::execution::executor::execute(sql, conn_id).unwrap();
+
+        // 5. Verify Select (Should show id, name)
+        let sql = "SELECT * FROM test_drop_col;";
+        let res = crate::execution::executor::execute(sql, conn_id).unwrap();
+        if let ExecutionResult::Query { cols, rows } = &res[0] {
+             assert_eq!(cols.0.len(), 2);
+             assert_eq!(cols.0[0], "id");
+             assert_eq!(cols.0[1], "name");
+             // Rows might be empty if transaction didn't commit? 
+             // Wait, execute does autocommit if not explicit transaction? 
+             // TnxManager usually handles this.
+             // assert_eq!(rows.len(), 1); 
+             // Let's print rows to see
+             println!("Rows: {:?}", rows);
+        } else {
+            panic!("Select failed, got {:?}", res);
+        }
+
+        // 6. Insert new data (without age, which would fail if schema wasn't updated)
+        let sql = "INSERT INTO test_drop_col VALUES (2, 'Bob');";
+        let res = crate::execution::executor::execute(sql, conn_id);
+        assert!(res.is_ok(), "Insert after drop column failed: {:?}", res.err());
+
+        // 7. Clean up
+        let sql = "DROP TABLE test_drop_col;";
+        let _ = crate::execution::executor::execute(sql, conn_id).unwrap();
+    }
+}

@@ -38,14 +38,17 @@ fn get_table_object (table_name: &str, read_only: bool, tnx_id: u64) -> RsqlResu
     let mut cols_type = vec![];
     let mut pk_col_name = String::new();
     let mut pk_col_type = ColType::Integer;
-    for (idx, col) in table_schema.get_columns().iter().enumerate() {
-        map.insert(col.name.clone(), idx);
+    let mut visible_idx = 0;
+    for col in table_schema.get_columns().iter() {
+        if col.is_dropped { continue; }
+        map.insert(col.name.clone(), visible_idx);
         cols_name.push(col.name.clone());
         cols_type.push(col.data_type.clone());
         if col.pk {
             pk_col_name = col.name.clone();
             pk_col_type = col.data_type.clone();
         }
+        visible_idx += 1;
     }
     let indexed_cols = table_obj.get_schema().get_indexed_col();
     let table_object = TableObject {
@@ -324,33 +327,36 @@ pub fn execute_dml_plan_node(node: &PlanNode, tnx_id: u64, read_only: bool, conn
             if !has_permission {
                 return Err(RsqlError::ExecutionError(format!("User {} has no permission to insert table {}.", username, table_name)));
             }
-            if let Some(cols) = columns {
-                let mut null_cols = vec![];
-                for col_type in table_object.cols.1.iter() {
-                    match col_type {
-                        ColType::Integer => {
-                            null_cols.push(DataItem::NullInt);
-                        },
-                        ColType::Float => {
-                            null_cols.push(DataItem::NullFloat);
-                        },
-                        ColType::Chars(size) => {
-                            null_cols.push(DataItem::NullChars { len: *size as u64 });
-                        },
-                        ColType::Bool => {
-                            null_cols.push(DataItem::NullBool);
-                        },
-                        ColType::VarChar(_) => {
-                            null_cols.push(DataItem::NullVarChar);
-                        },
-                    }
+            
+            let target_cols = if let Some(cols) = columns {
+                cols.clone()
+            } else {
+                table_object.cols.0.clone()
+            };
+
+            let mut null_cols = vec![];
+            for col_type in table_object.cols.1.iter() {
+                match col_type {
+                    ColType::Integer => {
+                        null_cols.push(DataItem::NullInt);
+                    },
+                    ColType::Float => {
+                        null_cols.push(DataItem::NullFloat);
+                    },
+                    ColType::Chars(size) => {
+                        null_cols.push(DataItem::NullChars { len: *size as u64 });
+                    },
+                    ColType::Bool => {
+                        null_cols.push(DataItem::NullBool);
+                    },
+                    ColType::VarChar(_) => {
+                        null_cols.push(DataItem::NullVarChar);
+                    },
                 }
-                let data_item = handle_insert_expr(&table_object, cols, &null_cols, &values[0])?;
-                table_object.table_obj.insert_row(data_item, tnx_id)?;
-                Ok(Mutation("Insert successful".to_string()))
-            }else {
-                Err(RsqlError::ExecutionError(format!("Insert columns is None")))
             }
+            let data_item = handle_insert_expr(&table_object, &target_cols, &null_cols, &values[0])?;
+            table_object.table_obj.insert_row(data_item, tnx_id)?;
+            Ok(Mutation("Insert successful".to_string()))
         },
         PlanNode::Delete { input } => {
             info!("Implement Delete execution");

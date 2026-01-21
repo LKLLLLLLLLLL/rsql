@@ -20,6 +20,7 @@ pub struct TableColumn {
     pub nullable: bool,
     pub index: bool,
     pub unique: bool,
+    pub is_dropped: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -29,15 +30,15 @@ pub struct TableSchema {
 
 impl TableSchema {
     /// Bytes structure in disk:
-    /// [schema_length: 8bytes][col1_name: MAX_COL_NAME_SIZE bytes][col1_type: 1byte][col1_extra: 8bytes][col1_pk:1byte][col1_nullable:1byte][col1_unique:1byte][col1_index:1byte]...
-    /// each column takes 76bytes
+    /// [schema_length: 8bytes][col1_name: MAX_COL_NAME_SIZE bytes][col1_type: 1byte][col1_extra: 8bytes][col1_pk:1byte][col1_nullable:1byte][col1_unique:1byte][col1_index:1byte][col1_is_dropped:1byte]...
+    /// each column takes 78bytes
     fn from_bytes(bytes: &[u8]) -> RsqlResult<(Self, u64)> {
         let mut offset = 0;
         let schema_length_bytes = &bytes[offset..offset+8];
         let schema_length = u64::from_le_bytes(schema_length_bytes.try_into().unwrap());
         offset += 8;
         let mut columns = vec![];
-        while offset + 76 <= schema_length as usize {
+        while offset + 77 <= schema_length as usize {
             let name_bytes = &bytes[offset..offset+MAX_COL_NAME_SIZE];
             let name = String::from_utf8(name_bytes.iter().cloned().take_while(|&b| b != 0).collect())
                 .map_err(|_| RsqlError::StorageError("Invalid column name".to_string()))?;
@@ -55,6 +56,8 @@ impl TableSchema {
             offset += 1;
             let index = bytes[offset] != 0;
             offset += 1;
+            let is_dropped = bytes[offset] != 0;
+            offset += 1;
             let data_type = match col_type_byte {
                 0 => ColType::Integer,
                 1 => ColType::Float,
@@ -70,6 +73,7 @@ impl TableSchema {
                 nullable,
                 unique,
                 index,
+                is_dropped,
             });
         }
         Ok((TableSchema { columns }, schema_length))
@@ -109,6 +113,7 @@ impl TableSchema {
             buf.push(if col.nullable { 1u8 } else { 0u8 });
             buf.push(if col.unique { 1u8 } else { 0u8 });
             buf.push(if col.index { 1u8 } else { 0u8 });
+            buf.push(if col.is_dropped { 1u8 } else { 0u8 });
         }
         // write schema length at the beginning
         let schema_length = buf.len() as u64;
@@ -116,13 +121,14 @@ impl TableSchema {
         buf
     }
     pub fn satisfy(&self, data: &Vec<DataItem>) -> RsqlResult<()> {
+        let visible_columns: Vec<&TableColumn> = self.columns.iter().filter(|c| !c.is_dropped).collect();
         // 1. check if data length matches
-        if data.len() != self.columns.len() {
+        if data.len() != visible_columns.len() {
             return Err(RsqlError::InvalidInput(
-                format!("Data length {} does not match schema length {}", data.len(), self.columns.len())));
+                format!("Data length {} does not match schema length {}", data.len(), visible_columns.len())));
         }
         // 2. check nullable
-        for (i, col) in self.columns.iter().enumerate() {
+        for (i, col) in visible_columns.iter().enumerate() {
             if col.nullable {
                 continue;
             }
@@ -138,7 +144,7 @@ impl TableSchema {
             }
         }
         // 3. check data type
-        for (i, col) in self.columns.iter().enumerate() {
+        for (i, col) in visible_columns.iter().enumerate() {
             match col.data_type {
                 ColType::Integer => match data[i] {
                     DataItem::Integer(_) | DataItem::NullInt => {},
@@ -258,7 +264,7 @@ impl TableSchema {
     }
     pub fn get_indexed_col(&self) -> Vec<String> {
         self.columns.iter()
-            .filter(|col| col.index)
+            .filter(|col| col.index && !col.is_dropped)
             .map(|col| col.name.clone())
             .collect()
     }
