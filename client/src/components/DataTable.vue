@@ -5,7 +5,7 @@
     <div v-if="mode === 'delete' || mode === 'update'" class="mode-header">
       <button class="back-btn" @click="emit('back')">← 返回表格视图</button>
     </div>
-    
+
     <div class="table-wrapper">
       <VirtualList
         :key="renderKey"
@@ -79,7 +79,7 @@
             <span class="row-index">{{ rowIndex + 1 }}</span>
           </template>
         </template>
-        
+
         <template v-if="mode === 'update'" #cell="{ value, rowIndex, colIndex, header }">
           <template v-if="editingRow === rowIndex">
             <input
@@ -95,7 +95,7 @@
             <span class="cell-value">{{ value }}</span>
           </template>
         </template>
-        
+
         <template v-else #cell="{ value }">
           <span class="cell-value">{{ value }}</span>
         </template>
@@ -277,6 +277,7 @@ onMounted(() => {
 .table-wrapper {
   flex: 1;
   overflow: hidden;
+  min-height: 0;
 }
 
 .virtual-table {
@@ -436,22 +437,22 @@ onMounted(() => {
   .page-header {
     padding: 16px;
   }
-  
+
   .header-content {
     gap: 8px;
   }
-  
+
   .header-info {
     flex-direction: column;
     gap: 12px;
     align-items: center;
   }
-  
+
   .page-header h2 {
     font-size: 1rem;
     justify-content: center;
   }
-  
+
   .record-count,
   .last-update {
     font-size: 0.8rem;

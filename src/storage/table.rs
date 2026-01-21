@@ -62,9 +62,14 @@ impl Table {
         let data_page = self.storage.read(page_idx)?;
         let mut row = vec![];
         let mut curr_offset = offset as usize;
-        let sizes = self.schema.get_sizes();
+        // let sizes = self.schema.get_sizes();
         
-        for size in sizes {
+        for col in self.schema.get_columns() {
+            let size = DataItem::cal_size_from_coltype(&col.data_type);
+            if col.is_dropped {
+                curr_offset += size;
+                continue;
+            }
             let item_bytes = &data_page.data[curr_offset..curr_offset+size];
             match DataItem::from_bytes(item_bytes, None)? {
                 DataItem::VarChar { head, value } => {
@@ -410,41 +415,62 @@ impl Table {
         self.schema.satisfy(&data)?;
         // check unique constraints separately
         // the pk must be unique, so no need to check again
-        for (i, col) in self.schema.get_columns().iter().enumerate() {
+        let mut visible_col_idx = 0;
+        for col in self.schema.get_columns().iter() {
+            if col.is_dropped { continue; }
             if col.unique {
                 let index = self.indexes.get(&col.name).unwrap();
-                let existing = index.check_exists(data[i].clone(), &self.storage)?;
+                let existing = index.check_exists(data[visible_col_idx].clone(), &self.storage)?;
                 if existing {
                     return Err(RsqlError::InvalidInput(
                         format!("Unique constraint violation on column {}", col.name)));
                 }
             }
+            visible_col_idx += 1;
         }
         // 2. allocate entry
         let (entry_page_idx, entry_offset) = self.allocator.alloc_entry(tnx_id, &mut self.storage)?;
-        // 3. store VarChar data if any
-        let mut converted_data = data.clone();
-        for (i, dataitem) in data.into_iter().enumerate() {
-            if let DataItem::VarChar { .. } = dataitem {
-                let col = &self.schema.get_columns()[i];
-                let max_len = match &col.data_type {
-                    crate::catalog::table_schema::ColType::VarChar(max_len) => *max_len,
-                    _ => panic!("Column type mismatch for VarChar"),
-                } as u64;
-                let stored_varchar = self.store_varchar(dataitem, tnx_id, max_len)?;
-                converted_data[i] = stored_varchar;
+        // 3. construct physical data (handling dropped columns and VarChar)
+        let mut physical_data = vec![];
+        let mut input_iter = data.into_iter();
+
+        let columns = self.schema.get_columns().clone();
+        for col in columns {
+            if col.is_dropped {
+                let dummy = match col.data_type {
+                     crate::catalog::table_schema::ColType::Integer => DataItem::NullInt,
+                     crate::catalog::table_schema::ColType::Float => DataItem::NullFloat,
+                     crate::catalog::table_schema::ColType::Bool => DataItem::NullBool,
+                     crate::catalog::table_schema::ColType::Chars(len) => DataItem::NullChars{len: len as u64},
+                     crate::catalog::table_schema::ColType::VarChar(_) => DataItem::NullVarChar,
+                };
+                physical_data.push(dummy);
+            } else {
+                let item = input_iter.next().ok_or(RsqlError::ExecutionError("Not enough data items provided".to_string()))?;
+                
+                // Handle VarChar
+                if let DataItem::VarChar { .. } = &item {
+                    let max_len = match &col.data_type {
+                        crate::catalog::table_schema::ColType::VarChar(max_len) => *max_len,
+                        _ => panic!("Column type mismatch for VarChar"),
+                    } as u64;
+                    let stored_varchar = self.store_varchar(item, tnx_id, max_len)?;
+                    physical_data.push(stored_varchar);
+                } else {
+                    physical_data.push(item);
+                }
             }
         }
         // 4. write entry data
-        let entry_bytes = Self::row_to_bytes(&converted_data)?;
+        let entry_bytes = Self::row_to_bytes(&physical_data)?;
         self.storage.write_bytes(tnx_id, entry_page_idx, entry_offset as usize, &entry_bytes)?;
         // 5. write index entries
         for (i, col) in self.schema.get_columns().iter().enumerate() {
-            if col.index {
+            if col.index && !col.is_dropped {
                 let index = self.indexes.get_mut(&col.name).unwrap();
                 index.insert_entry(
                     tnx_id,
-                    converted_data[i].clone(),
+                    physical_data[i].clone(),
                     entry_page_idx,
                     entry_offset,
                     &mut self.storage,
@@ -478,17 +504,22 @@ impl Table {
             }
         }
         // 5. delete from indexes
-        for (i, col) in self.schema.get_columns().iter().enumerate() {
+        let mut visible_idx = 0;
+        for col in self.schema.get_columns().iter() {
+            if col.is_dropped {
+                continue;
+            }
             if col.index {
                 let index = self.indexes.get_mut(&col.name).unwrap();
                 index.delete_entry(
                     tnx_id,
-                    row[i].clone(),
+                    row[visible_idx].clone(),
                     match_page,
                     match_offset,
                     &mut self.storage,
                 )?;
             }
+            visible_idx += 1;
         }
         Ok(())
     }
@@ -502,6 +533,9 @@ impl Table {
         if col.index {
             return Err(RsqlError::InvalidInput(format!("Column {} is already indexed", col_name)));
         };
+        if col.is_dropped {
+            return Err(RsqlError::InvalidInput(format!("Column {} is dropped", col_name)));
+        }
         // update schema
         let mut columns = vec![];
         for schema_col in self.schema.get_columns().iter() {
@@ -517,8 +551,20 @@ impl Table {
         // create new index
         let mut btree_index = btree_index::BTreeIndex::new(&mut self.storage, tnx_id)?;
         // populate index with existing data
-        let pk_index = self.schema.get_columns().iter().position(|c| c.pk).unwrap();
-        let col_index = self.schema.get_columns().iter().position(|c| c.name == col_name).unwrap();
+        let mut pk_index = 0;
+        let mut col_index = 0;
+        let mut visible_idx = 0;
+        for col in self.schema.get_columns() {
+            if col.is_dropped { continue; }
+            if col.pk {
+                pk_index = visible_idx;
+            }
+            if col.name == col_name {
+                col_index = visible_idx;
+            }
+            visible_idx += 1;
+        }
+
         let entry_iter = self.get_all_rows()?
             .collect::<RsqlResult<Vec<_>>>()?;
         for row_res in entry_iter {
@@ -612,6 +658,7 @@ mod tests {
                     nullable: false,
                     index: true,
                     unique: true,
+                    is_dropped: false,
                 },
                 TableColumn {
                     name: "name".to_string(),
@@ -620,6 +667,7 @@ mod tests {
                     nullable: false,
                     index: false,
                     unique: false,
+                    is_dropped: false,
                 },
             ];
         TableSchema::new(columns).unwrap()
@@ -671,6 +719,7 @@ mod tests {
                     nullable: false,
                     index: true,
                     unique: true,
+                    is_dropped: false,
                 },
                 TableColumn {
                     name: "bio".to_string(),
@@ -679,6 +728,7 @@ mod tests {
                     nullable: false,
                     index: false,
                     unique: false,
+                    is_dropped: false,
                 },
             ];
         let schema = TableSchema::new(columns).unwrap();
@@ -826,6 +876,7 @@ mod tests {
                 nullable: false,
                 unique: true,
                 index: true,
+                is_dropped: false,
             },
             crate::catalog::table_schema::TableColumn {
                 name: "age".to_string(),
@@ -834,6 +885,7 @@ mod tests {
                 nullable: false,
                 unique: false,
                 index: false,
+                is_dropped: false,
             },
         ];
         let schema = crate::catalog::table_schema::TableSchema::new(columns).unwrap();
@@ -873,6 +925,81 @@ mod tests {
 
         // now querying by that index should return an error
         assert!(table.get_rows_by_range_indexed_col("age", &start, &end).is_err());
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_create_index_after_drop_column() {
+        let table_id = 4000;
+        let columns = vec![
+            crate::catalog::table_schema::TableColumn {
+                name: "id".to_string(),
+                data_type: crate::catalog::table_schema::ColType::Integer,
+                pk: true,
+                nullable: false,
+                unique: true,
+                index: true,
+                is_dropped: false,
+            },
+            crate::catalog::table_schema::TableColumn { // to be dropped
+                name: "temp".to_string(),
+                data_type: crate::catalog::table_schema::ColType::Integer,
+                pk: false,
+                nullable: false,
+                unique: false,
+                index: false,
+                is_dropped: false,
+            },
+            crate::catalog::table_schema::TableColumn {
+                name: "age".to_string(),
+                data_type: crate::catalog::table_schema::ColType::Integer,
+                pk: false,
+                nullable: false,
+                unique: false,
+                index: false, // will create index on this later
+                is_dropped: false,
+            },
+        ];
+        let schema = crate::catalog::table_schema::TableSchema::new(columns).unwrap();
+        let tnx_id = 1;
+        let path = get_table_path(table_id, false);
+        let _ = std::fs::remove_file(&path);
+
+        let mut table = Table::create(table_id, schema, tnx_id, false).expect("Failed to create table");
+
+        // insert rows
+        for i in 1..=5 {
+            table.insert_row(
+                vec![
+                    DataItem::Integer(i as i64),
+                    DataItem::Integer(i as i64),
+                    DataItem::Integer((i * 10) as i64),
+                ],
+                tnx_id,
+            ).expect("Failed to insert row");
+        }
+
+        // Drop 'temp' column manually (simulating what SysCatalog::drop_column does)
+        let mut new_cols = table.schema.get_columns().clone();
+        new_cols[1].is_dropped = true;
+        table.schema = crate::catalog::table_schema::TableSchema::new(new_cols).unwrap();
+
+        // Now create index on 'age' (which is effectively index 1 now, was index 2)
+        table.create_index("age", tnx_id).expect("Failed to create index after drop column");
+        assert!(table.indexes.contains_key("age"));
+
+        // Verify index usage
+        let start = Some(DataItem::Integer(20));
+        let end = Some(DataItem::Integer(40));
+        let rows: Vec<_> = table.get_rows_by_range_indexed_col("age", &start, &end)
+            .expect("Range scan failed")
+            .collect::<RsqlResult<Vec<_>>>()
+            .expect("Iterator error");
+        // visible columns: id, age
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].len(), 2); 
+        assert_eq!(rows[0][1], DataItem::Integer(20));
 
         let _ = std::fs::remove_file(&path);
     }

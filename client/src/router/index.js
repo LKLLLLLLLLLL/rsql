@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import Login from '../components/Login.vue'
 import DatabasePage from '../components/DatabasePage.vue'
 import { connect as wsConnect, connected as wsConnected, addOpenListener, removeOpenListener, addErrorListener, removeErrorListener } from '../services/wsService'
+import { getCredentials } from '../services/sessionService'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -24,8 +25,9 @@ router.beforeEach(async (to, from, next) => {
   if (to.path === '/') return next()
 
   try {
-    const u = typeof window !== 'undefined' ? localStorage.getItem('username') : null
-    const p = typeof window !== 'undefined' ? localStorage.getItem('password') : null
+    const creds = getCredentials()
+    const u = creds.username
+    const p = creds.password
     if (!u || !p) return next({ path: '/' })
   } catch (e) {
     return next({ path: '/' })

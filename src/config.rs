@@ -5,7 +5,7 @@
 pub const _NAME: &str = "rsql";
 pub const _VERSION: &str = "0.1.0";
 pub const PORT: u16 = 4456;
-pub const LOG_LEVEL: &str = "debug";
+pub const LOG_LEVEL: &str = "info";
 pub const LOG_PATH: &str = "./logs/rsql.log";
 
 pub const THREAD_MAXNUM: usize = 0;
@@ -28,7 +28,7 @@ pub const DEFAULT_PASSWORD: &str = "password";
 pub const MAX_RESTART_TIMES: u32 = 5;
 pub const RESTART_DELAY_SECS: u64 = 2; // 2 seconds
 
-pub const BACKUP_INTERVAL_SECS: u64 = 60*10; // 10 minutes
+pub const BACKUP_INTERVAL_SECS: u64 = 60*60; // 1 hour
 pub const CHECKPOINT_INTERVAL_SECS: u64 = 60; // 1 minute
 
 pub const LOCK_TIMEOUT_MS: u64 = 5000; // 5 seconds

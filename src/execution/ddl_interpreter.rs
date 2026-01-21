@@ -187,5 +187,33 @@ pub fn execute_ddl_plan_node(node: &PlanNode, tnx_id: u64, connection_id: u64) -
             )?;
             Ok(Ddl(format!("Index {} created successfully on table {}.", index_name, table_name)))
         },
+        DdlOperation::DropColumn { table_name, column_name, if_exists } => {
+            // verify permision
+            let has_permission = SysCatalog::global().check_user_write_permission(tnx_id, &username)?;
+            if !has_permission {
+                return Err(RsqlError::ExecutionError(format!("User {} does not have permission to drop column.", username)));
+            }
+            // check if table exists
+            let table_id = SysCatalog::global().get_table_id(tnx_id, table_name)?;
+            if table_id.is_none() {
+                return Err(RsqlError::ExecutionError(format!("Table {} does not exist.", table_name)));
+            }
+            let table_id = table_id.unwrap();
+            // check if table is system table
+            if sys_catalog::is_sys_table(table_id) {
+                return Err(RsqlError::ExecutionError(format!("System table {} cannot be modified.", table_name)));
+            }
+            // drop column in sys catalog
+            match SysCatalog::global().drop_column(tnx_id, table_id, column_name) {
+                Ok(_) => Ok(Ddl(format!("Column {} dropped from table {} successfully.", column_name, table_name))),
+                Err(e) => {
+                    if *if_exists {
+                         Ok(Ddl(format!("Column {} does not exist, skipping drop column.", column_name)))
+                    } else {
+                         Err(e)
+                    }
+                }
+            }
+        },
     }
 }

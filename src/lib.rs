@@ -113,6 +113,18 @@ fn recovery_wal() -> RsqlResult<u64> {
 
 pub fn init_database() -> RsqlResult<()> {
     info!("Initializing database...");
+    let db_path = path::Path::new(config::DB_DIR);
+    let sys_path = db_path.join("sys");
+    let tables_path = db_path.join("tables");
+
+    // If data/sys and data/tables do not exist, try to restore from backup
+    if !sys_path.exists() || !tables_path.exists() {
+        if let Some(latest_backup) = storage::archiver::get_latest_backup() {
+            info!("No database files found, restoring from latest backup: {}", latest_backup);
+            storage::archiver::restore_backup(&latest_backup)?;
+        }
+    }
+
     // If single file mode is enabled, unpack the archive first
     if config::SINGLE_FILE_MODE {
         storage::archiver::init_single_file()?;

@@ -72,9 +72,13 @@
     </div> -->
   </div>
 
-  <div style="display: flex; flex-direction: column; gap: 6px; width: 100%;">
-    <div class="username-row" style="font-size: 0.85rem; color: #a0aec0; font-weight: 500; padding-bottom: 2px;margin-left: 30px;">
-      Username: <span style="color: #f1f5f9; font-weight: 600;">{{ username }}</span>
+  <div class="user-panel">
+    <div class="user-info">
+      <div class="avatar">{{ avatarInitials }}</div>
+      <div class="user-meta">
+        <div class="user-name">{{ username || 'Guest' }}</div>
+        <div class="user-sub">Signed in</div>
+      </div>
     </div>
   </div>
 
@@ -99,15 +103,24 @@
 import { defineProps, defineEmits, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { ref } from 'vue'
 
-// 获取本地存储的用户名
-const username = ref(localStorage.getItem('username') || '')
+import { getCredentials, clearCredentials } from '../services/sessionService'
+// 获取当前会话的用户名（sessionStorage，per-tab）
+const creds = getCredentials()
+const username = ref(creds.username || '')
 
-// 监听本地存储变化（如有需要，可扩展为响应式）
-window.addEventListener('storage', (e) => {
-  if (e.key === 'username') {
-    username.value = e.newValue || ''
-  }
+const avatarInitials = computed(() => {
+  try {
+    const name = String(username.value || '').trim()
+    if (!name) return ''
+    const parts = name.split(/\s|[._-]+/).filter(Boolean)
+    if (parts.length === 0) return name.slice(0, 2).toUpperCase()
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
+    return (parts[0][0] + parts[1][0]).toUpperCase()
+  } catch (e) { return '' }
 })
+
+// sessionStorage 不会像 localStorage 那样跨标签广播 storage 事件，
+// 因此无需监听全局 storage 事件来更新用户名。
 import { useRouter } from 'vue-router'
 import Icon from './Icon.vue'
 import {
@@ -160,9 +173,8 @@ function handleTableSelect(table) {
 }
 // 处理退出登录
 function handleLogout() {
-  // 清除登录信息
-  localStorage.removeItem('username')
-  localStorage.removeItem('password')
+  // 清除当前会话的登录信息（sessionStorage）
+  try { clearCredentials() } catch (e) {}
   // 关闭 全局 WebSocket 连接
   try { close() } catch (e) {}
   // 触发 logout 事件
@@ -224,6 +236,50 @@ watch(() => props.wsUrl, (nv) => {
   overflow: hidden;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.user-panel {
+  margin-top: auto;
+  padding: 18px 20px;
+  border-top: 1px solid rgba(255,255,255,0.03);
+}
+
+.user-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, rgba(99,102,241,0.18), rgba(99,102,241,0.28));
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 14px;
+  box-shadow: 0 6px 18px rgba(2,6,23,0.4);
+}
+
+.user-meta {
+  display: flex;
+  flex-direction: column;
+  color: #cbd5e1;
+}
+
+.user-name {
+  color: #f1f5f9;
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.user-sub {
+  color: #94a3b8;
+  font-size: 12px;
+  margin-top: 2px;
 }
 
 .sidebar-header::after {

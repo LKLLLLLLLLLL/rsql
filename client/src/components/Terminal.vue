@@ -79,6 +79,7 @@ const props = defineProps({
 const emit = defineEmits(['sql-executed'])
 
 import { connected as wsConnected, send as wsSend, addMessageListener, removeMessageListener } from '../services/wsService'
+import { getCredentials } from '../services/sessionService'
 
 const connected = wsConnected
 const codeInput = ref('')
@@ -200,14 +201,7 @@ function submitSql() {
   }
 
   const payload = {
-    username: (() => {
-      try {
-        const u = typeof window !== 'undefined' ? localStorage.getItem('username') : null
-        return u || ''
-      } catch {
-        return ''
-      }
-    })(),
+    username: (() => { try { return getCredentials().username || '' } catch { return '' } })(),
     userid: 0,
     request_content: sql,
   }
@@ -236,14 +230,7 @@ function sendSqlStatement(sql, actionLabel = 'SQL') {
   }
   if (!ensureWsReady()) return
   const payload = {
-    username: (() => {
-      try {
-        const u = typeof window !== 'undefined' ? localStorage.getItem('username') : null
-        return u || ''
-      } catch {
-        return ''
-      }
-    })(),
+    username: (() => { try { return getCredentials().username || '' } catch { return '' } })(),
     userid: 0,
     request_content: trimmed,
   }

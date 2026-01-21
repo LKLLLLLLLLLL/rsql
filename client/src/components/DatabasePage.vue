@@ -183,6 +183,7 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { connect as wsConnect, send as wsSend, connected as wsConnected, addMessageListener, removeMessageListener, close as wsClose } from '../services/wsService'
+import { getCredentials } from '../services/sessionService'
 import Sidebar from './Sidebar.vue'
 import Topbar from './Topbar.vue'
 import DataTable from './DataTable.vue'
@@ -260,8 +261,9 @@ let pendingTableNameForRows = ''
 // WebSocket URL
 const wsUrl = computed(() => {
   try {
-    const u = typeof window !== 'undefined' ? localStorage.getItem('username') : null
-    const p = typeof window !== 'undefined' ? localStorage.getItem('password') : null
+    const creds = getCredentials()
+    const u = creds.username
+    const p = creds.password
     if (!u || !p) return null
     if (typeof window === 'undefined') {
       return `ws://127.0.0.1:4456/ws?username=${encodeURIComponent(u)}&password=${encodeURIComponent(p)}`
@@ -475,10 +477,18 @@ function handleWsMessage(data) {
             const idxAllowNull = findIdx('is_nullable', 3)
             const idxPrimary = findIdx('is_primary', 4)
             const idxUnique = findIdx('is_unique', 5)
+            const idxIsDropped = findIdx('is_dropped', 9)
 
           const filtered = rows.filter(row => {
             const raw = row[idxTableId]
             const tid = typeof raw === 'object' ? raw.Integer : raw
+
+            // Filter out dropped columns
+            const droppedRaw = row[idxIsDropped]
+            const droppedVal = (typeof droppedRaw === 'object' && droppedRaw !== null && 'Bool' in droppedRaw) ? droppedRaw.Bool : droppedRaw
+            const isDropped = droppedVal === true || droppedVal === 'true' || droppedVal === 1
+            if (isDropped) return false
+
             return pendingTableIdForSchema === null || tid === pendingTableIdForSchema
           })
 
@@ -510,12 +520,7 @@ function handleWsMessage(data) {
 
           const payloadRows = {
             username: (() => {
-              try {
-                const u = typeof window !== 'undefined' ? localStorage.getItem('username') : null
-                return u || ''
-              } catch {
-                return ''
-              }
+              try { return getCredentials().username || '' } catch { return '' }
             })(),
             userid: 0,
             request_content: `select * from ${pendingTableNameForRows}`,
@@ -578,14 +583,7 @@ function sendSqlViaWebSocket(sql) {
   }
 
   const payload = {
-            username: (() => {
-              try {
-                const u = typeof window !== 'undefined' ? localStorage.getItem('username') : null
-                return u || ''
-              } catch {
-                return ''
-              }
-            })(),
+            username: (() => { try { return getCredentials().username || '' } catch { return '' } })(),
     userid: 0,
     request_content: sql,
   }
@@ -619,14 +617,7 @@ function loadTableData(tableInfo) {
   isLoadingTableRows = false
 
   const payload = {
-    username: (() => {
-      try {
-        const u = typeof window !== 'undefined' ? localStorage.getItem('username') : null
-        return u || ''
-      } catch {
-        return ''
-      }
-    })(),
+    username: (() => { try { return getCredentials().username || '' } catch { return '' } })(),
     userid: 0,
     request_content: 'select * from sys_column',
   }
@@ -669,14 +660,7 @@ function loadTablesList() {
 
   // 发送查询命令
   const payload = {
-    username: (() => {
-      try {
-        const u = typeof window !== 'undefined' ? localStorage.getItem('username') : null
-        return u || ''
-      } catch {
-        return ''
-      }
-    })(),
+    username: (() => { try { return getCredentials().username || '' } catch { return '' } })(),
     userid: 0,
     request_content: 'select * from sys_table',
   }
@@ -921,7 +905,7 @@ function handleSqlResult(data) {
 // 生命周期
 onMounted(() => {
   try {
-    username.value = localStorage.getItem('username') || ''
+    username.value = getCredentials().username || ''
   } catch {}
   try {
     wsConnect()

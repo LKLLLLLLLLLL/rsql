@@ -41,6 +41,7 @@ fn sys_table_schema() -> TableSchema {
             nullable: false,
             unique: true,
             index: true,
+            is_dropped: false,
         },
         TableColumn {
             name: "table_name".to_string(),
@@ -49,6 +50,7 @@ fn sys_table_schema() -> TableSchema {
             nullable: false,
             unique: true,
             index: true,
+            is_dropped: false,
         },
         TableColumn {
             name: "created_at".to_string(),
@@ -57,6 +59,7 @@ fn sys_table_schema() -> TableSchema {
             nullable: false,
             unique: false,
             index: false,
+            is_dropped: false,
         },
     ];
     TableSchema::new(columns).unwrap()
@@ -71,6 +74,7 @@ fn sys_column_schema() -> TableSchema {
             nullable: false,
             unique: true,
             index: true,
+            is_dropped: false,
         },
         TableColumn { // foreign key to sys_table.table_id
             name: "table_id".to_string(),
@@ -79,6 +83,7 @@ fn sys_column_schema() -> TableSchema {
             nullable: false,
             unique: false,
             index: true,
+            is_dropped: false,
         },
         TableColumn {
             name: "column_name".to_string(),
@@ -87,6 +92,7 @@ fn sys_column_schema() -> TableSchema {
             nullable: false,
             unique: false,
             index: true,
+            is_dropped: false,
         },
         TableColumn {
             name: "data_type".to_string(),
@@ -95,6 +101,7 @@ fn sys_column_schema() -> TableSchema {
             nullable: false,
             unique: false,
             index: false,
+            is_dropped: false,
         },
         TableColumn { // for varchar max size or char size
             name: "extra".to_string(),
@@ -103,6 +110,7 @@ fn sys_column_schema() -> TableSchema {
             nullable: true,
             unique: false,
             index: false,
+            is_dropped: false,
         },
         TableColumn {
             name: "is_primary".to_string(),
@@ -111,6 +119,7 @@ fn sys_column_schema() -> TableSchema {
             nullable: false,
             unique: false,
             index: false,
+            is_dropped: false,
         },
         TableColumn {
             name: "is_nullable".to_string(),
@@ -119,6 +128,7 @@ fn sys_column_schema() -> TableSchema {
             nullable: false,
             unique: false,
             index: false,
+            is_dropped: false,
         },
         TableColumn {
             name: "is_indexed".to_string(),
@@ -127,6 +137,7 @@ fn sys_column_schema() -> TableSchema {
             nullable: false,
             unique: false,
             index: false,
+            is_dropped: false,
         },
         TableColumn {
             name: "is_unique".to_string(),
@@ -135,6 +146,16 @@ fn sys_column_schema() -> TableSchema {
             nullable: false,
             unique: false,
             index: false,
+            is_dropped: false,
+        },
+        TableColumn {
+            name: "is_dropped".to_string(),
+            data_type: super::table_schema::ColType::Bool,
+            pk: false,
+            nullable: false,
+            unique: false,
+            index: false,
+            is_dropped: false,
         },
     ];
     TableSchema::new(columns).unwrap()
@@ -149,6 +170,7 @@ fn sys_index_schema() -> TableSchema {
             nullable: false,
             unique: true,
             index: true,
+            is_dropped: false,
         },
         TableColumn { // foreign key to sys_table.table_id
             name: "table_id".to_string(),
@@ -157,6 +179,7 @@ fn sys_index_schema() -> TableSchema {
             nullable: false,
             unique: false,
             index: true,
+            is_dropped: false,
         },
         TableColumn {
             name: "column_name".to_string(),
@@ -165,6 +188,7 @@ fn sys_index_schema() -> TableSchema {
             nullable: false,
             unique: false,
             index: true,
+            is_dropped: false,
         },
     ];
     TableSchema::new(columns).unwrap()
@@ -179,6 +203,7 @@ fn sys_sequence_schema() -> TableSchema {
             nullable: false,
             unique: true,
             index: true,
+            is_dropped: false,
         },
         TableColumn {
             name: "next_val".to_string(),
@@ -187,6 +212,7 @@ fn sys_sequence_schema() -> TableSchema {
             nullable: false,
             unique: false,
             index: false,
+            is_dropped: false,
         },
     ];
     TableSchema::new(columns).unwrap()
@@ -201,6 +227,7 @@ fn sys_user_schema() -> TableSchema {
             nullable: false,
             unique: true,
             index: true,
+            is_dropped: false,
         },
         TableColumn {
             name: "password_hash".to_string(),
@@ -209,6 +236,7 @@ fn sys_user_schema() -> TableSchema {
             nullable: false,
             unique: false,
             index: false,
+            is_dropped: false,
         },
         TableColumn {
             name: "privileges".to_string(),
@@ -217,6 +245,7 @@ fn sys_user_schema() -> TableSchema {
             nullable: false,
             unique: false,
             index: false,
+            is_dropped: false,
         },
     ];
     TableSchema::new(columns).unwrap()
@@ -327,6 +356,7 @@ impl SysCatalog {
                         DataItem::Bool(col.nullable),
                         DataItem::Bool(col.index),
                         DataItem::Bool(col.unique),
+                        DataItem::Bool(col.is_dropped),
                     ],
                     tnx_id,
                 )?;
@@ -457,6 +487,10 @@ impl SysCatalog {
             let DataItem::Bool(unique) = &row[8] else {
                 panic!("is_unique column is not Bool");
             };
+            let DataItem::Bool(is_dropped) = &row[9] else {
+                panic!("is_dropped column is not Bool");
+            };
+            
             columns.push(TableColumn {
                 name: name.clone(),
                 data_type,
@@ -464,6 +498,7 @@ impl SysCatalog {
                 nullable: *nullable,
                 unique: *unique,
                 index: *index,
+                is_dropped: *is_dropped,
             });
         };
         Ok(TableSchema::new(columns).unwrap())
@@ -603,6 +638,7 @@ impl SysCatalog {
                     DataItem::Bool(col.nullable),
                     DataItem::Bool(col.index),
                     DataItem::Bool(col.unique),
+                    DataItem::Bool(col.is_dropped),
                 ],
                 tnx_id,
             )?;
@@ -792,6 +828,7 @@ impl SysCatalog {
                         row[6].clone(),
                         DataItem::Bool(true), // set is_indexed to true
                         DataItem::Bool(unique), // set is_unique
+                        row[9].clone(),
                     ],
                     tnx_id,
                 )?;
@@ -1113,6 +1150,40 @@ impl SysCatalog {
         )?;
         Ok(())
     }
+
+    pub fn drop_column(&self, tnx_id: u64, table_id: u64, col_name: &str) -> RsqlResult<()> {
+        // 1. lock and open sys_column table
+        TnxManager::global().acquire_write_locks(tnx_id, &[SYS_COLUMN_ID])?;
+        let mut sys_column = Table::from(SYS_COLUMN_ID, sys_column_schema(), true)?;
+        
+        // 2. find the corresponding column record
+        let tid_data = DataItem::Integer(table_id as i64);
+        let key = Some(tid_data.clone());
+        let iter = sys_column.get_rows_by_range_indexed_col("table_id", &key, &key)?.collect::<RsqlResult<Vec<_>>>()?;
+        
+        for row in iter.into_iter() {
+            if let DataItem::Chars { value: name, .. } = &row[2] {
+                if name == col_name {
+                    // found the target column
+                    let pk = &row[0];
+                    let mut new_row = row.clone();
+                    
+                    // 3. update is_dropped
+                    // Ensure row has enough columns (migrating from old schema)
+                    let required_len = sys_column_schema().get_columns().len();
+                    if new_row.len() < required_len {
+                         new_row.resize(required_len, DataItem::Bool(false));
+                    }
+                    new_row[9] = DataItem::Bool(true);
+                    
+                    sys_column.update_row(pk, new_row, tnx_id)?;
+                    return Ok(());
+                }
+            }
+        }
+        
+        Err(RsqlError::ExecutionError(format!("Column {} not found in table", col_name)))
+    }
 }
 
 #[cfg(test)]
@@ -1156,6 +1227,7 @@ mod tests {
                 nullable: false,
                 unique: true,
                 index: true,
+                is_dropped: false,
             },
             TableColumn {
                 name: "name".to_string(),
@@ -1164,6 +1236,7 @@ mod tests {
                 nullable: false,
                 unique: false,
                 index: false,
+                is_dropped: false,
             },
         ];
         let schema = TableSchema::new(columns).unwrap();
