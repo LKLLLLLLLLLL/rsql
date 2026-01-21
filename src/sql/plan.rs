@@ -685,6 +685,20 @@ impl Plan {
                     expr_sub.or(pattern_sub),
                 ))
             }
+            Expr::Between { expr, negated, low, high } => {
+                let (expr_clean, expr_sub) = Self::extract_subqueries_from_expr(expr)?;
+                let (low_clean, low_sub) = Self::extract_subqueries_from_expr(low)?;
+                let (high_clean, high_sub) = Self::extract_subqueries_from_expr(high)?;
+                Ok((
+                    Expr::Between {
+                        expr: Box::new(expr_clean),
+                        negated: *negated,
+                        low: Box::new(low_clean),
+                        high: Box::new(high_clean),
+                    },
+                    expr_sub.or(low_sub).or(high_sub),
+                ))
+            }
             Expr::BinaryOp { left, op, right } => {
                 let (left_clean, left_sub) = Self::extract_subqueries_from_expr(left)?;
                 let (right_clean, right_sub) = Self::extract_subqueries_from_expr(right)?;

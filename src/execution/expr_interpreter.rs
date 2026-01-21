@@ -556,6 +556,61 @@ pub fn handle_table_obj_filter_expr(table_obj: &TableObject, predicate: &Expr) -
                 Err(RsqlError::ExecutionError(format!("Unsupported LIKE expression format. Expected: column LIKE 'pattern'")))
             }
         },
+        Expr::Between { expr, negated, low, high } => {
+            if let Expr::Identifier(ident) = &**expr {
+                let col = ident.value.clone();
+                let col_idx = table_obj.map.get(&col).ok_or_else(|| RsqlError::ExecutionError(format!("Column {} not found", col)))?;
+                let col_type = table_obj.cols.1[*col_idx].clone();
+
+                let get_value = |e: &Expr| -> RsqlResult<DataItem> {
+                    match e {
+                        Expr::Value(v) => match &v.value {
+                            Number(n, _) => parse_number(n),
+                            SingleQuotedString(s) => {
+                                match col_type {
+                                    ColType::Chars(size) => Ok(DataItem::Chars{len: size as u64, value: s.clone()}),
+                                    ColType::VarChar(_) => Ok(DataItem::VarChar {
+                                        head: VarCharHead {max_len: s.len() as u64, len: s.len() as u64, page_ptr: None},
+                                        value: s.clone(),
+                                    }),
+                                    _ => Err(RsqlError::ExecutionError(format!("Type mismatch for column {} and string literal", col)))
+                                }
+                            }
+                            _ => Err(RsqlError::ExecutionError(format!("Unsupported BETWEEN value: {:?}", e))),
+                        },
+                        _ => Err(RsqlError::ExecutionError(format!("Unsupported BETWEEN expression: {:?}", e))),
+                    }
+                };
+
+                let low_val = get_value(low)?;
+                let high_val = get_value(high)?;
+
+                if table_obj.indexed_cols.contains(&col) && !*negated {
+                    let some_low_val = Some(low_val);
+                    let some_high_val = Some(high_val);
+                    let rows_iter = table_obj.table_obj.get_rows_by_range_indexed_col(&col, &some_low_val, &some_high_val)?;
+                    let mut rows = vec![];
+                    for row in rows_iter {
+                        rows.push(row?);
+                    }
+                    Ok(rows)
+                } else {
+                    let rows_iter = table_obj.table_obj.get_all_rows()?;
+                    let mut rows = vec![];
+                    for row in rows_iter {
+                        let row = row?;
+                        let val = &row[*col_idx];
+                        let is_between = val >= &low_val && val <= &high_val;
+                        if is_between != *negated {
+                            rows.push(row);
+                        }
+                    }
+                    Ok(rows)
+                }
+            } else {
+                Err(RsqlError::ExecutionError(format!("Unsupported BETWEEN expression format. Expected: column BETWEEN low AND high")))
+            }
+        },
         _ => {
             Err(RsqlError::ExecutionError(format!("Unsupported filter expression: {:?}", predicate)))
         }
@@ -920,6 +975,48 @@ pub fn handle_temp_table_filter_expr(cols: &Vec<String>, cols_type: &Vec<ColType
                 }
             } else {
                 Err(RsqlError::ExecutionError(format!("Unsupported LIKE expression format. Expected: column LIKE 'pattern'")))
+            }
+        },
+        Expr::Between { expr, negated, low, high } => {
+            if let Expr::Identifier(ident) = &**expr {
+                let col = ident.value.clone();
+                let col_idx = cols.iter().position(|c| c == &col).ok_or_else(|| RsqlError::ExecutionError(format!("Column {} not found", col)))?;
+                let col_type = cols_type[col_idx].clone();
+
+                let get_value = |e: &Expr| -> RsqlResult<DataItem> {
+                    match e {
+                        Expr::Value(v) => match &v.value {
+                            Number(n, _) => parse_number(n),
+                            SingleQuotedString(s) => {
+                                match col_type {
+                                    ColType::Chars(size) => Ok(DataItem::Chars{len: size as u64, value: s.clone()}),
+                                    ColType::VarChar(_) => Ok(DataItem::VarChar {
+                                        head: VarCharHead {max_len: s.len() as u64, len: s.len() as u64, page_ptr: None},
+                                        value: s.clone(),
+                                    }),
+                                    _ => Err(RsqlError::ExecutionError(format!("Type mismatch for column {} and string literal", col)))
+                                }
+                            }
+                            _ => Err(RsqlError::ExecutionError(format!("Unsupported BETWEEN value: {:?}", e))),
+                        },
+                        _ => Err(RsqlError::ExecutionError(format!("Unsupported BETWEEN expression: {:?}", e))),
+                    }
+                };
+
+                let low_val = get_value(low)?;
+                let high_val = get_value(high)?;
+
+                let mut filtered_rows = vec![];
+                for row in rows.iter() {
+                    let val = &row[col_idx];
+                    let is_between = val >= &low_val && val <= &high_val;
+                    if is_between != *negated {
+                        filtered_rows.push(row.clone());
+                    }
+                }
+                Ok(filtered_rows)
+            } else {
+                Err(RsqlError::ExecutionError(format!("Unsupported BETWEEN expression format. Expected: column BETWEEN low AND high")))
             }
         },
         _ => {
