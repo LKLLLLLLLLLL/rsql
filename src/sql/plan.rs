@@ -1,5 +1,5 @@
 /// Definitions for logical query plans.
-/// This module defines the LogicalPlan enum and related structures for representing query execution plans.
+/// This module defines the LogicalPlan enum and related structures for representing query execution plans
 
 // sqlparser crate
 use sqlparser::ast::{
@@ -325,19 +325,72 @@ impl Plan {
         } else if lower.starts_with("grant") {
             // Parse: 
             // GRANT <privilege> TO <user_name>[;]
-            // GRANT <privilege> ON <table_name> TO <user_name>[;]
+            // GRANT <privilege> ON [TABLE] <table_name> TO <user_name>[;]
             let rest: &str = &sql_trimmed[("grant".len())..].trim_start();
             let tokens: Vec<&str> = rest.split_whitespace().collect();
             
-            if tokens.len() >= 3 && tokens[1].eq_ignore_ascii_case("to") {
-                let privilege = tokens[0].to_string();
-                let user_name = tokens[2].trim_matches(|c: char| c == ';').to_string();
-                items.push(PlanItem::DCL(PlanNode::Grant { privilege, table_name: None, user_name }));
+            if tokens.is_empty() {
+                 return Err(RsqlError::ParserError("Invalid GRANT syntax".to_string()));
+            }
+
+            let privilege = tokens[0].to_string();
+            let mut table_name = None;
+
+            if tokens.len() >= 3 && tokens[1].eq_ignore_ascii_case("on") {
+                // GRANT <priv> ON [TABLE] <name> TO <user>
+                let mut i = 2;
+                if tokens.len() > i && tokens[i].eq_ignore_ascii_case("table") {
+                    i += 1;
+                }
+                if tokens.len() > i {
+                    table_name = Some(tokens[i].to_string());
+                    i += 1;
+                } else {
+                    return Err(RsqlError::ParserError("Missing table name in GRANT".to_string()));
+                }
+
+                if tokens.len() > i && tokens[i].eq_ignore_ascii_case("to") {
+                    i += 1;
+                } else {
+                    return Err(RsqlError::ParserError("Missing TO keyword in GRANT ON".to_string()));
+                }
+
+                let user_name = if tokens.len() > i {
+                    let u = tokens[i].trim_matches(|c: char| c == ';').to_string();
+                    i += 1;
+                    u
+                } else {
+                    return Err(RsqlError::ParserError("Missing user name in GRANT ON".to_string()));
+                };
+                
+                if i < tokens.len() {
+                     return Err(RsqlError::ParserError(format!("Unexpected token after user name: {}", tokens[i])));
+                }
+
+                items.push(PlanItem::DCL(PlanNode::Grant { privilege, table_name, user_name }));
                 return Ok(Plan { items });
-            } else if tokens.len() >= 5 && tokens[1].eq_ignore_ascii_case("on") && tokens[3].eq_ignore_ascii_case("to") {
-                let privilege = tokens[0].to_string();
-                let table_name = Some(tokens[2].to_string());
-                let user_name = tokens[4].trim_matches(|c: char| c == ';').to_string();
+            } else if tokens.len() >= 3 && tokens[1].eq_ignore_ascii_case("to") {
+                // GRANT <privilege> TO <user_name> [ON [TABLE] <name>]?
+                let user_name = tokens[2].trim_matches(|c: char| c == ';').to_string();
+                
+                let mut i = 3;
+                if tokens.len() > i && tokens[i].eq_ignore_ascii_case("on") {
+                    i += 1;
+                    if tokens.len() > i && tokens[i].eq_ignore_ascii_case("table") {
+                        i += 1;
+                    }
+                    if tokens.len() > i {
+                        table_name = Some(tokens[i].trim_matches(|c: char| c == ';').to_string());
+                        i += 1;
+                    } else {
+                        return Err(RsqlError::ParserError("Missing table name after ON".to_string()));
+                    }
+                }
+
+                if i < tokens.len() {
+                     return Err(RsqlError::ParserError(format!("Unexpected token after GRANT: {}", tokens[i])));
+                }
+
                 items.push(PlanItem::DCL(PlanNode::Grant { privilege, table_name, user_name }));
                 return Ok(Plan { items });
             } else {
@@ -346,19 +399,72 @@ impl Plan {
         } else if lower.starts_with("revoke") {
             // Parse: 
             // REVOKE <privilege> FROM <user_name>[;]
-            // REVOKE <privilege> ON <table_name> FROM <user_name>[;]
+            // REVOKE <privilege> ON [TABLE] <table_name> FROM <user_name>[;]
             let rest: &str = &sql_trimmed[("revoke".len())..].trim_start();
             let tokens: Vec<&str> = rest.split_whitespace().collect();
-            
-            if tokens.len() >= 3 && tokens[1].eq_ignore_ascii_case("from") {
-                let privilege = tokens[0].to_string();
-                let user_name = tokens[2].trim_matches(|c: char| c == ';').to_string();
-                items.push(PlanItem::DCL(PlanNode::Revoke { privilege, table_name: None, user_name }));
+
+            if tokens.is_empty() {
+                 return Err(RsqlError::ParserError("Invalid REVOKE syntax".to_string()));
+            }
+
+            let privilege = tokens[0].to_string();
+            let mut table_name = None;
+
+            if tokens.len() >= 3 && tokens[1].eq_ignore_ascii_case("on") {
+                // REVOKE <priv> ON [TABLE] <name> FROM <user>
+                let mut i = 2;
+                if tokens.len() > i && tokens[i].eq_ignore_ascii_case("table") {
+                    i += 1;
+                }
+                if tokens.len() > i {
+                    table_name = Some(tokens[i].to_string());
+                    i += 1;
+                } else {
+                    return Err(RsqlError::ParserError("Missing table name in REVOKE".to_string()));
+                }
+
+                if tokens.len() > i && tokens[i].eq_ignore_ascii_case("from") {
+                    i += 1;
+                } else {
+                    return Err(RsqlError::ParserError("Missing FROM keyword in REVOKE ON".to_string()));
+                }
+
+                let user_name = if tokens.len() > i {
+                    let u = tokens[i].trim_matches(|c: char| c == ';').to_string();
+                    i += 1;
+                    u
+                } else {
+                    return Err(RsqlError::ParserError("Missing user name in REVOKE ON".to_string()));
+                };
+                
+                if i < tokens.len() {
+                     return Err(RsqlError::ParserError(format!("Unexpected token after user name: {}", tokens[i])));
+                }
+
+                items.push(PlanItem::DCL(PlanNode::Revoke { privilege, table_name, user_name }));
                 return Ok(Plan { items });
-            } else if tokens.len() >= 5 && tokens[1].eq_ignore_ascii_case("on") && tokens[3].eq_ignore_ascii_case("from") {
-                let privilege = tokens[0].to_string();
-                let table_name = Some(tokens[2].to_string());
-                let user_name = tokens[4].trim_matches(|c: char| c == ';').to_string();
+            } else if tokens.len() >= 3 && tokens[1].eq_ignore_ascii_case("from") {
+                // REVOKE <privilege> FROM <user_name> [ON [TABLE] <name>]?
+                let user_name = tokens[2].trim_matches(|c: char| c == ';').to_string();
+                
+                let mut i = 3;
+                if tokens.len() > i && tokens[i].eq_ignore_ascii_case("on") {
+                    i += 1;
+                    if tokens.len() > i && tokens[i].eq_ignore_ascii_case("table") {
+                        i += 1;
+                    }
+                    if tokens.len() > i {
+                        table_name = Some(tokens[i].trim_matches(|c: char| c == ';').to_string());
+                        i += 1;
+                    } else {
+                        return Err(RsqlError::ParserError("Missing table name after ON".to_string()));
+                    }
+                }
+
+                if i < tokens.len() {
+                     return Err(RsqlError::ParserError(format!("Unexpected token after REVOKE: {}", tokens[i])));
+                }
+
                 items.push(PlanItem::DCL(PlanNode::Revoke { privilege, table_name, user_name }));
                 return Ok(Plan { items });
             } else {

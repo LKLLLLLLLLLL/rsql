@@ -935,34 +935,43 @@ impl SysCatalog {
                 panic!("privileges column is not VarChar");
             };
             
-            // 1. Check Global Write (W implies R)
-            if privileges_json.contains("\"global\":\"W\"") {
-                return Ok(true);
-            }
-            
-            // 2. Check Global Read
-            if privilege == "R" && privileges_json.contains("\"global\":\"R\"") {
-                return Ok(true);
+            let mut privs: HashMap<String, String> = HashMap::new();
+            let trimmed = privileges_json.trim_matches(|c| c == '{' || c == '}');
+            if !trimmed.is_empty() {
+                for part in trimmed.split(',') {
+                    let kv: Vec<&str> = part.split(':').collect();
+                    if kv.len() == 2 {
+                        let k = kv[0].trim().trim_matches('"').to_string();
+                        let v = kv[1].trim().trim_matches('"').to_string();
+                        privs.insert(k, v);
+                    }
+                }
             }
 
-            // 3. Check Table-specific Permissions
-            if let Some(table) = table_name {
-                let target = format!("\"{}\":\"{}", table, privilege);
-                if privileges_json.contains(&target) {
+            // 1. Check Global Write (W implies R)
+            if let Some(global_priv) = privs.get("global") {
+                if global_priv == "W" {
                     return Ok(true);
                 }
-                // If checking Read and have Write, also allow
-                if privilege == "R" {
-                    let target_w = format!("\"{}\":\"W", table);
-                    if privileges_json.contains(&target_w) {
+                if privilege == "R" && global_priv == "R" {
+                    return Ok(true);
+                }
+            }
+
+            // 2. Check Table-specific Permissions
+            if let Some(table) = table_name {
+                if let Some(table_priv) = privs.get(table) {
+                    if table_priv == "W" {
+                        return Ok(true);
+                    }
+                    if privilege == "R" && table_priv == "R" {
                         return Ok(true);
                     }
                 }
             }
-            
             Ok(false)
         } else {
-            Err(RsqlError::Unknown(format!("User {} not found", username)))
+            Ok(false) // User not found, no privilege
         }
     }
     pub fn check_user_write_permission(
