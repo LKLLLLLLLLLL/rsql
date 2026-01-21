@@ -138,3 +138,30 @@ pub fn restore_backup(backup_path: &str) -> RsqlResult<()> {
     debug!("Restore completed.");
     Ok(())
 }
+
+/// Get the path of the latest backup file in data/backup
+pub fn get_latest_backup() -> Option<String> {
+    let db_path = Path::new(DB_DIR);
+    let backup_dir = db_path.join("backup");
+
+    if !backup_dir.exists() {
+        return None;
+    }
+
+    let entries = fs::read_dir(backup_dir).ok()?;
+    let mut backups: Vec<_> = entries
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let path = entry.path();
+            if path.extension()? == "bak" {
+                Some(path)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // Sort by file name (which contains timestamp) descending
+    backups.sort();
+    backups.pop().map(|p| p.to_string_lossy().into_owned())
+}
