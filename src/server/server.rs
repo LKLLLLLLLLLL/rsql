@@ -157,60 +157,6 @@ async fn handle_ws_query(
     }
 }
 
-// handle http query
-// async fn handle_http_query(
-//     query_request: web::Json<HttpQueryRequest>,
-//     state: web::Data<AppState>
-// )-> impl Responder {
-
-//     info!("Received query request: {:?}", query_request);
-//     let now = SystemTime::now()
-//         .duration_since(UNIX_EPOCH)
-//         .unwrap_or_default()
-//         .as_secs();
-
-//     let start = Instant::now();
-
-//     let current = state.working_query.fetch_add(1, Ordering::SeqCst) + 1;
-//     info!("Current working query count: {}", current);
-
-//     let request = query_request.rayon_request.clone();
-
-//     let result = state.working_thread_pool.parse_and_execute_query(request,0).await;
-
-//     let current_after = state.working_query.fetch_sub(1, Ordering::SeqCst) - 1;
-//     info!("Query execution completed. current working query count: {}", current_after);
-
-//     let exec_ms = start.elapsed().as_millis() as u64;
-
-//     match result {
-//         Ok(result)=>{
-//             let response = HttpQueryResponse {
-//                 rayon_response: RayonQueryResponse {
-//                     response_content: result,
-//                     error: String::new(),
-//                     execution_time: exec_ms,
-//                 },
-//                 timestamp: now,
-//                 success: true,
-//             };
-//             HttpResponse::Ok().json(response)
-//         }
-//         Err(e)=>{
-//             let response = HttpQueryResponse {
-//                 rayon_response: RayonQueryResponse {
-//                     response_content: Vec::new(),
-//                     error: e.to_string(),
-//                     execution_time: exec_ms,
-//                 },
-//                 timestamp: now,
-//                 success: false,
-//             };
-//             HttpResponse::InternalServerError().json(response)
-//         }
-//     }
-// }
-
 fn start_scheduled_tasks(thread_pool: Arc<WorkingThreadPool>) {
     let backup_pool = thread_pool.clone();
     actix::spawn(async move {

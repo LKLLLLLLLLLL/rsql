@@ -1,10 +1,8 @@
 use crate::common::{data_item, RsqlResult, RsqlError};
 use super::super::consist_storage::ConsistStorageEngine;
 use super::btree_node;
-// use super::consist_storage::ConsistStorageEngine;
 
 /// Iterator to find entries in range [start_index, end_index]
-/// 
 /// Return: (page_num, page_offset)
 pub struct RangeIterator<'a>
 {

@@ -429,17 +429,6 @@ impl SysCatalog {
         SysCatalog {}
     }
 
-    // pub fn get_storage(&self, table_id: u64) -> Arc<Mutex<StorageManager>> {
-    //     match table_id {
-    //         SYS_TABLE_ID => self.table.lock().unwrap().get_storage().get_storage(),
-    //         SYS_COLUMN_ID => self.column.lock().unwrap().get_storage().get_storage(),
-    //         SYS_INDEX_ID => self.index.lock().unwrap().get_storage().get_storage(),
-    //         SYS_SEQUENCE_ID => self.sequence.lock().unwrap().get_storage().get_storage(),
-    //         SYS_USER_ID => self.user.lock().unwrap().get_storage().get_storage(),
-    //         _ => panic!("Invalid system table id: {}", table_id),
-    //     }
-    // }
-    
     /// Query the table schema from system catalog
     /// Input a table id, return the TableSchema of the table
     pub fn get_table_schema(&self, tnx_id: u64, table_id: u64) -> RsqlResult<TableSchema> {
